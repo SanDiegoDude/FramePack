@@ -45,16 +45,41 @@ print(f'Using CUDA device: {gpu}')
 print(f'High-VRAM Mode: {high_vram}')
 
 # --- Load Models ---
-print("Loading models...")
-text_encoder = LlamaModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder', torch_dtype=torch.float16).cpu()
-text_encoder_2 = CLIPTextModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder_2', torch_dtype=torch.float16).cpu()
-tokenizer = LlamaTokenizerFast.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer')
-tokenizer_2 = CLIPTokenizer.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer_2')
-vae = AutoencoderKLHunyuanVideo.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='vae', torch_dtype=torch.float16).cpu()
-feature_extractor = SiglipImageProcessor.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='feature_extractor')
-image_encoder = SiglipVisionModel.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='image_encoder', torch_dtype=torch.float16).cpu()
-transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained('lllyasviel/FramePackI2V_HY', torch_dtype=torch.bfloat16).cpu()
-print("Models loaded.")
+print("-" * 20)
+print("Loading models to CPU...")
+
+hf_hub_kwargs = {"resume_download": True} # Optional: Add resume download capability
+
+model_repo_hy = "hunyuanvideo-community/HunyuanVideo"
+model_repo_flux = "lllyasviel/flux_redux_bfl"
+model_repo_fp = "lllyasviel/FramePackI2V_HY"
+
+print(f"Loading Llama text_encoder from: {model_repo_hy}")
+text_encoder = LlamaModel.from_pretrained(model_repo_hy, subfolder='text_encoder', torch_dtype=torch.float16, **hf_hub_kwargs).cpu()
+
+print(f"Loading CLIP text_encoder_2 from: {model_repo_hy}")
+text_encoder_2 = CLIPTextModel.from_pretrained(model_repo_hy, subfolder='text_encoder_2', torch_dtype=torch.float16, **hf_hub_kwargs).cpu()
+
+print(f"Loading Llama tokenizer from: {model_repo_hy}")
+tokenizer = LlamaTokenizerFast.from_pretrained(model_repo_hy, subfolder='tokenizer', **hf_hub_kwargs)
+
+print(f"Loading CLIP tokenizer_2 from: {model_repo_hy}")
+tokenizer_2 = CLIPTokenizer.from_pretrained(model_repo_hy, subfolder='tokenizer_2', **hf_hub_kwargs)
+
+print(f"Loading VAE (HunyuanVideo) from: {model_repo_hy}")
+vae = AutoencoderKLHunyuanVideo.from_pretrained(model_repo_hy, subfolder='vae', torch_dtype=torch.float16, **hf_hub_kwargs).cpu()
+
+print(f"Loading Siglip feature_extractor from: {model_repo_flux}")
+feature_extractor = SiglipImageProcessor.from_pretrained(model_repo_flux, subfolder='feature_extractor', **hf_hub_kwargs)
+
+print(f"Loading Siglip image_encoder from: {model_repo_flux}")
+image_encoder = SiglipVisionModel.from_pretrained(model_repo_flux, subfolder='image_encoder', torch_dtype=torch.float16, **hf_hub_kwargs).cpu()
+
+print(f"Loading FramePack Transformer from: {model_repo_fp}")
+transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained(model_repo_fp, torch_dtype=torch.bfloat16, **hf_hub_kwargs).cpu()
+
+print("All models loaded to CPU.")
+print("-" * 20)
 
 # --- Configure Models ---
 all_models = (vae, text_encoder, text_encoder_2, image_encoder, transformer)
