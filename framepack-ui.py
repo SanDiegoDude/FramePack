@@ -181,26 +181,50 @@ def worker(mode, input_image, input_video,
                  raise ValueError("Input image is required for img2vid mode.")
             np_img = np.array(input_image)
             H, W, _ = np_img.shape
-            # height, width = find_nearest_bucket(H, W, resolution=640) # Use bucket finding
-            height, width = H, W # Or keep original aspect ratio? Needs testing which is better
+            # Use bucket finding like simple demo? Or stick to original size? Let's try bucket finding.
+            height, width = find_nearest_bucket(H, W, resolution=640) # Match simple demo logic?
+            # height, width = H, W # Keep original size (might still hit error if too big)
+    
             img_resized = resize_and_center_crop(np_img, target_width=width, target_height=height)
-            print(f"Img2Vid: Resized image to {width}x{height}")
-
-            # VAE Encode
-            inp_f32 = (torch.from_numpy(img_resized).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu, dtype=torch.float32)
-            init_latent_f32 = vae_encode(inp_f32, vae) # This is the *clean* latent. Sampler will noise it based on strength.
-            print(f"Img2Vid: Encoding VAE input shape {inp_f32.shape} with dtype {inp_f32.dtype}")
-            
-            # vae_encode internally might still use vae.dtype, but the critical op receives float32
-            init_latent_f32 = vae_encode(inp_f32, vae) # This should now work
-            print(f"Img2Vid: VAE output latent dtype: {init_latent_f32.dtype}") # Check what dtype vae_encode returns
-        
-            # Convert the VAE output latent to the transformer's expected dtype (bfloat16)
-            init_latent = init_latent_f32.to(transformer.dtype)
-            print(f"Img2Vid: Initial latent shape {init_latent.shape} with dtype {init_latent.dtype}")
-
-            # Image Embeddings
+            print(f"Img2Vid: Resized/bucketed image to {width}x{height}")
+    
+            # --- VAE Encode with temporary Float32 ---
+            original_vae_dtype = vae.dtype # Store original dtype (should be float16)
+            init_latent = None
+            try:
+                print(f"Temporarily setting VAE dtype to float32 for encoding...")
+                vae.to(dtype=torch.float32) # Change VAE internal dtype
+    
+                # Prepare input (dtype here doesn't matter as much, vae_encode will cast it)
+                inp_for_vae = (torch.from_numpy(img_resized).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu)
+                print(f"Img2Vid: Encoding VAE input shape {inp_for_vae.shape} using VAE in float32 mode")
+    
+                # Now call vae_encode. Internal cast will be to vae.dtype (which is now float32)
+                init_latent_f32 = vae_encode(inp_for_vae, vae) # This should work
+    
+                print(f"Img2Vid: VAE encoding successful. Latent dtype: {init_latent_f32.dtype}")
+    
+                # Convert the resulting latent (float32) to the transformer's expected dtype (bfloat16)
+                init_latent = init_latent_f32.to(transformer.dtype)
+                print(f"Img2Vid: Final initial latent shape {init_latent.shape} with dtype {init_latent.dtype}")
+    
+            finally:
+                # IMPORTANT: Change VAE dtype back to original regardless of success/failure
+                if original_vae_dtype is not None:
+                     print(f"Restoring VAE dtype to {original_vae_dtype}")
+                     vae.to(dtype=original_vae_dtype)
+                else:
+                     print("Warning: Could not restore original VAE dtype.")
+            # --- End VAE Encode section ---
+    
+            if init_latent is None:
+                # Handle case where VAE encoding failed somehow, though the error should have been raised
+                raise RuntimeError("VAE Encoding failed to produce init_latent")
+    
+            # Image Embeddings (keep as before)
             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding...'))))
+            if not high_vram:
+                load_model_as_complete(image_encoder, target_device=gpu)
             image_encoder_output = hf_clip_vision_encode(img_resized, feature_extractor, image_encoder)
             image_embeddings = image_encoder_output.last_hidden_state.to(transformer.dtype)
             print(f"Img2Vid: Image embedding shape {image_embeddings.shape}")
