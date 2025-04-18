@@ -457,7 +457,7 @@ def process_fn(mode, img, vid, prompt, n_prompt, sampler, shift, cfg, gs, rs,
 
     # Launch worker thread
     print("Starting process_fn...")
-    async_run(worker, mode, img, vid, mask, prompt, n_prompt, sampler, shift, cfg, gs, rs,
+    async_run(worker, mode, img, vid, prompt, n_prompt, sampler, shift, cfg, gs, rs,
               strength, seed, seconds, window, steps, gpu_mem, tea)
 
     # Handle outputs from worker thread
