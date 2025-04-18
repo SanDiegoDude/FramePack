@@ -112,7 +112,7 @@ outputs_folder = './outputs/'; os.makedirs(outputs_folder, exist_ok=True)
 
 # -------- Worker (handles all modes) --------
 @torch.no_grad()
-def worker(mode, input_image, input_video, mask_image,
+def worker(mode, input_image, input_video, 
            prompt, n_prompt, sampler, shift, cfg, gs, rs,
            strength, seed, total_second_length, latent_window_size,
            steps, gpu_memory_preservation, use_teacache):
@@ -197,7 +197,7 @@ def worker(mode, input_image, input_video, mask_image,
             image_embeddings = image_encoder_output.last_hidden_state.to(transformer.dtype)
             print(f"Img2Vid: Image embedding shape {image_embeddings.shape}")
 
-        elif mode in ('vid2vid', 'extend_vid', 'video_inpaint'):
+        elif mode in ('vid2vid', 'extend_vid'):
             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, f'Preparing for {mode}...'))))
             if input_video is None or not hasattr(input_video, 'name'):
                  raise ValueError("Input video file is required for video modes.")
@@ -220,15 +220,6 @@ def worker(mode, input_image, input_video, mask_image,
             # Set init_latent to None, indicating sampler should derive start from concat_latent
             init_latent = None
             print(f"Video Mode: Conditioning latent shape {concat_latent.shape}")
-
-            if mode == 'video_inpaint':
-                 stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Inpainting Mask (Not Implemented)...'))))
-                 # TODO: Process mask_image here
-                 # - Resize mask to match video H, W
-                 # - Convert to tensor, potentially B/W
-                 # - VAE encode mask? Or pass directly? Depends on model needs.
-                 # - Pass mask tensor to sample_hunyuan
-                 pass
 
         # Fallback sizing if not set by mode
         if height is None or width is None:
@@ -454,7 +445,7 @@ def worker(mode, input_image, input_video, mask_image,
 
 
 # -------- Gradio UI --------
-def process_fn(mode, img, vid, mask, prompt, n_prompt, sampler, shift, cfg, gs, rs,
+def process_fn(mode, img, vid, prompt, n_prompt, sampler, shift, cfg, gs, rs,
                strength, seed, seconds, window, steps, gpu_mem, tea, progress=gr.Progress(track_tqdm=True)):
 
     # Reset UI elements
@@ -527,7 +518,7 @@ with gr.Blocks(css=css).queue() as demo:
     with gr.Row():
         with gr.Column(scale=1):
             mode = gr.Radio(
-                ["txt2vid", "img2vid", "vid2vid", "extend_vid", "video_inpaint"],
+                ["txt2vid", "img2vid", "vid2vid", "extend_vid"],
                 value="img2vid", # Default to img2vid as it's common
                 label="Mode"
             )
@@ -540,13 +531,6 @@ with gr.Blocks(css=css).queue() as demo:
             input_video = gr.Video(
                 label="Input Video (for vid2vid, extend_vid, video_inpaint)",
                 sources='upload',
-                visible=False # Initially hidden
-            )
-            mask_image = gr.Image(
-                sources='upload',
-                type="numpy",
-                tool='sketch', # Allow drawing mask
-                label="Mask (for video_inpaint)",
                 visible=False # Initially hidden
             )
             prompt = gr.Textbox(label="Prompt", lines=2, placeholder="Enter your prompt here...")
@@ -585,26 +569,24 @@ with gr.Blocks(css=css).queue() as demo:
     # --- UI Control Logic ---
     def update_ui_for_mode(selected_mode):
         is_img_mode = selected_mode == "img2vid"
-        is_vid_mode = selected_mode in ["vid2vid", "extend_vid", "video_inpaint"]
-        is_inpaint_mode = selected_mode == "video_inpaint"
-        is_strength_relevant = selected_mode in ["img2vid", "vid2vid", "video_inpaint", "extend_vid"] # Strength matters for these
+        is_vid_mode = selected_mode in ["vid2vid", "extend_vid"]
+        is_strength_relevant = selected_mode in ["img2vid", "vid2vid", "extend_vid"] # Strength matters for these
 
         return {
             input_image: gr.update(visible=is_img_mode),
             input_video: gr.update(visible=is_vid_mode),
-            mask_image: gr.update(visible=is_inpaint_mode),
             strength: gr.update(interactive=is_strength_relevant) # Make strength interactive only for relevant modes
         }
 
     mode.change(
         update_ui_for_mode,
         inputs=[mode],
-        outputs=[input_image, input_video, mask_image, strength], # Add strength to outputs
+        outputs=[input_image, input_video, strength], # Add strength to outputs
         queue=False # Fast UI update
     )
 
     # --- Button Actions ---
-    inputs = [mode, input_image, input_video, mask_image,
+    inputs = [mode, input_image, input_video, 
               prompt, n_prompt, sampler, shift, cfg, gs, rs,
               strength, seed, seconds, window, steps, gpu_mem, tea]
     outputs = [result_vid, preview, status_md, bar_html, start_btn, end_btn]
