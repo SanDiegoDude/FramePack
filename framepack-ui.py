@@ -8,6 +8,7 @@ import einops
 import safetensors.torch as sf
 import numpy as np
 import argparse
+import random
 import math
 from PIL import Image
 import torchvision # Keep this import
@@ -187,7 +188,7 @@ def worker(mode, input_image, input_video,
 
             # VAE Encode
             inp_f32 = (torch.from_numpy(img_resized).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu, dtype=torch.float32)
-            init_latent = vae_encode(inp, vae).to(transformer.dtype) # This is the *clean* latent. Sampler will noise it based on strength.
+            init_latent_f32 = vae_encode(inp_f32, vae) # This is the *clean* latent. Sampler will noise it based on strength.
             print(f"Img2Vid: Encoding VAE input shape {inp_f32.shape} with dtype {inp_f32.dtype}")
             
             # vae_encode internally might still use vae.dtype, but the critical op receives float32
@@ -452,62 +453,76 @@ def worker(mode, input_image, input_video,
 
 
 # -------- Gradio UI --------
-def process_fn(mode, img, vid, prompt, n_prompt, sampler, shift, cfg, gs, rs,
-               strength, seed, seconds, window, steps, gpu_mem, tea, progress=gr.Progress(track_tqdm=True)):
+def process_fn(mode, img, vid, # Removed mask
+               prompt, n_prompt, sampler, shift, cfg, gs, rs,
+               strength, seed_from_ui, lock_seed_val, # Renamed seed -> seed_from_ui, added lock_seed_val
+               seconds, window, steps, gpu_mem, tea,
+               progress=gr.Progress(track_tqdm=True)):
 
-    # Reset UI elements
-    yield None, gr.update(visible=False, value=None), gr.update(value=''), gr.update(value=''), gr.update(interactive=False), gr.update(interactive=True)
+    # --- Seed Handling ---
+    if not lock_seed_val:
+        actual_seed = random.randint(0, 2**32 - 1) # Generate new seed
+        print(f"Lock Seed unchecked. Generated new seed: {actual_seed}")
+    else:
+        actual_seed = int(seed_from_ui) # Use the value from the UI
+        print(f"Lock Seed checked. Using seed from UI: {actual_seed}")
+
+    # Reset UI elements and UPDATE SEED field immediately
+    yield None, gr.update(visible=False, value=None), gr.update(value=''), gr.update(value=''), gr.update(interactive=False), gr.update(interactive=True), gr.update(value=actual_seed)
 
     # Clear previous stream queues if any
     stream.input_queue = AsyncStream().input_queue # Reset input queue
     stream.output_queue = AsyncStream().output_queue # Reset output queue
 
-    # Launch worker thread
+    # Launch worker thread - PASS THE DETERMINED actual_seed
     print("Starting process_fn...")
-    async_run(worker, mode, img, vid, prompt, n_prompt, sampler, shift, cfg, gs, rs,
-              strength, seed, seconds, window, steps, gpu_mem, tea)
+    async_run(worker, mode, img, vid, # Removed mask
+              prompt, n_prompt, sampler, shift, cfg, gs, rs,
+              strength, actual_seed, # Pass actual_seed here
+              seconds, window, steps, gpu_mem, tea)
 
     # Handle outputs from worker thread
     output_video_path = None
     last_preview = None
     while True:
         try:
-            flag, data = stream.output_queue.next()
+            flag, data = stream.output_queue.next() # Removed timeout
 
             if flag == 'file':
                 output_video_path = data
-                # Keep showing last preview while file is updated
-                yield output_video_path, gr.update(value=last_preview, visible=last_preview is not None), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True)
+                # Update includes None for the seed output, as it's already updated
+                yield output_video_path, gr.update(value=last_preview, visible=last_preview is not None), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True), gr.update() # Keep seed field as is
             elif flag == 'progress':
                 preview_img, status_text, html_bar = data
                 last_preview = preview_img # Store the latest preview
-                yield output_video_path, gr.update(value=preview_img, visible=preview_img is not None), status_text, html_bar, gr.update(interactive=False), gr.update(interactive=True)
+                # Update includes None for the seed output
+                yield output_video_path, gr.update(value=preview_img, visible=preview_img is not None), status_text, html_bar, gr.update(interactive=False), gr.update(interactive=True), gr.update() # Keep seed field as is
             elif flag == 'error':
                  error_message = data
                  print(f"Gradio UI received error: {error_message}")
-                 # Show error in status, keep last video/preview if available
-                 yield output_video_path, gr.update(value=last_preview, visible=last_preview is not None), f"Error: {error_message}", '', gr.update(interactive=True), gr.update(interactive=False)
+                 # Update includes None for the seed output
+                 yield output_video_path, gr.update(value=last_preview, visible=last_preview is not None), f"Error: {error_message}", '', gr.update(interactive=True), gr.update(interactive=False), gr.update() # Keep seed field as is
                  break # Stop processing on error
             elif flag == 'end':
                 print("Gradio UI received end signal.")
                 # Final update: show final video, hide preview, clear status/bar
-                yield output_video_path, gr.update(visible=False, value=None), '', '', gr.update(interactive=True), gr.update(interactive=False)
+                # Update includes None for the seed output
+                yield output_video_path, gr.update(visible=False, value=None), '', '', gr.update(interactive=True), gr.update(interactive=False), gr.update() # Keep seed field as is
                 break # Exit loop
             else:
-                 # Handle unexpected flags if necessary
                  print(f"Received unexpected flag: {flag}")
 
         except Exception as e:
-            # Catch timeout or other queue errors
-            if "Queue is empty" in str(e): # Check if worker might still be running
-                 print("Waiting for worker output...")
-                 # Keep UI state, maybe show a waiting message?
-                 yield output_video_path, gr.update(value=last_preview, visible=last_preview is not None), "Processing, please wait...", gr.update(), gr.update(interactive=False), gr.update(interactive=True)
-                 continue # Continue waiting
+            if "FIFOQueue object" in str(e) and "'next' of" in str(e): # More specific check if needed
+                print("Waiting for worker output...")
+                # Update includes None for the seed output
+                yield output_video_path, gr.update(value=last_preview, visible=last_preview is not None), "Processing, please wait...", gr.update(), gr.update(interactive=False), gr.update(interactive=True), gr.update() # Keep seed field as is
+                continue
             else:
                  print(f"Error processing output queue: {e}")
                  traceback.print_exc()
-                 yield output_video_path, gr.update(value=last_preview, visible=last_preview is not None), f"UI Error: {e}", '', gr.update(interactive=True), gr.update(interactive=False)
+                 # Update includes None for the seed output
+                 yield output_video_path, gr.update(value=last_preview, visible=last_preview is not None), f"UI Error: {e}", '', gr.update(interactive=True), gr.update(interactive=False), gr.update() # Keep seed field as is
                  break
 
 def end_process_early():
@@ -525,26 +540,34 @@ with gr.Blocks(css=css).queue() as demo:
     with gr.Row():
         with gr.Column(scale=1):
             mode = gr.Radio(
-                ["txt2vid", "img2vid", "vid2vid", "extend_vid"],
-                value="img2vid", # Default to img2vid as it's common
+                ["txt2vid", "img2vid", "vid2vid", "extend_vid"], # Removed video_inpaint
+                value="img2vid",
                 label="Mode"
             )
             input_image = gr.Image(
                 sources='upload',
                 type="numpy",
                 label="Input Image (for img2vid)",
-                visible=True # Initially visible, controlled by mode change
+                visible=True, # Initially visible, controlled by mode change
+                height=400 # <<< SET DISPLAY HEIGHT
             )
             input_video = gr.Video(
-                label="Input Video (for vid2vid, extend_vid, video_inpaint)",
+                label="Input Video (for vid2vid, extend_vid)",
                 sources='upload',
                 visible=False # Initially hidden
             )
             prompt = gr.Textbox(label="Prompt", lines=2, placeholder="Enter your prompt here...")
             n_prompt = gr.Textbox(label="Negative Prompt", lines=2, value="ugly, blurry, deformed, text, watermark, signature")
+
+            # --- Moved Seed and Length outside Advanced ---
+            seconds = gr.Slider(1, 120, value=5, step=0.1, label="Output Video Length (sec)")
+            with gr.Row():
+                seed = gr.Number(label="Seed", value=random.randint(0, 2**32 - 1), precision=0) # Start with random seed
+                lock_seed = gr.Checkbox(label="Lock Seed", value=False) # <<< ADDED Lock Seed checkbox
+
             with gr.Accordion("Advanced Settings", open=False):
                 sampler = gr.Dropdown(
-                    ["unipc", "unipc_bh2", "dpmpp_2m", "dpmpp_sde", "dpmpp_2m_sde", "dpmpp_3m_sde", "ddim", "plms", "euler", "euler_ancestral"], # Added more common samplers
+                    ["unipc", "unipc_bh2", "dpmpp_2m", "dpmpp_sde", "dpmpp_2m_sde", "dpmpp_3m_sde", "ddim", "plms", "euler", "euler_ancestral"],
                     value="unipc",
                     label="Sampler"
                 )
@@ -553,19 +576,19 @@ with gr.Blocks(css=css).queue() as demo:
                 gs = gr.Slider(1., 32., value=10.0, label="Distilled CFG Scale", info="Main guidance scale for FramePack. Default 10.0.")
                 rs = gr.Slider(0., 1., value=0., label="Rescale Guidance", info="Guidance rescale factor. Default 0.0.")
                 strength = gr.Slider(0., 1., value=0.7, label="Denoise Strength (for img2vid/vid2vid)", info="How much to change the input image/video. 1.0 = max change. Default 0.7.")
-                seed = gr.Number(label="Seed", value=31337, precision=0)
-                seconds = gr.Slider(1, 120, value=5, step=0.1, label="Output Video Length (sec)")
+                # seed = gr.Number(label="Seed", value=31337, precision=0) # --- MOVED ---
+                # seconds = gr.Slider(1, 120, value=5, step=0.1, label="Output Video Length (sec)") # --- MOVED ---
                 window = gr.Slider(1, 33, value=9, step=1, label="Latent Window Size", info="Affects temporal range per step. Default 9.")
                 steps = gr.Slider(1, 100, value=25, step=1, label="Sampling Steps", info="Number of denoising steps. Default 25.")
                 if not high_vram:
                     gpu_mem = gr.Slider(3, max(10, int(free_mem_gb)), value=min(6, int(free_mem_gb)-2), step=0.1, label="GPU Memory to Preserve (GB)", info="Leave this much VRAM free for other apps. Higher = Slower.")
                 else:
-                     gpu_mem = gr.Number(label="GPU Memory Preservation (N/A in High VRAM mode)", value=0, interactive=False) # Placeholder
-                tea = gr.Checkbox(label="Use TeaCache Optimization", value=True, info="May speed up sampling but can slightly affect quality (e.g., hands).")
+                     gpu_mem = gr.Number(label="GPU Memory Preservation (N/A in High VRAM mode)", value=0, interactive=False)
+                tea = gr.Checkbox(label="Use TeaCache Optimization", value=False, info="May speed up sampling but can slightly affect quality (e.g., hands).") # <<< CHANGED DEFAULT
 
             with gr.Row():
                  start_btn = gr.Button("Generate", variant="primary")
-                 end_btn = gr.Button("Stop", interactive=False) # Initially disabled
+                 end_btn = gr.Button("Stop", interactive=False)
 
         with gr.Column(scale=1):
             result_vid = gr.Video(label="Output Video", interactive=False, height=512)
@@ -577,29 +600,32 @@ with gr.Blocks(css=css).queue() as demo:
     def update_ui_for_mode(selected_mode):
         is_img_mode = selected_mode == "img2vid"
         is_vid_mode = selected_mode in ["vid2vid", "extend_vid"]
-        is_strength_relevant = selected_mode in ["img2vid", "vid2vid", "extend_vid"] # Strength matters for these
+        is_strength_relevant = selected_mode in ["img2vid", "vid2vid", "extend_vid"]
 
         return {
             input_image: gr.update(visible=is_img_mode),
             input_video: gr.update(visible=is_vid_mode),
-            strength: gr.update(interactive=is_strength_relevant) # Make strength interactive only for relevant modes
+            strength: gr.update(interactive=is_strength_relevant)
         }
 
     mode.change(
         update_ui_for_mode,
         inputs=[mode],
-        outputs=[input_image, input_video, strength], # Add strength to outputs
-        queue=False # Fast UI update
+        outputs=[input_image, input_video, strength], # Removed mask_image
+        queue=False
     )
 
     # --- Button Actions ---
-    inputs = [mode, input_image, input_video, 
+    # ADD lock_seed to inputs list
+    inputs = [mode, input_image, input_video,
               prompt, n_prompt, sampler, shift, cfg, gs, rs,
-              strength, seed, seconds, window, steps, gpu_mem, tea]
-    outputs = [result_vid, preview, status_md, bar_html, start_btn, end_btn]
+              strength, seed, lock_seed, seconds, window, steps, gpu_mem, tea] # Added lock_seed
 
-    start_btn.click(process_fn, inputs=inputs, outputs=outputs)
-    end_btn.click(end_process_early, outputs=[end_btn]) # Stop button action
+    # ADD seed to outputs list (so we can update it)
+    outputs = [result_vid, preview, status_md, bar_html, start_btn, end_btn, seed] # Added seed
+
+    start_btn.click(process_fn, inputs=inputs, outputs=outputs) # Pass updated lists
+    end_btn.click(end_process_early, outputs=[end_btn])
 
 # --- Launch App ---
 print(f"Launching Gradio app on {args.host}:{args.port}")
