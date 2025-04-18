@@ -186,10 +186,17 @@ def worker(mode, input_image, input_video,
             print(f"Img2Vid: Resized image to {width}x{height}")
 
             # VAE Encode
-            inp = (torch.from_numpy(img_resized).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu, dtype=vae.dtype)
+            inp_f32 = (torch.from_numpy(img_resized).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu, dtype=torch.float32)
             init_latent = vae_encode(inp, vae).to(transformer.dtype) # This is the *clean* latent. Sampler will noise it based on strength.
-            print(f"Img2Vid: Initial latent shape {init_latent.shape}")
-
+            print(f"Img2Vid: Encoding VAE input shape {inp_f32.shape} with dtype {inp_f32.dtype}")
+            
+            # vae_encode internally might still use vae.dtype, but the critical op receives float32
+            init_latent_f32 = vae_encode(inp_f32, vae) # This should now work
+            print(f"Img2Vid: VAE output latent dtype: {init_latent_f32.dtype}") # Check what dtype vae_encode returns
+        
+            # Convert the VAE output latent to the transformer's expected dtype (bfloat16)
+            init_latent = init_latent_f32.to(transformer.dtype)
+            print(f"Img2Vid: Initial latent shape {init_latent.shape} with dtype {init_latent.dtype}")
 
             # Image Embeddings
             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding...'))))
@@ -440,8 +447,8 @@ def worker(mode, input_image, input_video,
             print("Models unloaded (low VRAM mode).")
         # Ensure queue knows the process ended, even on error
         # Check if 'end' was already pushed before sending another
-        if stream.output_queue.is_empty() or stream.output_queue.queue[-1] != ('end', None):
-             stream.output_queue.push(('end', None))
+        stream.output_queue.push(('end', None))
+        print(f"Worker job {job_id} cleanup complete.")
 
 
 # -------- Gradio UI --------
@@ -465,7 +472,7 @@ def process_fn(mode, img, vid, prompt, n_prompt, sampler, shift, cfg, gs, rs,
     last_preview = None
     while True:
         try:
-            flag, data = stream.output_queue.next(timeout=1) # Add timeout to prevent deadlock if worker fails silently
+            flag, data = stream.output_queue.next()
 
             if flag == 'file':
                 output_video_path = data
