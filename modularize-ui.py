@@ -276,7 +276,7 @@ def worker(
         video_seconds = (total_generated_latent_frames - (extra_frames if mode == "text2video" else 0)) / 30.0
         summary_string = (
             f"Finished!\n"
-            f"Total generated frames: {total_generated_latent_frames - (extra_frames if mode == "text2video" else 0)}, "
+            f"Total generated frames: {total_generated_latent_frames - (extra_frames if mode == 'text2video' else 0)}, "
             f"Video length: {video_seconds:.2f} seconds (FPS-30), "
             f"Time taken: {total_time:.2f}s."
         )
