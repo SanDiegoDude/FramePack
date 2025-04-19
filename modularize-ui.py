@@ -1,10 +1,7 @@
 from diffusers_helper.hf_login import login
-
 import os
 import time
-
 os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
-
 import gradio as gr
 import torch
 import traceback
@@ -13,7 +10,6 @@ import safetensors.torch as sf
 import numpy as np
 import argparse
 import math
-
 from PIL import Image
 from diffusers import AutoencoderKLHunyuanVideo
 from transformers import LlamaModel, CLIPTextModel, LlamaTokenizerFast, CLIPTokenizer
@@ -27,7 +23,6 @@ from diffusers_helper.gradio.progress_bar import make_progress_bar_css, make_pro
 from transformers import SiglipImageProcessor, SiglipVisionModel
 from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.bucket_tools import find_nearest_bucket
-
 import random
 
 # ---- CLI args ----
@@ -37,13 +32,11 @@ parser.add_argument("--server", type=str, default='0.0.0.0')
 parser.add_argument("--port", type=int, required=False)
 parser.add_argument("--inbrowser", action='store_true')
 args = parser.parse_args()
-
 print(args)
 
 # ---- VRAM Check ----
 free_mem_gb = get_cuda_free_memory_gb(gpu)
 high_vram = free_mem_gb > 60
-
 print(f'Free VRAM {free_mem_gb} GB')
 print(f'High-VRAM Mode: {high_vram}')
 
@@ -53,33 +46,25 @@ text_encoder_2 = CLIPTextModel.from_pretrained("hunyuanvideo-community/HunyuanVi
 tokenizer = LlamaTokenizerFast.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer')
 tokenizer_2 = CLIPTokenizer.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer_2')
 vae = AutoencoderKLHunyuanVideo.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='vae', torch_dtype=torch.float16).cpu()
-
 feature_extractor = SiglipImageProcessor.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='feature_extractor')
 image_encoder = SiglipVisionModel.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='image_encoder', torch_dtype=torch.float16).cpu()
-
 transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained('lllyasviel/FramePackI2V_HY', torch_dtype=torch.bfloat16).cpu()
-
 for m in [vae, text_encoder, text_encoder_2, image_encoder, transformer]:
     m.eval()
-
 if not high_vram:
     vae.enable_slicing()
     vae.enable_tiling()
-
 transformer.high_quality_fp32_output_for_inference = True
 print('transformer.high_quality_fp32_output_for_inference = True')
-
 for m, dtype in zip([transformer, vae, image_encoder, text_encoder, text_encoder_2], [torch.bfloat16, torch.float16, torch.float16, torch.float16, torch.float16]):
     m.to(dtype=dtype)
     m.requires_grad_(False)
-
 if not high_vram:
     DynamicSwapInstaller.install_model(transformer, device=gpu)
     DynamicSwapInstaller.install_model(text_encoder, device=gpu)
 else:
     for m in [text_encoder, text_encoder_2, image_encoder, vae, transformer]:
         m.to(gpu)
-
 stream = AsyncStream()
 outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
@@ -88,27 +73,21 @@ os.makedirs(outputs_folder, exist_ok=True)
 def prepare_inputs(input_image, prompt, n_prompt, cfg):
     if not high_vram:
         unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
-
     fake_diffusers_current_device(text_encoder, gpu)
     load_model_as_complete(text_encoder_2, target_device=gpu)
-
     llama_vec, clip_pool = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
     if cfg == 1:
         llama_vec_n, clip_pool_n = torch.zeros_like(llama_vec), torch.zeros_like(clip_pool)
     else:
         llama_vec_n, clip_pool_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
-
     llama_vec, mask = crop_or_pad_yield_mask(llama_vec, 512)
     llama_vec_n, mask_n = crop_or_pad_yield_mask(llama_vec_n, 512)
-
     H, W, C = input_image.shape
     h, w = find_nearest_bucket(H, W, resolution=640)
     input_np = resize_and_center_crop(input_image, target_width=w, target_height=h)
     Image.fromarray(input_np).save(os.path.join(outputs_folder, f'{generate_timestamp()}.png'))
-
     input_tensor = torch.from_numpy(input_np).float() / 127.5 - 1
     input_tensor = input_tensor.permute(2, 0, 1)[None, :, None]
-
     return input_np, input_tensor, llama_vec, clip_pool, llama_vec_n, clip_pool_n, mask, mask_n, h, w
 
 def get_dims_from_aspect(aspect, custom_w, custom_h):
@@ -178,9 +157,6 @@ def worker(
 
         for section in reversed(range(total_sections)):
             is_last_section = section == 0
-            if mode == "text2video" and is_last_section:
-                # Skip the very last patch for text2video
-                break
             latent_padding_size = section * latent_window_size
             if stream.input_queue.top() == 'end':
                 stream.output_queue.push(('end', None))
@@ -255,11 +231,11 @@ def worker(
             if not high_vram:
                 unload_complete_models()
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
-            # Special trimming for text2video: Remove the extra patch at the start
-            if mode == "text2video":
-                # Remove first extra_frames frames from output;
+            # Only trim on last section for text2video
+            if mode == "text2video" and is_last_section:
                 # history_pixels is (1, 3, T, H, W) so cut T axis
-                history_pixels = history_pixels[:, :, extra_frames:, :, :]
+                if history_pixels.shape[2] > extra_frames:
+                    history_pixels = history_pixels[:, :, extra_frames:, :, :]
             save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
             stream.output_queue.push(('file', output_filename))
             if is_last_section:
@@ -268,22 +244,21 @@ def worker(
         traceback.print_exc()
         if not high_vram:
             unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
-        # No need to push end here, handled in finally
         return
     finally:
         t_end = time.time()
         total_time = t_end - t_start
-        video_seconds = (total_generated_latent_frames - (extra_frames if mode == "text2video" else 0)) / 30.0
+        trimmed_frames = history_pixels.shape[2] if history_pixels is not None else 0
+        video_seconds = trimmed_frames / 30.0
         summary_string = (
             f"Finished!\n"
-            f"Total generated frames: {total_generated_latent_frames - (extra_frames if mode == 'text2video' else 0)}, "
+            f"Total generated frames: {trimmed_frames}, "
             f"Video length: {video_seconds:.2f} seconds (FPS-30), "
             f"Time taken: {total_time:.2f}s."
         )
         stream.output_queue.push(('progress', (None, summary_string, "")))
         stream.output_queue.push(('end', None))
-        
-# ---- Process Hook ----
+
 def process(
     mode, input_image, aspect_selector, custom_w, custom_h,
     prompt, n_prompt, seed, total_frames, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed
@@ -343,48 +318,54 @@ def process(
 def end_process():
     stream.input_queue.push('end')
 
-# ---- UI ----
-css = make_progress_bar_css()
+css = """
+.gr-box, .gr-image, .gr-video {
+    border: 2px solid orange !important;
+    border-radius: 8px !important;
+    margin-bottom: 16px;
+    background: #222 !important;
+}
+"""
+
 block = gr.Blocks(css=css).queue()
 with block:
     gr.Markdown('# FramePack')
-    # ---- Instantiate widgets ----
-    mode_selector = gr.Radio(
-        ["image2video", "text2video"], value="image2video", label="Mode"
-    )
-    input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)
-    aspect_selector = gr.Dropdown(
-        ["16:9", "9:16", "1:1", "4:5", "3:2", "2:3", "21:9", "4:3", "Custom..."],
-        label="Aspect Ratio",
-        value="1:1",
-        visible=False
-    )
-    custom_w = gr.Number(label="Width", value=768, visible=False)
-    custom_h = gr.Number(label="Height", value=768, visible=False)
-    prompt = gr.Textbox(label="Prompt", value='')
     with gr.Row():
-        start_button = gr.Button(value="Start Generation")
-        end_button = gr.Button(value="End Generation", interactive=False)
-    with gr.Group():
-        use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
-        n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
-        seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
-        lock_seed = gr.Checkbox(label="Lock Seed", value=False)
-        total_frames = gr.Slider(label="Total Video Frames", minimum=2, maximum=1800, value=150, step=1)
-        steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
-        cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, visible=False)
-        gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01)
-        rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False)
-        gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
-    # Column 2 with outputs...
-    with gr.Column():
-        preview_image = gr.Image(label="Next Latents", height=200, visible=False)
-        result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
-        gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
-        progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
-        progress_bar = gr.HTML('', elem_classes='no-generating-animation')
+        with gr.Column(scale=2):
+            mode_selector = gr.Radio(
+                ["image2video", "text2video"], value="image2video", label="Mode"
+            )
+            input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)
+            aspect_selector = gr.Dropdown(
+                ["16:9", "9:16", "1:1", "4:5", "3:2", "2:3", "21:9", "4:3", "Custom..."],
+                label="Aspect Ratio",
+                value="1:1",
+                visible=False
+            )
+            custom_w = gr.Number(label="Width", value=768, visible=False)
+            custom_h = gr.Number(label="Height", value=768, visible=False)
+            prompt = gr.Textbox(label="Prompt", value='')
+            with gr.Row():
+                start_button = gr.Button(value="Start Generation")
+                end_button = gr.Button(value="End Generation", interactive=False)
+            with gr.Group():
+                use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
+                n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
+                seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
+                lock_seed = gr.Checkbox(label="Lock Seed", value=False)
+                total_frames = gr.Slider(label="Total Video Frames", minimum=2, maximum=1800, value=150, step=1)
+                steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
+                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, visible=False)
+                gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01)
+                rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False)
+                gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
+        with gr.Column(scale=2):
+            preview_image = gr.Image(label="Next Latents", height=200, visible=False)
+            result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
+            gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
+            progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
+            progress_bar = gr.HTML('', elem_classes='no-generating-animation')
 
-    # ---- Now register callbacks ----
     def switch_mode(mode):
         return (
             gr.update(visible=mode=="image2video"),
@@ -405,7 +386,6 @@ with block:
         inputs=[aspect_selector],
         outputs=[custom_w, custom_h],
     )
-
     ips = [
         mode_selector,
         input_image,
@@ -436,4 +416,3 @@ block.launch(
     share=args.share,
     inbrowser=args.inbrowser,
 )
-
