@@ -28,6 +28,9 @@ from transformers import SiglipImageProcessor, SiglipVisionModel
 from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.bucket_tools import find_nearest_bucket
 
+import random
+seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
+
 # ---- CLI args ----
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
@@ -145,6 +148,7 @@ def worker(
             size=(1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32
         ).cpu()
         history_pixels = None
+        t_start = time.time()
         total_generated_latent_frames = 0
         for section in reversed(range(total_sections)):
             is_last_section = section == 0
@@ -175,7 +179,7 @@ def worker(
                 current_step = d['i'] + 1
                 percentage = int(100.0 * current_step / steps)
                 hint = f'Sampling {current_step}/{steps}'
-                desc = f'Total generated frames: {int(max(0, total_generated_latent_frames * 4 - 3))}, Video length: {max(0, (total_generated_latent_frames * 4 - 3) / 30):.2f} seconds (FPS-30).'
+                desc = f'Total generated frames: {total_generated_latent_frames}, Video length: {total_generated_latent_frames / 30.0:.2f} seconds (FPS-30).'
                 stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
 
             generated_latents = sample_hunyuan(
@@ -237,7 +241,16 @@ def worker(
         return
 
     finally:
-        stream.output_queue.push(('end', None))
+        t_end = time.time()
+        total_time = t_end - t_start
+        video_seconds = total_generated_latent_frames / 30.0   # Replace '30' with your FPS if variable
+        summary_string = (
+            f"Finished!\n"
+            f"Total generated frames: {total_generated_latent_frames}, "
+            f"Video length: {video_seconds:.2f} seconds (FPS-30), "
+            f"Time taken: {total_time:.2f}s."
+        )
+        stream.output_queue.push(('progress', (None, summary_string, "")))
         
 # ---- Process Hook ----
 def process(
@@ -272,39 +285,28 @@ def process(
         use_teacache
     )
     output_filename = None
+    last_desc = "" 
     while True:
         flag, data = stream.output_queue.next()
         if flag == 'file':
             output_filename = data
             yield (
-                gr.update(value=output_filename),    # result_video
-                gr.update(),                         # preview_image
-                gr.update(),                         # progress_desc
-                gr.update(),                         # progress_bar
-                gr.update(interactive=False),        # start_button
-                gr.update(interactive=True),         # end_button
-                gr.update(),                         # seed textbox (no change)
+                gr.update(value=output_filename), gr.update(), gr.update(), gr.update(),
+                gr.update(interactive=False), gr.update(interactive=True), gr.update()
             )
         elif flag == 'progress':
             preview, desc, html = data
+            if desc:
+                last_desc = desc
             yield (
-                gr.update(),                         # result_video
-                gr.update(visible=True, value=preview),  # preview_image
-                desc,                                # progress_desc
-                html,                                # progress_bar
-                gr.update(interactive=False),        # start_button
-                gr.update(interactive=True),         # end_button
-                gr.update(),                         # seed textbox (no change)
+                gr.update(), gr.update(visible=True, value=preview), desc, html,
+                gr.update(interactive=False), gr.update(interactive=True), gr.update()
             )
         elif flag == 'end':
             yield (
-                gr.update(value=output_filename),    # result_video
-                gr.update(visible=False),            # preview_image
-                gr.update(),                         # progress_desc
-                '',                                  # progress_bar
-                gr.update(interactive=True),         # start_button
-                gr.update(interactive=False),        # end_button
-                gr.update(),                         # seed textbox (no change)
+                gr.update(value=output_filename), gr.update(visible=False),
+                gr.update(value=last_desc), '',  # use last_desc here
+                gr.update(interactive=True), gr.update(interactive=False), gr.update()
             )
             break
 
@@ -328,7 +330,6 @@ with block:
             with gr.Group():
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
                 n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
-                seed = gr.Number(label="Seed", value=31337, precision=0)
                 lock_seed = gr.Checkbox(label="Lock Seed", value=False)
                 total_frames = gr.Slider(label="Total Video Frames", minimum=2, maximum=1800, value=150, step=1)
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
