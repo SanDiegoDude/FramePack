@@ -34,6 +34,21 @@ parser.add_argument('--port', type=int, default=7800) # Default port if not spec
 parser.add_argument('--inbrowser', action='store_true')
 args = parser.parse_args()
 
+
+
+ASPECT_RATIOS = {
+    "1:1": (768, 768),
+    "16:9": (1024, 576),
+    "9:16": (576, 1024),
+    "4:3": (896, 672),
+    "3:4": (672, 896),
+    "21:9": (1280, 576), # Approx 2.22:1, common ultrawide
+    "9:21": (576, 1280),
+    # Add more if desired, ensure W/H are divisible by 8, preferably 64
+}
+DEFAULT_ASPECT_RATIO = "16:9" # Or choose another default like 1:1
+
+
 if args.hf_cache == 'local':
     if not os.path.exists('./hf_download'):
         os.makedirs('./hf_download')
@@ -113,18 +128,20 @@ outputs_folder = './outputs/'; os.makedirs(outputs_folder, exist_ok=True)
 
 # -------- Worker (handles all modes) --------
 @torch.no_grad()
-def worker(mode, input_image, input_video,
+def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_ratio_str
            prompt, n_prompt, sampler, shift, cfg, gs, rs,
            strength, seed, total_second_length, latent_window_size,
            steps, gpu_memory_preservation, use_teacache):
 
     job_id = generate_timestamp()
+    is_image_mode = mode in ['txt2img', 'img2img']
+    output_type_flag = 'image_file' if is_image_mode else 'video_file' # Flag for process_fn
+
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting job...'))))
     print(f"Starting worker job {job_id} with mode: {mode}")
 
     try:
         # --- Clean GPU and Load Text Encoders ---
-        # (Keep this section as is)
         if not high_vram:
             unload_complete_models(*all_models)
             fake_diffusers_current_device(text_encoder, gpu)
@@ -132,7 +149,6 @@ def worker(mode, input_image, input_video,
             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Text encoding...'))))
 
         # --- Prepare prompt embeddings ---
-        # (Keep this section as is)
         llama_vec, clip_pool = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
         if cfg == 1:
             llama_vec_n, clip_pool_n = torch.zeros_like(llama_vec), torch.zeros_like(clip_pool)
@@ -160,31 +176,71 @@ def worker(mode, input_image, input_video,
                 stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Image Encoder ready...'))))
 
         # --- Mode Specific Setup ---
-        if mode == 'txt2vid':
-            # Starts from noise, guided only by text prompt.
-            # Strength slider is ignored for this mode.
-            stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Preparing for txt2vid...'))))
-            height, width = 512, 512 # Or make configurable
+        if mode in ['txt2img', 'img2img', 'txt2vid']:
+            # Use Aspect Ratio for these modes
+            if aspect_ratio_str in ASPECT_RATIOS:
+                width, height = ASPECT_RATIOS[aspect_ratio_str]
+                print(f"Using aspect ratio {aspect_ratio_str} -> {width}x{height}")
+            else:
+                print(f"Warning: Invalid aspect ratio '{aspect_ratio_str}', using default.")
+                width, height = ASPECT_RATIOS[DEFAULT_ASPECT_RATIO]
+        elif mode in ['img2vid', 'vid2vid', 'extend_vid']:
+             # Video input modes derive size from input (bucketed or direct)
+             pass # Size determined below
 
-            # No image conditioning needed
-            image_embeddings = None
-            first_frame_conditioning_latent = None # No first frame VAE needed
-
-            # IMPORTANT: No initial_latent passed to sampler for this mode
+        # --- Specific Mode Setup Logic ---
+        if mode == 'txt2img':
+            stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Preparing for txt2img...'))))
+            # Starts from noise, guided only by text prompt. No initial_latent.
             init_latent = None
             concat_latent = None
-            print(f"Txt2Vid: Set up complete. Sampler will start from noise ({width}x{height}).")
+            image_embeddings = None
+            first_frame_conditioning_latent = None
+            print(f"Txt2Img: Setup complete ({width}x{height}).")
+
+        elif mode == 'img2img':
+            stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Preparing for img2img...'))))
+            if input_image is None: raise ValueError("Input image required for img2img.")
+            np_img = np.array(input_image)
+            # Resize input image to match target aspect ratio
+            img_resized = resize_and_center_crop(np_img, target_width=width, target_height=height)
+            print(f"Img2Img: Resized image to {width}x{height}")
+
+            # VAE Encode for initial_latent and conditioning (using float32 fix)
+            original_vae_dtype = vae.dtype
+            try:
+                vae.to(dtype=torch.float32)
+                inp_for_vae = (torch.from_numpy(img_resized).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu)
+                # This IS the initial latent passed to the sampler, controls starting noise via strength
+                init_latent = vae_encode(inp_for_vae, vae).to(transformer.dtype)
+                first_frame_conditioning_latent = init_latent # Also use for clean_latents
+                print(f"Img2Img: Initial latent shape {init_latent.shape}, dtype {init_latent.dtype}")
+            finally:
+                vae.to(dtype=original_vae_dtype)
+
+            # No concat_latent or image_embeddings needed for basic img2img
+            concat_latent = None
+            image_embeddings = None
+
+        elif mode == 'txt2vid':
+            # (Keep simplified logic from previous step)
+            stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Preparing for txt2vid...'))))
+            # Size already set from aspect ratio above
+            init_latent = None
+            concat_latent = None
+            image_embeddings = None
+            first_frame_conditioning_latent = None
+            print(f"Txt2Vid: Setup complete ({width}x{height}).")
 
         elif mode == 'img2vid':
-            # Uses conditioning method (like simple demo), strength is ignored for start noise
+            # (Keep logic from previous step, but get size from input)
             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Preparing for img2vid...'))))
-            if input_image is None: raise ValueError("Input image required for img2vid.")
+            if input_image is None: raise ValueError("Input image required.")
             np_img = np.array(input_image)
             H, W, _ = np_img.shape
-            height, width = find_nearest_bucket(H, W, resolution=640)
+            height, width = find_nearest_bucket(H, W, resolution=640) # Derive size from input
             img_resized = resize_and_center_crop(np_img, target_width=width, target_height=height)
             print(f"Img2Vid: Resized/bucketed image to {width}x{height}")
-
             # VAE Encode first frame for conditioning (using float32 fix)
             original_vae_dtype = vae.dtype
             try:
@@ -193,108 +249,83 @@ def worker(mode, input_image, input_video,
                 first_frame_conditioning_latent = vae_encode(inp_for_vae, vae).to(transformer.dtype)
             finally:
                 vae.to(dtype=original_vae_dtype)
-            print(f"Img2Vid: First frame latent for conditioning: {first_frame_conditioning_latent.shape}, dtype {first_frame_conditioning_latent.dtype}")
-
+            print(f"Img2Vid: First frame latent for conditioning: {first_frame_conditioning_latent.shape}")
             # Image Embeddings
             if not high_vram: load_model_as_complete(image_encoder, target_device=gpu)
             image_encoder_output = hf_clip_vision_encode(img_resized, feature_extractor, image_encoder)
             image_embeddings = image_encoder_output.last_hidden_state.to(transformer.dtype)
             print(f"Img2Vid: Image embedding shape {image_embeddings.shape}")
-
-            # IMPORTANT: No initial_latent passed to sampler for this mode
-            init_latent = None
-            concat_latent = None
+            init_latent = None; concat_latent = None
 
         elif mode == 'extend_vid':
-            # Uses conditioning method (like simple demo), strength ignored for start noise
-            # Needs conditioning from first frame AND whole video (for concat)
-            stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, f'Preparing for {mode}...'))))
-            if input_video is None or not hasattr(input_video, 'name'): raise ValueError("Input video file required.")
-            video_path = input_video.name
-            print(f"Video Mode: Loading video {video_path}")
-            vid_frames, _, _ = torchvision.io.read_video(video_path, pts_unit='sec')
-            vid = vid_frames.permute(3, 0, 1, 2)[None].float() / 127.5 - 1.0 # B, C, T, H, W
-            _, _, T, H, W = vid.shape
-            height, width = H, W
-            print(f"Video Mode: Loaded video with {T} frames, {W}x{H}")
-
-            original_vae_dtype = vae.dtype
-            try:
-                # Temporarily set VAE to float32 for ALL encodes in this block
-                vae.to(dtype=torch.float32)
-
-                # VAE Encode first frame for initial conditioning
-                first_frame_np = vid_frames[0].numpy() # Use original frame data
-                inp_first_frame = (torch.from_numpy(first_frame_np).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu)
-                first_frame_conditioning_latent = vae_encode(inp_first_frame, vae).to(transformer.dtype)
-                print(f"ExtendVid: First frame latent for conditioning: {first_frame_conditioning_latent.shape}, dtype {first_frame_conditioning_latent.dtype}")
-
-                # VAE Encode whole video for concat_latent conditioning
-                print(f"ExtendVid: Encoding full video for concat_latent...")
-                concat_latent = vae_encode(vid.to(device=gpu), vae).to(transformer.dtype)
-                print(f"ExtendVid: Conditioning concat_latent shape {concat_latent.shape}")
-
-            finally:
-                vae.to(dtype=original_vae_dtype) # Restore VAE dtype
-
-            # IMPORTANT: No initial_latent passed to sampler for this mode
-            init_latent = None
-            # No image embeddings needed
-            image_embeddings = None
+             # (Keep logic from previous step, but get size from input, apply VAE fix)
+             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, f'Preparing for {mode}...'))))
+             if input_video is None or not hasattr(input_video, 'name'): raise ValueError("Input video file required.")
+             video_path = input_video.name; print(f"Video Mode: Loading video {video_path}")
+             vid_frames, _, _ = torchvision.io.read_video(video_path, pts_unit='sec')
+             vid = vid_frames.permute(3, 0, 1, 2)[None].float() / 127.5 - 1.0
+             _, _, T, H, W = vid.shape; height, width = H, W # Derive size from input
+             print(f"Video Mode: Loaded video with {T} frames, {W}x{H}")
+             original_vae_dtype = vae.dtype
+             try:
+                 vae.to(dtype=torch.float32) # Apply fix
+                 first_frame_np = vid_frames[0].numpy()
+                 inp_first_frame = (torch.from_numpy(first_frame_np).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu)
+                 first_frame_conditioning_latent = vae_encode(inp_first_frame, vae).to(transformer.dtype)
+                 print(f"ExtendVid: First frame latent for conditioning: {first_frame_conditioning_latent.shape}")
+                 print(f"ExtendVid: Encoding full video for concat_latent...")
+                 concat_latent = vae_encode(vid.to(device=gpu), vae).to(transformer.dtype)
+                 print(f"ExtendVid: Conditioning concat_latent shape {concat_latent.shape}")
+             finally:
+                 vae.to(dtype=original_vae_dtype)
+             init_latent = None; image_embeddings = None
 
         elif mode == 'vid2vid':
-            # Uses initial_latent + strength method (like txt2vid but starting from video frame)
-            stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, f'Preparing for {mode}...'))))
-            if input_video is None or not hasattr(input_video, 'name'): raise ValueError("Input video file required.")
-            video_path = input_video.name
-            print(f"Video Mode: Loading video {video_path}")
-            vid_frames, _, _ = torchvision.io.read_video(video_path, pts_unit='sec')
-            vid = vid_frames.permute(3, 0, 1, 2)[None].float() / 127.5 - 1.0 # B, C, T, H, W
-            _, _, T, H, W = vid.shape
-            height, width = H, W
-            print(f"Video Mode: Loaded video with {T} frames, {W}x{H}")
+             # (Keep logic from previous step, but get size from input, apply VAE fix)
+             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, f'Preparing for {mode}...'))))
+             if input_video is None or not hasattr(input_video, 'name'): raise ValueError("Input video file required.")
+             video_path = input_video.name; print(f"Video Mode: Loading video {video_path}")
+             vid_frames, _, _ = torchvision.io.read_video(video_path, pts_unit='sec')
+             vid = vid_frames.permute(3, 0, 1, 2)[None].float() / 127.5 - 1.0
+             _, _, T, H, W = vid.shape; height, width = H, W # Derive size from input
+             print(f"Video Mode: Loaded video with {T} frames, {W}x{H}")
+             original_vae_dtype = vae.dtype
+             try:
+                 vae.to(dtype=torch.float32) # Apply fix
+                 first_frame_np = vid_frames[0].numpy()
+                 inp_first_frame = (torch.from_numpy(first_frame_np).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu)
+                 init_latent = vae_encode(inp_first_frame, vae).to(transformer.dtype) # This IS the initial latent
+                 first_frame_conditioning_latent = init_latent # Use for clean_latents too
+                 print(f"Vid2Vid: Initial latent for sampler: {init_latent.shape}")
+                 print(f"Vid2Vid: Encoding full video for concat_latent...")
+                 concat_latent = vae_encode(vid.to(device=gpu), vae).to(transformer.dtype)
+                 print(f"Vid2Vid: Conditioning concat_latent shape {concat_latent.shape}")
+             finally:
+                 vae.to(dtype=original_vae_dtype)
+             image_embeddings = None
 
-            original_vae_dtype = vae.dtype
-            try:
-                vae.to(dtype=torch.float32) # Use float32 for safety
-
-                # VAE Encode first frame to use as initial_latent for the sampler
-                first_frame_np = vid_frames[0].numpy()
-                inp_first_frame = (torch.from_numpy(first_frame_np).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu)
-                # This IS the initial latent passed to the sampler
-                init_latent = vae_encode(inp_first_frame, vae).to(transformer.dtype)
-                print(f"Vid2Vid: Initial latent for sampler (from first frame): {init_latent.shape}, dtype {init_latent.dtype}")
-                # Also store for clean_latents conditioning on first step
-                first_frame_conditioning_latent = init_latent
-
-                # VAE Encode whole video for concat_latent conditioning
-                print(f"Vid2Vid: Encoding full video for concat_latent...")
-                concat_latent = vae_encode(vid.to(device=gpu), vae).to(transformer.dtype)
-                print(f"Vid2Vid: Conditioning concat_latent shape {concat_latent.shape}")
-
-            finally:
-                vae.to(dtype=original_vae_dtype)
-
-            # No image embeddings needed
-            image_embeddings = None
-
-        # Fallback sizing
+        # Fallback sizing (should only hit if AR lookup failed)
         if height is None or width is None: height, width = 512, 512; print(f"Warning: Using fallback size {width}x{height}")
 
-        # --- Sampling loop ---
-        # (Calculation of total_latent_sections, rnd, num_frames_per_window, history_latents, paddings is unchanged)
-        total_latent_sections = max(int(round((total_second_length * 30) / (latent_window_size * 4))), 1)
+        # --- Sampling loop Setup ---
+        if is_image_mode:
+            total_latent_sections = 1
+            latent_paddings = [0] # Force single run, no padding needed
+            print("Image Mode: Forcing single generation section.")
+        else: # Video modes
+            total_latent_sections = max(int(round((total_second_length * 30) / (latent_window_size * 4))), 1)
+            if total_latent_sections > 4: latent_paddings = [3] + [2] * (total_latent_sections - 3) + [1, 0]
+            else: latent_paddings = list(reversed(range(total_latent_sections)))
         stream.output_queue.push(('progress', (None, f'Preparing for {total_latent_sections} sections...', make_progress_bar_html(0, 'Initializing Sampler...'))))
         rnd = torch.Generator("cpu").manual_seed(int(seed))
+        # Use default window size even for images, loop runs once anyway
         num_frames_per_window = latent_window_size * 4 - 3
         history_latents = torch.zeros((1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32).cpu()
         history_pixels = None
         total_generated_latent_frames = 0
-        if total_latent_sections > 4: latent_paddings = [3] + [2] * (total_latent_sections - 3) + [1, 0]
-        else: latent_paddings = list(reversed(range(total_latent_sections)))
         print(f"Latent padding sequence: {latent_paddings}")
 
-        # --- Main Generation Loop ---
+        # --- Main Generation Loop (runs once for image modes) ---
         for section_index, latent_padding in enumerate(latent_paddings):
             is_last_section = (latent_padding == 0)
             latent_padding_size = latent_padding * latent_window_size
@@ -304,30 +335,40 @@ def worker(mode, input_image, input_video,
             if stream.input_queue.top() == 'end': print("User requested stop."); stream.output_queue.push(('end', None)); return
 
             # Prepare clean latents for conditioning
-            # Use specific first frame latent for step 0 in img2vid/extend_vid/vid2vid
             indices = torch.arange(0, sum([1, latent_padding_size, latent_window_size, 1, 2, 16])).unsqueeze(0)
             clean_latent_indices_pre, _, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = \
                 indices.split([1, latent_padding_size, latent_window_size, 1, 2, 16], dim=1)
             clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
-
-            # Determine the 'clean' reference latent for the *conditioning* input
-            if section_index == 0:
-                if mode in ['img2vid', 'extend_vid', 'vid2vid']:
-                    # Use the specially prepared VAE latent of the first frame for conditioning
-                    clean_latents_pre_cond = first_frame_conditioning_latent.to(history_latents.device, dtype=history_latents.dtype)
-                    print("Using first frame VAE latent for clean_latents_pre conditioning.")
-                elif mode == 'txt2vid':
-                    # txt2vid uses the passed init_latent (zeros) for conditioning ref too
-                    clean_latents_pre_cond = init_latent.to(history_latents.device, dtype=history_latents.dtype)
-                    print("Using zero init_latent for clean_latents_pre conditioning.")
-                else: # Fallback? Should not happen
-                    clean_latents_pre_cond = history_latents[:, :, :1]
-            else: # Subsequent steps use history
+    
+            # Determine the 'clean' reference latent for the *conditioning* input's 'pre' part
+            # For modes starting from an image/video, ALWAYS use the first frame's VAE latent as the main reference.
+            if mode in ['img2vid', 'extend_vid', 'vid2vid']:
+                 if first_frame_conditioning_latent is not None:
+                     clean_latents_pre_cond = first_frame_conditioning_latent.to(history_latents.device, dtype=history_latents.dtype)
+                     print(f"Using first frame VAE latent for clean_latents_pre conditioning (Section {section_index+1}).")
+                 else:
+                     # Fallback if first frame latent wasn't prepared (shouldn't happen for these modes)
+                     print(f"Warning: Expected first_frame_conditioning_latent for {mode} but not found, using history.")
+                     clean_latents_pre_cond = history_latents[:, :, :1] # Use history as fallback ONLY
+            elif mode == 'txt2img': # Treat txt2img similar to txt2vid here
+                # Use the zero history buffer as reference (effectively no structural prior)
+                print(f"{mode}: Using history[:1] (zeros) for clean_latents_pre conditioning (Section {section_index+1}).")
                 clean_latents_pre_cond = history_latents[:, :, :1]
-                print("Using history[:1] for clean_latents_pre conditioning.")
-
+            else: # Should only be txt2vid now based on earlier setup
+                if init_latent is not None: # txt2vid (method with strength=1) uses zero init_latent as reference
+                     clean_latents_pre_cond = init_latent.to(history_latents.device, dtype=history_latents.dtype)
+                     print(f"{mode}: Using zero init_latent for clean_latents_pre conditioning (Section {section_index+1}).")
+                else: # Fallback for txt2vid if init_latent somehow None
+                     print(f"{mode}: Using history[:1] (zeros) for clean_latents_pre conditioning (Section {section_index+1}).")
+                     clean_latents_pre_cond = history_latents[:, :, :1]
+    
+    
+            # Get the 'post', '2x', and '4x' parts from history buffer (represents recently generated context)
             clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16].split([1, 2, 16], dim=2)
-            clean_latents_for_cond = torch.cat([clean_latents_pre_cond, clean_latents_post], dim=2) # Rename for clarity
+    
+            # Combine the constant first-frame reference with the recent history context
+            clean_latents_for_cond = torch.cat([clean_latents_pre_cond, clean_latents_post], dim=2)
+            print(f"Shape of clean_latents_for_cond: {clean_latents_for_cond.shape}")
 
             # --- Load Transformer (conditionally) ---
             if not high_vram:
@@ -436,35 +477,49 @@ def worker(mode, input_image, input_video,
                 stream.output_queue.push(('progress', (None, '', make_progress_bar_html(100, 'VAE Decoding...'))))
             real_history_latents_gpu = history_latents[:, :, :total_generated_latent_frames].to(gpu, dtype=vae.dtype)
             print(f"Decoding latents for append. Full history shape on GPU: {real_history_latents_gpu.shape}")
-            if history_pixels is None:
-                print("Decoding first section directly.")
-                history_pixels = vae_decode(real_history_latents_gpu, vae).cpu()
-            else:
-                print("Decoding current section slice and appending.")
-                section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
-                overlap_pixel_frames = latent_window_size * 4 - 3
-                print(f"Decoding slice of size {section_latent_frames} latents for soft append.")
-                slice_to_decode = real_history_latents_gpu[:, :, :min(section_latent_frames, real_history_latents_gpu.shape[2])]
-                current_pixels = vae_decode(slice_to_decode, vae).cpu()
-                print(f"Soft appending with overlap: {overlap_pixel_frames} pixel frames.")
-                history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlap=overlap_pixel_frames)
-            print(f"Current history_pixels shape: {history_pixels.shape}")
+            
+            
+            # Decode ALL generated latents for this chunk
+            decoded_pixels = vae_decode(real_history_latents_gpu, vae).cpu() # B, C, T, H, W
+
+            if is_image_mode:
+                 # For image mode, we only need the first frame
+                 print(f"Image Mode: Extracting first frame from decoded pixels shape: {decoded_pixels.shape}")
+                 # Take the first frame T=0. Shape becomes B, C, H, W
+                 output_image_pixels = decoded_pixels[:, :, 0]
+                 # Convert to NumPy HWC uint8
+                 output_image_np = ((output_image_pixels[0].permute(1, 2, 0) + 1.0) * 127.5).clamp(0, 255).numpy().astype(np.uint8)
+                 output_filename = os.path.join(outputs_folder, f'{job_id}_final.png')
+                 print(f"Saving final image to {output_filename}")
+                 Image.fromarray(output_image_np).save(output_filename)
+                 stream.output_queue.push((output_type_flag, output_filename)) # Push image path
+                 # No need for soft append or history_pixels buffer for image mode
+                 history_pixels = None # Clear just in case
+            else: # Video Mode VAE/Append logic
+                 if history_pixels is None:
+                     history_pixels = decoded_pixels
+                 else:
+                     # Use the same soft append logic as before
+                     overlap_pixel_frames = latent_window_size * 4 - 3
+                     # Slice needed for append context
+                     section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
+                     slice_to_decode = real_history_latents_gpu[:, :, :min(section_latent_frames, real_history_latents_gpu.shape[2])]
+                     current_pixels = vae_decode(slice_to_decode, vae).cpu() # Decode the slice again for append context
+                     history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlap=overlap_pixel_frames)
+                 print(f"Current video history_pixels shape: {history_pixels.shape}")
+                 # Save intermediate video
+                 output_filename = os.path.join(outputs_folder, f'{job_id}_section_{section_index+1}.mp4')
+                 print(f"Saving video section to {output_filename} with {history_pixels.shape[2]} frames.")
+                 save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
+                 stream.output_queue.push((output_type_flag, output_filename)) # Push video path
+
             if not high_vram: unload_complete_models(vae)
 
+            if is_last_section: print("Last section processed."); break
 
-            # --- Save Intermediate/Final Video ---
-            output_filename = os.path.join(outputs_folder, f'{job_id}_section_{section_index+1}.mp4')
-            print(f"Saving video to {output_filename} with {history_pixels.shape[2]} frames.")
-            save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
-            stream.output_queue.push(('file', output_filename))
+        # --- End of Loop ---
+        print(f"Worker job {job_id} finished processing sections.")
 
-            if is_last_section:
-                print("Last section processed.")
-                break
-
-        print(f"Worker job {job_id} finished.")
-
-    # --- Error Handling & Finally Block ---               
     except Exception as e:
         print(f"!!!!!!!!!! Error in worker job {job_id} !!!!!!!!!!"); traceback.print_exc()
         stream.output_queue.push(('error', str(e)))
@@ -475,11 +530,12 @@ def worker(mode, input_image, input_video,
 
 
 # -------- Gradio UI --------
-def process_fn(mode, img, vid, # Removed mask
+def process_fn(mode, img, vid, aspect_ratio_str,
                prompt, n_prompt, sampler, shift, cfg, gs, rs,
-               strength, seed_from_ui, lock_seed_val, # Renamed seed -> seed_from_ui, added lock_seed_val
+               strength, seed_from_ui, lock_seed_val,
                seconds, window, steps, gpu_mem, tea,
                progress=gr.Progress(track_tqdm=True)):
+
 
     # --- Seed Handling ---
     if not lock_seed_val:
@@ -490,7 +546,7 @@ def process_fn(mode, img, vid, # Removed mask
         print(f"Lock Seed checked. Using seed from UI: {actual_seed}")
 
     # Reset UI elements and UPDATE SEED field immediately
-    yield None, gr.update(visible=False, value=None), gr.update(value=''), gr.update(value=''), gr.update(interactive=False), gr.update(interactive=True), gr.update(value=actual_seed)
+    yield None, None, gr.update(visible=False, value=None), gr.update(value=''), gr.update(value=''), gr.update(interactive=False), gr.update(interactive=True), gr.update(value=actual_seed)
 
     # Clear previous stream queues if any
     stream.input_queue = AsyncStream().input_queue # Reset input queue
@@ -498,53 +554,62 @@ def process_fn(mode, img, vid, # Removed mask
 
     # Launch worker thread - PASS THE DETERMINED actual_seed
     print("Starting process_fn...")
-    async_run(worker, mode, img, vid, # Removed mask
+    async_run(worker, mode, img, vid, aspect_ratio_str, # Pass aspect ratio
               prompt, n_prompt, sampler, shift, cfg, gs, rs,
               strength, actual_seed, # Pass actual_seed here
               seconds, window, steps, gpu_mem, tea)
 
     # Handle outputs from worker thread
     output_video_path = None
+    output_image_path = None # Added for image output
     last_preview = None
     while True:
         try:
-            flag, data = stream.output_queue.next() # Removed timeout
+            flag, data = stream.output_queue.next()
 
-            if flag == 'file':
+            # --- Output Handling ---
+            if flag == 'video_file': # Video output
                 output_video_path = data
-                # Update includes None for the seed output, as it's already updated
-                yield output_video_path, gr.update(value=last_preview, visible=last_preview is not None), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True), gr.update() # Keep seed field as is
+                output_image_path = None # Clear image path
+                # Yield updates: video=path, image=None, preview, status, bar, buttons, seed
+                yield gr.update(value=output_video_path), gr.update(value=None, visible=False), gr.update(value=last_preview, visible=last_preview is not None), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True), gr.update()
+            elif flag == 'image_file': # Image output
+                output_image_path = data
+                output_video_path = None # Clear video path
+                # Yield updates: video=None, image=path, preview, status, bar, buttons, seed
+                yield gr.update(value=None, visible=False), gr.update(value=output_image_path, visible=True), gr.update(value=last_preview, visible=last_preview is not None), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True), gr.update()
             elif flag == 'progress':
                 preview_img, status_text, html_bar = data
-                last_preview = preview_img # Store the latest preview
-                # Update includes None for the seed output
-                yield output_video_path, gr.update(value=preview_img, visible=preview_img is not None), status_text, html_bar, gr.update(interactive=False), gr.update(interactive=True), gr.update() # Keep seed field as is
+                last_preview = preview_img
+                # Yield keeps existing video/image paths, updates preview/status/bar/buttons/seed
+                yield gr.update(), gr.update(), gr.update(value=preview_img, visible=preview_img is not None), status_text, html_bar, gr.update(interactive=False), gr.update(interactive=True), gr.update()
             elif flag == 'error':
                  error_message = data
                  print(f"Gradio UI received error: {error_message}")
-                 # Update includes None for the seed output
-                 yield output_video_path, gr.update(value=last_preview, visible=last_preview is not None), f"Error: {error_message}", '', gr.update(interactive=True), gr.update(interactive=False), gr.update() # Keep seed field as is
-                 break # Stop processing on error
+                 # Yield keeps existing outputs, shows error, enables start button
+                 yield gr.update(), gr.update(), gr.update(value=last_preview, visible=last_preview is not None), f"Error: {error_message}", '', gr.update(interactive=True), gr.update(interactive=False), gr.update()
+                 break
             elif flag == 'end':
                 print("Gradio UI received end signal.")
-                # Final update: show final video, hide preview, clear status/bar
-                # Update includes None for the seed output
-                yield output_video_path, gr.update(visible=False, value=None), '', '', gr.update(interactive=True), gr.update(interactive=False), gr.update() # Keep seed field as is
-                break # Exit loop
+                # Final update: Keep final video/image, hide preview, clear status/bar, enable start button
+                # Determine final visibility based on which output path is set
+                final_vid_visible = output_video_path is not None
+                final_img_visible = output_image_path is not None
+                yield gr.update(value=output_video_path, visible=final_vid_visible), gr.update(value=output_image_path, visible=final_img_visible), gr.update(visible=False, value=None), '', '', gr.update(interactive=True), gr.update(interactive=False), gr.update()
+                break
             else:
                  print(f"Received unexpected flag: {flag}")
 
         except Exception as e:
-            if "FIFOQueue object" in str(e) and "'next' of" in str(e): # More specific check if needed
+            # (Keep error handling as is, ensuring yield signature matches new outputs)
+            if "FIFOQueue object" in str(e) and "'next' of" in str(e):
                 print("Waiting for worker output...")
-                # Update includes None for the seed output
-                yield output_video_path, gr.update(value=last_preview, visible=last_preview is not None), "Processing, please wait...", gr.update(), gr.update(interactive=False), gr.update(interactive=True), gr.update() # Keep seed field as is
+                yield gr.update(), gr.update(), gr.update(value=last_preview, visible=last_preview is not None), "Processing, please wait...", gr.update(), gr.update(interactive=False), gr.update(interactive=True), gr.update()
                 continue
             else:
                  print(f"Error processing output queue: {e}")
                  traceback.print_exc()
-                 # Update includes None for the seed output
-                 yield output_video_path, gr.update(value=last_preview, visible=last_preview is not None), f"UI Error: {e}", '', gr.update(interactive=True), gr.update(interactive=False), gr.update() # Keep seed field as is
+                 yield gr.update(), gr.update(), gr.update(value=last_preview, visible=last_preview is not None), f"UI Error: {e}", '', gr.update(interactive=True), gr.update(interactive=False), gr.update()
                  break
 
 def end_process_early():
@@ -562,91 +627,102 @@ with gr.Blocks(css=css).queue() as demo:
     with gr.Row():
         with gr.Column(scale=1):
             mode = gr.Radio(
-                ["txt2vid", "img2vid", "vid2vid", "extend_vid"], # Removed video_inpaint
+                ["txt2vid", "img2vid", "vid2vid", "extend_vid", "txt2img", "img2img"], # ADDED MODES
                 value="img2vid",
                 label="Mode"
             )
-            input_image = gr.Image(
-                sources='upload',
-                type="numpy",
-                label="Input Image (for img2vid)",
-                visible=True, # Initially visible, controlled by mode change
-                height=400 # <<< SET DISPLAY HEIGHT
-            )
-            input_video = gr.Video(
-                label="Input Video (for vid2vid, extend_vid)",
-                sources='upload',
-                visible=False # Initially hidden
-            )
+            # Inputs controlled by mode
+            input_image = gr.Image(sources='upload', type="numpy", label="Input Image (for img2vid/img2img)", visible=True, height=400)
+            input_video = gr.Video(label="Input Video (for vid2vid/extend_vid)", sources='upload', visible=False)
+
+            # Common Inputs
             prompt = gr.Textbox(label="Prompt", lines=2, placeholder="Enter your prompt here...")
             n_prompt = gr.Textbox(label="Negative Prompt", lines=2, value="ugly, blurry, deformed, text, watermark, signature")
 
-            # --- Moved Seed and Length outside Advanced ---
-            seconds = gr.Slider(1, 120, value=5, step=0.1, label="Output Video Length (sec)")
+            # Mode-dependent inputs
+            aspect_ratio = gr.Dropdown(list(ASPECT_RATIOS.keys()), value=DEFAULT_ASPECT_RATIO, label="Aspect Ratio (txt2img/img2img/txt2vid)", visible=False) # ADDED, initially hidden
+            seconds = gr.Slider(1, 120, value=5, step=0.1, label="Output Video Length (sec)", visible=True) # Initially visible
+
+            # Seed Row
             with gr.Row():
-                seed = gr.Number(label="Seed", value=random.randint(0, 2**32 - 1), precision=0) # Start with random seed
-                lock_seed = gr.Checkbox(label="Lock Seed", value=False) # <<< ADDED Lock Seed checkbox
+                seed = gr.Number(label="Seed", value=random.randint(0, 2**32 - 1), precision=0)
+                lock_seed = gr.Checkbox(label="Lock Seed", value=False)
 
             with gr.Accordion("Advanced Settings", open=False):
                 sampler = gr.Dropdown(
                     ["unipc", "unipc_bh2", "dpmpp_2m", "dpmpp_sde", "dpmpp_2m_sde", "dpmpp_3m_sde", "ddim", "plms", "euler", "euler_ancestral"],
-                    value="unipc",
-                    label="Sampler"
+                    value="unipc", label="Sampler"
                 )
-                shift = gr.Slider(0., 10., value=3.0, label="Shift μ (Temporal Consistency)", info="Higher values might increase consistency but affect motion. Default 3.0.")
+                # Strength slider - interactive based on mode (img2img, vid2vid)
+                strength = gr.Slider(0., 1., value=0.7, label="Denoise Strength (img2img/vid2vid)", info="How much to change input. 0.7 = default.", visible=True, interactive=False) # Start non-interactive
+
+                # Video-specific settings - may hide for img modes
+                shift = gr.Slider(0., 10., value=3.0, label="Shift μ (Temporal Consistency - Video)", info="Higher values might increase consistency but affect motion. Default 3.0.", visible=True)
+                window = gr.Slider(1, 33, value=9, step=1, label="Latent Window Size (Video)", info="Affects temporal range per step. Default 9.", visible=True)
+
+                # Common Advanced
                 cfg = gr.Slider(1., 32., value=1.0, label="CFG Scale (Prompt Guidance)", info="Only effective if > 1.0. FramePack default is 1.0.")
                 gs = gr.Slider(1., 32., value=10.0, label="Distilled CFG Scale", info="Main guidance scale for FramePack. Default 10.0.")
                 rs = gr.Slider(0., 1., value=0., label="Rescale Guidance", info="Guidance rescale factor. Default 0.0.")
-                strength = gr.Slider(0., 1., value=1.0, label="Denoise Strength (for img2vid/vid2vid)", info="How much to change the input image/video. 1.0 = max change. Default 0.7.")
-                # seed = gr.Number(label="Seed", value=31337, precision=0) # --- MOVED ---
-                # seconds = gr.Slider(1, 120, value=5, step=0.1, label="Output Video Length (sec)") # --- MOVED ---
-                window = gr.Slider(1, 33, value=9, step=1, label="Latent Window Size", info="Affects temporal range per step. Default 9.")
-                steps = gr.Slider(1, 100, value=25, step=1, label="Sampling Steps", info="Number of denoising steps. Default 25.")
+                steps = gr.Slider(1, 100, value=25, step=1, label="Sampling Steps")
                 if not high_vram:
-                    gpu_mem = gr.Slider(3, max(10, int(free_mem_gb)), value=min(6, int(free_mem_gb)-2), step=0.1, label="GPU Memory to Preserve (GB)", info="Leave this much VRAM free for other apps. Higher = Slower.")
+                    gpu_mem = gr.Slider(3, max(10, int(free_mem_gb)), value=min(6, int(free_mem_gb)-2), step=0.1, label="GPU Memory to Preserve (GB)")
                 else:
                      gpu_mem = gr.Number(label="GPU Memory Preservation (N/A in High VRAM mode)", value=0, interactive=False)
-                tea = gr.Checkbox(label="Use TeaCache Optimization", value=False, info="May speed up sampling but can slightly affect quality (e.g., hands).") # <<< CHANGED DEFAULT
+                tea = gr.Checkbox(label="Use TeaCache Optimization", value=False)
 
             with gr.Row():
                  start_btn = gr.Button("Generate", variant="primary")
                  end_btn = gr.Button("Stop", interactive=False)
 
         with gr.Column(scale=1):
-            result_vid = gr.Video(label="Output Video", interactive=False, height=512, autoplay=True, loop=True)
+            # Use two components, show/hide based on mode
+            result_vid = gr.Video(label="Output Video", interactive=False, height=512, autoplay=True, loop=True, visible=True) # Start visible
+            result_img = gr.Image(label="Output Image", interactive=False, height=512, visible=False) # Start hidden
             preview = gr.Image(label="Live Preview", interactive=False, visible=False, height=256)
-            status_md = gr.Markdown("") # For text status updates
-            bar_html = gr.HTML("") # For progress bar
+            status_md = gr.Markdown("")
+            bar_html = gr.HTML("")
 
     # --- UI Control Logic ---
     def update_ui_for_mode(selected_mode):
-        is_img_mode = selected_mode == "img2vid"
-        is_vid_mode = selected_mode in ["vid2vid", "extend_vid"]
-        is_strength_relevant = selected_mode in ["vid2vid"]
+        is_img_input_mode = selected_mode in ["img2vid", "img2img"]
+        is_vid_input_mode = selected_mode in ["vid2vid", "extend_vid"]
+        is_video_output_mode = selected_mode in ["txt2vid", "img2vid", "vid2vid", "extend_vid"]
+        is_image_output_mode = selected_mode in ["txt2img", "img2img"]
+        is_ar_relevant = selected_mode in ["txt2img", "img2img", "txt2vid"] # AR for video input uses input video's AR
+        is_strength_relevant = selected_mode in ["img2img", "vid2vid"] # Modes using initial_latent + strength
+        is_video_params_relevant = is_video_output_mode # Show shift/window only for video output
 
         return {
-            input_image: gr.update(visible=is_img_mode),
-            input_video: gr.update(visible=is_vid_mode),
-            strength: gr.update(interactive=is_strength_relevant)
+            input_image: gr.update(visible=is_img_input_mode),
+            input_video: gr.update(visible=is_vid_input_mode),
+            aspect_ratio: gr.update(visible=is_ar_relevant),
+            seconds: gr.update(visible=is_video_output_mode),
+            result_vid: gr.update(visible=is_video_output_mode),
+            result_img: gr.update(visible=is_image_output_mode),
+            strength: gr.update(interactive=is_strength_relevant),
+            shift: gr.update(visible=is_video_params_relevant),
+            window: gr.update(visible=is_video_params_relevant),
         }
 
     mode.change(
         update_ui_for_mode,
         inputs=[mode],
-        outputs=[input_image, input_video, strength], # Removed mask_image
+        # Update all components controlled by mode
+        outputs=[input_image, input_video, aspect_ratio, seconds, result_vid, result_img, strength, shift, window],
         queue=False
     )
 
     # --- Button Actions ---
-    # ADD lock_seed to inputs list
-    inputs = [mode, input_image, input_video,
+    # Add aspect_ratio to inputs list
+    inputs = [mode, input_image, input_video, aspect_ratio, # ADDED aspect_ratio
               prompt, n_prompt, sampler, shift, cfg, gs, rs,
-              strength, seed, lock_seed, seconds, window, steps, gpu_mem, tea] # Added lock_seed
+              strength, seed, lock_seed, seconds, window, steps, gpu_mem, tea]
 
-    # ADD seed to outputs list (so we can update it)
-    outputs = [result_vid, preview, status_md, bar_html, start_btn, end_btn, seed] # Added seed
+    # Add result_img to outputs list
+    outputs = [result_vid, result_img, preview, status_md, bar_html, start_btn, end_btn, seed] # Added result_img
 
-    start_btn.click(process_fn, inputs=inputs, outputs=outputs) # Pass updated lists
+    start_btn.click(process_fn, inputs=inputs, outputs=outputs)
     end_btn.click(end_process_early, outputs=[end_btn])
 
 # --- Launch App ---
