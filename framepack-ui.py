@@ -275,8 +275,8 @@ def worker(mode, input_image, input_video, aspect_ratio_str,
             init_latent = None; concat_latent = None
 
         elif mode == 'extend_vid':
-             # Conditioning only mode, starts from noise. Uses REAL first frame latent/concat. Needs CLIP embeddings.
-             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, f'Preparing for {mode}...'))))
+            # Conditioning only mode, starts from noise. Uses REAL first frame latent/concat. Needs CLIP embeddings.
+            stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, f'Preparing for {mode}...'))))
             if input_video is None or not hasattr(input_video, 'name'): raise ValueError("Input video file required.")
             video_path = input_video.name; print(f"Video Mode: Loading video {video_path}")
             vid_frames, _, _ = torchvision.io.read_video(video_path, pts_unit='sec')
