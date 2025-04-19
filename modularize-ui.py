@@ -109,10 +109,10 @@ def prepare_inputs(input_image, prompt, n_prompt):
 
     return input_np, input_tensor, llama_vec, clip_pool, llama_vec_n, clip_pool_n, mask, mask_n, h, w
 
-# ---- Main Worker ----
+# ---- Worker ----
 @torch.no_grad()
-def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache):
-    total_sections = int(max(round((total_second_length * 30) / (latent_window_size * 4)), 1))
+def worker(input_image, prompt, n_prompt, seed, total_frames, latent_window_size, frames_per_window, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache):
+    total_sections = math.ceil((total_frames + 3) / frames_per_window)
     job_id = generate_timestamp()
 
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
@@ -140,21 +140,14 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Start sampling ...'))))
 
-        # Sampling section reinserted from original worker()
         rnd = torch.Generator("cpu").manual_seed(seed)
-        num_frames = latent_window_size * 4 - 3
-
         history_latents = torch.zeros(size=(1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32).cpu()
         history_pixels = None
         total_generated_latent_frames = 0
 
-        latent_paddings = reversed(range(total_sections))
-        if total_sections > 4:
-            latent_paddings = [3] + [2] * (total_sections - 3) + [1, 0]
-
-        for latent_padding in latent_paddings:
-            is_last_section = latent_padding == 0
-            latent_padding_size = latent_padding * latent_window_size
+        for section in reversed(range(total_sections)):
+            is_last_section = section == 0
+            latent_padding_size = section * latent_window_size
 
             if stream.input_queue.top() == 'end':
                 stream.output_queue.push(('end', None))
@@ -187,7 +180,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 current_step = d['i'] + 1
                 percentage = int(100.0 * current_step / steps)
                 hint = f'Sampling {current_step}/{steps}'
-                desc = f'Total generated frames: {int(max(0, total_generated_latent_frames * 4 - 3))}, Video length: {max(0, (total_generated_latent_frames * 4 - 3) / 30):.2f} seconds (FPS-30). The video is being extended now ...'
+                desc = f'Total generated frames: {int(max(0, total_generated_latent_frames * 4 - 3))}, Video length: {max(0, (total_generated_latent_frames * 4 - 3) / 30):.2f} seconds (FPS-30).'
                 stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
 
             generated_latents = sample_hunyuan(
@@ -195,7 +188,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 sampler='unipc',
                 width=width,
                 height=height,
-                frames=num_frames,
+                frames=frames_per_window,
                 real_guidance_scale=cfg,
                 distilled_guidance_scale=gs,
                 guidance_rescale=rs,
@@ -236,7 +229,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 history_pixels = vae_decode(real_history_latents, vae).cpu()
             else:
                 section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
-                overlapped_frames = latent_window_size * 4 - 3
+                overlapped_frames = frames_per_window
                 current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae).cpu()
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
 
@@ -249,14 +242,6 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
             if is_last_section:
                 break
-
-    except:
-        traceback.print_exc()
-        if not high_vram:
-            unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
-
-    stream.output_queue.push(('end', None))
-    return
 
 # ---- Process Hook ----
 def process(input_image, prompt, n_prompt, seed, total_frames, latent_window_size, frames_per_window, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed):
