@@ -316,8 +316,8 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
                  print(f"Vid2Vid: Conditioning concat_latent shape {concat_latent.shape}")
              finally:
                  vae.to(dtype=original_vae_dtype)
-            image_embeddings = torch.zeros(expected_emb_shape, dtype=expected_emb_dtype, device=gpu)
-            print(f"Vid2Vid: Providing dummy image embeddings.")
+             image_embeddings = torch.zeros(expected_emb_shape, dtype=expected_emb_dtype, device=gpu)
+             print(f"Vid2Vid: Providing dummy image embeddings.")
 
         # Fallback sizing (should only hit if AR lookup failed)
         if height is None or width is None: height, width = 512, 512; print(f"Warning: Using fallback size {width}x{height}")
