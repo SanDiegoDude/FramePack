@@ -248,13 +248,13 @@ def process(
     if not lock_seed:
         seed = int(time.time()) % 2**32
     yield (
-        None,
-        None,
-        '',
-        '',
-        gr.update(interactive=False),         # Start Generation button disabled, text stays
-        gr.update(interactive=True),          # End Generation enabled
-        gr.update(value=seed),                # Seed textbox gets updated
+        None,                           # result_video
+        None,                           # preview_image
+        '',                             # progress_desc
+        '',                             # progress_bar
+        gr.update(interactive=False),   # start_button
+        gr.update(interactive=True),    # end_button
+        gr.update(value=seed),          # seed textbox
     )
     stream = AsyncStream()
     async_run(
@@ -277,32 +277,34 @@ def process(
         if flag == 'file':
             output_filename = data
             yield (
-                gr.update(value=output_filename),             # result_video
-                gr.update(),                                 # preview_image
-                gr.update(),                                 # progress_desc
-                gr.update(),                                 # progress_bar
-                gr.update(interactive=False),                # start_button
-                gr.update(interactive=True),                 # end_button
+                gr.update(value=output_filename),    # result_video
+                gr.update(),                         # preview_image
+                gr.update(),                         # progress_desc
+                gr.update(),                         # progress_bar
+                gr.update(interactive=False),        # start_button
+                gr.update(interactive=True),         # end_button
+                gr.update(),                         # seed textbox (no change)
             )
         elif flag == 'progress':
             preview, desc, html = data
             yield (
-                gr.update(),                                 # result_video
-                gr.update(visible=True, value=preview),      # preview_image
-                desc,                                        # progress_desc
-                html,                                        # progress_bar
-                gr.update(interactive=False),                # start_button
-                gr.update(interactive=True),                 # end_button
+                gr.update(),                         # result_video
+                gr.update(visible=True, value=preview),  # preview_image
+                desc,                                # progress_desc
+                html,                                # progress_bar
+                gr.update(interactive=False),        # start_button
+                gr.update(interactive=True),         # end_button
+                gr.update(),                         # seed textbox (no change)
             )
         elif flag == 'end':
-            # swap buttons on finish, hide preview, clear progress/description
             yield (
-                gr.update(value=output_filename),            # result_video
-                gr.update(visible=False),                    # preview_image
-                gr.update(),                                 # progress_desc
-                '',                                          # progress_bar
-                gr.update(interactive=True),                 # start_button
-                gr.update(interactive=False),                # end_button
+                gr.update(value=output_filename),    # result_video
+                gr.update(visible=False),            # preview_image
+                gr.update(),                         # progress_desc
+                '',                                  # progress_bar
+                gr.update(interactive=True),         # start_button
+                gr.update(interactive=False),        # end_button
+                gr.update(),                         # seed textbox (no change)
             )
             break
 
