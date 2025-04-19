@@ -29,7 +29,6 @@ from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.bucket_tools import find_nearest_bucket
 
 import random
-seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
 
 # ---- CLI args ----
 parser = argparse.ArgumentParser()
@@ -330,6 +329,7 @@ with block:
             with gr.Group():
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
                 n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
+                seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
                 lock_seed = gr.Checkbox(label="Lock Seed", value=False)
                 total_frames = gr.Slider(label="Total Video Frames", minimum=2, maximum=1800, value=150, step=1)
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
