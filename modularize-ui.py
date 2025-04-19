@@ -111,18 +111,47 @@ def prepare_inputs(input_image, prompt, n_prompt, cfg):
 
     return input_np, input_tensor, llama_vec, clip_pool, llama_vec_n, clip_pool_n, mask, mask_n, h, w
 
-# ---- Worker ----
+def get_dims_from_aspect(aspect, custom_w, custom_h):
+    presets = {
+        "16:9": (1280, 720), "9:16": (720, 1280),
+        "1:1": (768, 768), "4:5": (720, 900),
+        "3:2": (900, 600), "2:3": (600, 900),
+        "21:9": (1260, 540), "4:3": (800, 600),
+    }
+    if aspect == "Custom...":
+        width, height = int(custom_w), int(custom_h)
+    else:
+        width, height = presets.get(aspect, (768, 768))
+    # Restrict to 1 megapixel max
+    import math
+    max_pixels = 1024 * 1024
+    px = width * height
+    if px > max_pixels:
+        scale = math.sqrt(max_pixels / px)
+        width = int(width * scale)
+        height = int(height * scale)
+    # Ensure dimensions are multiples of 8
+    width = (width // 8) * 8
+    height = (height // 8) * 8
+    return width, height
+
 @torch.no_grad()
 def worker(
-    input_image, prompt, n_prompt, seed, total_frames, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache
+    mode, input_image, aspect, custom_w, custom_h,
+    prompt, n_prompt, seed, total_frames, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache
 ):
-    # Set the internal latent window size as model expects
-    latent_window_size = 9  # Can adjust this if desired for quality/performance; fixed, not UI-controlled
+    latent_window_size = 9
     frames_per_section = latent_window_size * 4 - 3
-    total_sections = math.ceil((total_frames + 3) / frames_per_section)
+    extra_frames = frames_per_section if mode == "text2video" else 0
+    run_frames = total_frames + extra_frames
+    total_sections = math.ceil((run_frames + 3) / frames_per_section)
     job_id = generate_timestamp()
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
     try:
+        if mode == "text2video":
+            width, height = get_dims_from_aspect(aspect, custom_w, custom_h)
+            input_image_arr = np.zeros((height, width, 3), dtype=np.uint8)
+            input_image = input_image_arr
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Text encoding ...'))))
         inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = prepare_inputs(input_image, prompt, n_prompt, cfg)
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE encoding ...'))))
@@ -133,15 +162,12 @@ def worker(
         if not high_vram:
             load_model_as_complete(image_encoder, target_device=gpu)
         clip_output = hf_clip_vision_encode(inp_np, feature_extractor, image_encoder).last_hidden_state
-
-        # Dtype moves
         lv = lv.to(transformer.dtype)
         lv_n = lv_n.to(transformer.dtype)
         cp = cp.to(transformer.dtype)
         cp_n = cp_n.to(transformer.dtype)
         clip_output = clip_output.to(transformer.dtype)
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Start sampling ...'))))
-
         rnd = torch.Generator("cpu").manual_seed(seed)
         history_latents = torch.zeros(
             size=(1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32
@@ -149,8 +175,12 @@ def worker(
         history_pixels = None
         t_start = time.time()
         total_generated_latent_frames = 0
+
         for section in reversed(range(total_sections)):
             is_last_section = section == 0
+            if mode == "text2video" and is_last_section:
+                # Skip the very last patch for text2video
+                break
             latent_padding_size = section * latent_window_size
             if stream.input_queue.top() == 'end':
                 stream.output_queue.push(('end', None))
@@ -161,12 +191,10 @@ def worker(
             clean_latents_pre = start_latent.to(history_latents)
             clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
             clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
-
             if not high_vram:
                 unload_complete_models()
                 move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
             transformer.initialize_teacache(enable_teacache=use_teacache, num_steps=steps if use_teacache else 0)
-
             def callback(d):
                 preview = d['denoised']
                 preview = vae_decode_fake(preview)
@@ -180,7 +208,6 @@ def worker(
                 hint = f'Sampling {current_step}/{steps}'
                 desc = f'Total generated frames: {total_generated_latent_frames}, Video length: {total_generated_latent_frames / 30.0:.2f} seconds (FPS-30).'
                 stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
-
             generated_latents = sample_hunyuan(
                 transformer=transformer,
                 sampler='unipc',
@@ -228,6 +255,11 @@ def worker(
             if not high_vram:
                 unload_complete_models()
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
+            # Special trimming for text2video: Remove the extra patch at the start
+            if mode == "text2video":
+                # Remove first extra_frames frames from output;
+                # history_pixels is (1, 3, T, H, W) so cut T axis
+                history_pixels = history_pixels[:, :, extra_frames:, :, :]
             save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
             stream.output_queue.push(('file', output_filename))
             if is_last_section:
@@ -236,16 +268,15 @@ def worker(
         traceback.print_exc()
         if not high_vram:
             unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
-        stream.output_queue.push(('end', None))
+        # No need to push end here, handled in finally
         return
-
     finally:
         t_end = time.time()
         total_time = t_end - t_start
-        video_seconds = total_generated_latent_frames / 30.0   # Replace '30' with your FPS if variable
+        video_seconds = (total_generated_latent_frames - (extra_frames if mode == "text2video" else 0)) / 30.0
         summary_string = (
             f"Finished!\n"
-            f"Total generated frames: {total_generated_latent_frames}, "
+            f"Total generated frames: {total_generated_latent_frames - (extra_frames if mode == "text2video" else 0)}, "
             f"Video length: {video_seconds:.2f} seconds (FPS-30), "
             f"Time taken: {total_time:.2f}s."
         )
@@ -254,25 +285,24 @@ def worker(
         
 # ---- Process Hook ----
 def process(
-    input_image, prompt, n_prompt, seed, total_frames, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed
+    mode, input_image, aspect_selector, custom_w, custom_h,
+    prompt, n_prompt, seed, total_frames, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed
 ):
     global stream
-    assert input_image is not None, 'No input image!'
+    assert mode in ['image2video', 'text2video'], "Invalid mode"
     if not lock_seed:
         seed = int(time.time()) % 2**32
     yield (
-        None,                           # result_video
-        None,                           # preview_image
-        '',                             # progress_desc
-        '',                             # progress_bar
-        gr.update(interactive=False),   # start_button
-        gr.update(interactive=True),    # end_button
-        gr.update(value=seed),          # seed textbox
+        None, None, '', '', gr.update(interactive=False), gr.update(interactive=True), gr.update(value=seed)
     )
     stream = AsyncStream()
     async_run(
         worker,
+        mode,
         input_image,
+        aspect_selector,
+        custom_w,
+        custom_h,
         prompt,
         n_prompt,
         seed,
@@ -285,7 +315,7 @@ def process(
         use_teacache
     )
     output_filename = None
-    last_desc = "" 
+    last_desc = ""
     while True:
         flag, data = stream.output_queue.next()
         if flag == 'file':
@@ -305,7 +335,7 @@ def process(
         elif flag == 'end':
             yield (
                 gr.update(value=output_filename), gr.update(visible=False),
-                gr.update(value=last_desc), '',  # use last_desc here
+                gr.update(value=last_desc), '',
                 gr.update(interactive=True), gr.update(interactive=False), gr.update()
             )
             break
@@ -318,36 +348,70 @@ css = make_progress_bar_css()
 block = gr.Blocks(css=css).queue()
 with block:
     gr.Markdown('# FramePack')
+    # ---- Instantiate widgets ----
+    mode_selector = gr.Radio(
+        ["image2video", "text2video"], value="image2video", label="Mode"
+    )
+    input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)
+    aspect_selector = gr.Dropdown(
+        ["16:9", "9:16", "1:1", "4:5", "3:2", "2:3", "21:9", "4:3", "Custom..."],
+        label="Aspect Ratio",
+        value="1:1",
+        visible=False
+    )
+    custom_w = gr.Number(label="Width", value=768, visible=False)
+    custom_h = gr.Number(label="Height", value=768, visible=False)
+    prompt = gr.Textbox(label="Prompt", value='')
     with gr.Row():
-        with gr.Column():
-            input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)
-            prompt = gr.Textbox(label="Prompt", value='')
+        start_button = gr.Button(value="Start Generation")
+        end_button = gr.Button(value="End Generation", interactive=False)
+    with gr.Group():
+        use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
+        n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
+        seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
+        lock_seed = gr.Checkbox(label="Lock Seed", value=False)
+        total_frames = gr.Slider(label="Total Video Frames", minimum=2, maximum=1800, value=150, step=1)
+        steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
+        cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, visible=False)
+        gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01)
+        rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False)
+        gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
+    # Column 2 with outputs...
+    with gr.Column():
+        preview_image = gr.Image(label="Next Latents", height=200, visible=False)
+        result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
+        gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
+        progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
+        progress_bar = gr.HTML('', elem_classes='no-generating-animation')
 
-            with gr.Row():
-                start_button = gr.Button(value="Start Generation")
-                end_button = gr.Button(value="End Generation", interactive=False)
-
-            with gr.Group():
-                use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
-                n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
-                seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
-                lock_seed = gr.Checkbox(label="Lock Seed", value=False)
-                total_frames = gr.Slider(label="Total Video Frames", minimum=2, maximum=1800, value=150, step=1)
-                steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
-                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, visible=False)
-                gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01)
-                rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False)
-                gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
-
-        with gr.Column():
-            preview_image = gr.Image(label="Next Latents", height=200, visible=False)
-            result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
-            gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
-            progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
-            progress_bar = gr.HTML('', elem_classes='no-generating-animation')
+    # ---- Now register callbacks ----
+    def switch_mode(mode):
+        return (
+            gr.update(visible=mode=="image2video"),
+            gr.update(visible=mode=="text2video"),
+            gr.update(visible=False),  # custom_w/h shown from aspect selector callback
+            gr.update(visible=False),
+        )
+    def show_custom(aspect):
+        show = aspect == "Custom..."
+        return gr.update(visible=show), gr.update(visible=show)
+    mode_selector.change(
+        switch_mode,
+        inputs=[mode_selector],
+        outputs=[input_image, aspect_selector, custom_w, custom_h],
+    )
+    aspect_selector.change(
+        show_custom,
+        inputs=[aspect_selector],
+        outputs=[custom_w, custom_h],
+    )
 
     ips = [
+        mode_selector,
         input_image,
+        aspect_selector,
+        custom_w,
+        custom_h,
         prompt,
         n_prompt,
         seed,
@@ -366,10 +430,10 @@ with block:
         outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button, seed]
     )
     end_button.click(fn=end_process)
-
 block.launch(
     server_name=args.server,
     server_port=args.port,
     share=args.share,
     inbrowser=args.inbrowser,
 )
+
