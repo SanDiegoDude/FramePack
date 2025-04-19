@@ -139,14 +139,6 @@ def worker(input_image, prompt, n_prompt, seed, total_frames, latent_window_size
         clip_output = clip_output.to(transformer.dtype)
 
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Start sampling ...'))))
-
-    except Exception:
-        traceback.print_exc()
-        if not high_vram:
-            unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
-        stream.output_queue.push(('end', None))
-        return
-
         rnd = torch.Generator("cpu").manual_seed(seed)
         history_latents = torch.zeros(size=(1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32).cpu()
         history_pixels = None
@@ -249,6 +241,14 @@ def worker(input_image, prompt, n_prompt, seed, total_frames, latent_window_size
 
             if is_last_section:
                 break
+
+    except Exception:
+        traceback.print_exc()
+        if not high_vram:
+            unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
+        stream.output_queue.push(('end', None))
+        return
+
 
 # ---- Process Hook ----
 def process(input_image, prompt, n_prompt, seed, total_frames, latent_window_size, frames_per_window, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed):
