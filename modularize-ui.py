@@ -235,8 +235,14 @@ def worker(
             unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
         stream.output_queue.push(('end', None))
         return
+
+    finally:
+        stream.output_queue.push(('end', None))
+        
 # ---- Process Hook ----
-def process(input_image, prompt, n_prompt, seed, total_frames, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed):
+def process(
+    input_image, prompt, n_prompt, seed, total_frames, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed
+):
     global stream
     assert input_image is not None, 'No input image!'
     if not lock_seed:
@@ -262,12 +268,34 @@ def process(input_image, prompt, n_prompt, seed, total_frames, steps, cfg, gs, r
         flag, data = stream.output_queue.next()
         if flag == 'file':
             output_filename = data
-            yield gr.update(value=output_filename), gr.update(), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True)
+            yield (
+                gr.update(value=output_filename),             # result_video
+                gr.update(),                                 # preview_image
+                gr.update(),                                 # progress_desc
+                gr.update(),                                 # progress_bar
+                gr.update(interactive=False),                # start_button
+                gr.update(interactive=True),                 # end_button
+            )
         elif flag == 'progress':
             preview, desc, html = data
-            yield gr.update(), gr.update(visible=True, value=preview), desc, html, gr.update(interactive=False), gr.update(interactive=True)
+            yield (
+                gr.update(),                                 # result_video
+                gr.update(visible=True, value=preview),      # preview_image
+                desc,                                        # progress_desc
+                html,                                        # progress_bar
+                gr.update(interactive=False),                # start_button
+                gr.update(interactive=True),                 # end_button
+            )
         elif flag == 'end':
-            yield output_filename, gr.update(visible=False), gr.update(), '', gr.update(interactive=True), gr.update(interactive=False)
+            # swap buttons on finish, hide preview, clear progress/description
+            yield (
+                gr.update(value=output_filename),            # result_video
+                gr.update(visible=False),                    # preview_image
+                gr.update(),                                 # progress_desc
+                '',                                          # progress_bar
+                gr.update(interactive=True),                 # start_button
+                gr.update(interactive=False),                # end_button
+            )
             break
 
 def end_process():
