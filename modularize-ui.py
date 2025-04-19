@@ -83,7 +83,7 @@ outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
 
 # ---- Worker Utility Split ----
-def prepare_inputs(input_image, prompt, n_prompt):
+def prepare_inputs(input_image, prompt, n_prompt, cfg):
     if not high_vram:
         unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
 
@@ -119,7 +119,7 @@ def worker(input_image, prompt, n_prompt, seed, total_frames, latent_window_size
 
     try:
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Text encoding ...'))))
-        inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = prepare_inputs(input_image, prompt, n_prompt)
+        inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = prepare_inputs(input_image, prompt, n_prompt, cfg)
 
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE encoding ...'))))
         if not high_vram:
