@@ -315,8 +315,10 @@ def worker(mode, input_image, input_video,
             # Progress Callback
             def callback(d):
                 if stream.input_queue.top() == 'end':
-                    stream.output_queue.push(('end', None))
-                    raise KeyboardInterrupt('User ended the task.')
+                    print("Stop signal received in callback, allowing current step/section to finish.")
+                    # DO NOT raise KeyboardInterrupt here.
+                    # Just prevent further progress updates for this stopped task.
+                    return # Exit the callback early
 
                 current_step = d['i'] + 1
                 percentage = int(100.0 * current_step / steps)
@@ -399,55 +401,36 @@ def worker(mode, input_image, input_video,
                 offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
                 load_model_as_complete(vae, target_device=gpu)
                 stream.output_queue.push(('progress', (None, '', make_progress_bar_html(100, 'VAE Decoding...'))))
-
-            # Decode the relevant part of the history buffer
-            # Determine which frames to decode for this section's output
+    
+            # Get the full history relevant up to this point
             real_history_latents_gpu = history_latents[:, :, :total_generated_latent_frames].to(gpu, dtype=vae.dtype) # Send necessary history to GPU
-            print(f"Decoding latents of shape: {real_history_latents_gpu.shape}")
-
-            # --- Soft Appending Logic ---
+            print(f"Decoding latents for append. Full history shape on GPU: {real_history_latents_gpu.shape}")
+    
             if history_pixels is None:
-                 print("Decoding first section.")
-                 # Decode all generated frames so far
-                 history_pixels = vae_decode(real_history_latents_gpu, vae).cpu()
+                print("Decoding first section directly.")
+                # Decode all generated frames so far for the first chunk
+                history_pixels = vae_decode(real_history_latents_gpu, vae).cpu()
             else:
-                 print("Decoding current section and appending.")
-                 # Decode only the newly generated frames for appending
-                 # Calculate overlap based on num_frames_per_window
-                 overlap_frames = num_frames_per_window # Check if this overlap calculation is correct for soft_append
-                 # Frames to decode: determine based on section length and overlap needs
-                 # Simplified: decode the latest generated latents
-                 current_latents_to_decode = generated_latents.to(gpu, dtype=vae.dtype)
-
-                 # Adjust if initial latent was prepended
-                 if is_last_section and init_latent is not None and mode in ['img2vid', 'txt2vid']:
-                      # Decode the whole thing again? Or just the added part?
-                      # Let's decode the current generated part including the prepended frame if applicable
-                      # The `soft_append` needs the *new* pixels and the *existing* history
-                      print(f"Decoding {current_latents_to_decode.shape[2]} frames for soft append.")
-                      current_pixels = vae_decode(current_latents_to_decode, vae).cpu()
-
-                      # Adjust overlap logic if init_frame was prepended
-                      # If init_frame was added, the overlap might be relative to the *original* end of the previous segment
-                      # This needs careful thought based on how `soft_append` works.
-                      # Assuming `soft_append` handles crossfading based on `overlap_frames` count from the end of `history_pixels`
-                      # and the start of `current_pixels`.
-                      # If init_latent was prepended, maybe `current_pixels` starts with the init frame?
-                      # Let's try the original overlap calculation. Needs testing.
-                      actual_overlap = latent_window_size * 4 - 3 # from original code
-                      print(f"Soft appending with overlap: {actual_overlap}")
-                      history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlap=actual_overlap)
-
-                 else: # Normal append without prepended init_latent case
-                      print(f"Decoding {current_latents_to_decode.shape[2]} frames for soft append.")
-                      current_pixels = vae_decode(current_latents_to_decode, vae).cpu()
-                      actual_overlap = latent_window_size * 4 - 3 # from original code
-                      print(f"Soft appending with overlap: {actual_overlap}")
-                      history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlap=actual_overlap)
-
-
+                print("Decoding current section slice and appending.")
+                # Calculate the slice size to decode (match simple demo)
+                section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
+                # Calculate the overlap (match simple demo - uses pixel frames)
+                overlap_pixel_frames = latent_window_size * 4 - 3
+    
+                print(f"Decoding slice of size {section_latent_frames} latents for soft append.")
+                # Decode the required slice from the history buffer
+                # Ensure the slice doesn't exceed available history length (shouldn't happen with correct logic, but safe)
+                slice_to_decode = real_history_latents_gpu[:, :, :min(section_latent_frames, real_history_latents_gpu.shape[2])]
+                current_pixels = vae_decode(slice_to_decode, vae).cpu()
+    
+                print(f"Soft appending with overlap: {overlap_pixel_frames} pixel frames.")
+                history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlap=overlap_pixel_frames)
+    
+            print(f"Current history_pixels shape: {history_pixels.shape}")
+    
             if not high_vram:
                 unload_complete_models(vae) # Unload VAE after decoding
+            # --- End VAE Decode Section ---
 
             # --- Save Intermediate/Final Video ---
             output_filename = os.path.join(outputs_folder, f'{job_id}_section_{section_index+1}.mp4')
@@ -599,7 +582,7 @@ with gr.Blocks(css=css).queue() as demo:
                 cfg = gr.Slider(1., 32., value=1.0, label="CFG Scale (Prompt Guidance)", info="Only effective if > 1.0. FramePack default is 1.0.")
                 gs = gr.Slider(1., 32., value=10.0, label="Distilled CFG Scale", info="Main guidance scale for FramePack. Default 10.0.")
                 rs = gr.Slider(0., 1., value=0., label="Rescale Guidance", info="Guidance rescale factor. Default 0.0.")
-                strength = gr.Slider(0., 1., value=0.7, label="Denoise Strength (for img2vid/vid2vid)", info="How much to change the input image/video. 1.0 = max change. Default 0.7.")
+                strength = gr.Slider(0., 1., value=1.0, label="Denoise Strength (for img2vid/vid2vid)", info="How much to change the input image/video. 1.0 = max change. Default 0.7.")
                 # seed = gr.Number(label="Seed", value=31337, precision=0) # --- MOVED ---
                 # seconds = gr.Slider(1, 120, value=5, step=0.1, label="Output Video Length (sec)") # --- MOVED ---
                 window = gr.Slider(1, 33, value=9, step=1, label="Latent Window Size", info="Affects temporal range per step. Default 9.")
@@ -615,7 +598,7 @@ with gr.Blocks(css=css).queue() as demo:
                  end_btn = gr.Button("Stop", interactive=False)
 
         with gr.Column(scale=1):
-            result_vid = gr.Video(label="Output Video", interactive=False, height=512)
+            result_vid = gr.Video(label="Output Video", interactive=False, height=512, autoplay=True, loop=True)
             preview = gr.Image(label="Live Preview", interactive=False, visible=False, height=256)
             status_md = gr.Markdown("") # For text status updates
             bar_html = gr.HTML("") # For progress bar
