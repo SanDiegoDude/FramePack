@@ -129,7 +129,7 @@ outputs_folder = './outputs/'; os.makedirs(outputs_folder, exist_ok=True)
 # -------- Worker (handles all modes) --------
 @torch.no_grad()
 def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_ratio_str
-           prompt, n_prompt, sampler, shift, cfg, gs, rs,
+           prompt, n_prompt, shift, cfg, gs, rs,
            strength, seed, total_second_length, latent_window_size,
            steps, gpu_memory_preservation, use_teacache):
 
@@ -165,13 +165,15 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
         concat_latent = None    # Latent passed to sampler's concat_latent arg (used by vid2vid, extend_vid)
         image_embeddings = None # CLIP vision embeddings (used by img2vid)
         first_frame_conditioning_latent = None # Latent used only for clean_latents conditioning on step 0 (img2vid, extend_vid)
-
+        expected_emb_shape = (1, 729, 1152)
+        expected_emb_dtype = transformer.dtype # Should be bfloat16
+        
         # --- Load VAE and Image Encoder (conditionally) ---
         if not high_vram:
             if mode in ['txt2vid', 'img2vid', 'vid2vid', 'extend_vid', 'video_inpaint']:
                 load_model_as_complete(vae, target_device=gpu)
                 stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE ready...'))))
-            if mode == 'img2vid':
+            if mode in ['img2vid', 'img2img']: # ADDED img2img
                 load_model_as_complete(image_encoder, target_device=gpu)
                 stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Image Encoder ready...'))))
 
@@ -196,7 +198,8 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
             concat_latent = None
             image_embeddings = None
             first_frame_conditioning_latent = None
-            print(f"Txt2Img: Setup complete ({width}x{height}).")
+            image_embeddings = torch.zeros(expected_emb_shape, dtype=expected_emb_dtype, device=gpu)
+            print(f"Txt2Img: Setup complete ({width}x{height}), providing dummy image embeddings.")
 
         elif mode == 'img2img':
             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Preparing for img2img...'))))
@@ -218,9 +221,17 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
             finally:
                 vae.to(dtype=original_vae_dtype)
 
+
+            # Calculate REAL Image Embeddings
+            if not high_vram: load_model_as_complete(image_encoder, target_device=gpu) # Ensure loaded
+            print("Img2Img: Calculating Image Embeddings...")
+            image_encoder_output = hf_clip_vision_encode(img_resized, feature_extractor, image_encoder)
+            image_embeddings = image_encoder_output.last_hidden_state.to(expected_emb_dtype) # Use expected dtype
+            print(f"Img2Img: Image embedding shape {image_embeddings.shape}")
+        
             # No concat_latent or image_embeddings needed for basic img2img
             concat_latent = None
-            image_embeddings = None
+
 
         elif mode == 'txt2vid':
             # (Keep simplified logic from previous step)
@@ -230,7 +241,8 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
             concat_latent = None
             image_embeddings = None
             first_frame_conditioning_latent = None
-            print(f"Txt2Vid: Setup complete ({width}x{height}).")
+            image_embeddings = torch.zeros(expected_emb_shape, dtype=expected_emb_dtype, device=gpu)
+            print(f"Txt2Vid: Setup complete ({width}x{height}), providing dummy image embeddings.")
 
         elif mode == 'img2vid':
             # (Keep logic from previous step, but get size from input)
@@ -258,27 +270,29 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
             init_latent = None; concat_latent = None
 
         elif mode == 'extend_vid':
-             # (Keep logic from previous step, but get size from input, apply VAE fix)
-             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, f'Preparing for {mode}...'))))
-             if input_video is None or not hasattr(input_video, 'name'): raise ValueError("Input video file required.")
-             video_path = input_video.name; print(f"Video Mode: Loading video {video_path}")
-             vid_frames, _, _ = torchvision.io.read_video(video_path, pts_unit='sec')
-             vid = vid_frames.permute(3, 0, 1, 2)[None].float() / 127.5 - 1.0
-             _, _, T, H, W = vid.shape; height, width = H, W # Derive size from input
-             print(f"Video Mode: Loaded video with {T} frames, {W}x{H}")
-             original_vae_dtype = vae.dtype
-             try:
-                 vae.to(dtype=torch.float32) # Apply fix
-                 first_frame_np = vid_frames[0].numpy()
-                 inp_first_frame = (torch.from_numpy(first_frame_np).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu)
-                 first_frame_conditioning_latent = vae_encode(inp_first_frame, vae).to(transformer.dtype)
-                 print(f"ExtendVid: First frame latent for conditioning: {first_frame_conditioning_latent.shape}")
-                 print(f"ExtendVid: Encoding full video for concat_latent...")
-                 concat_latent = vae_encode(vid.to(device=gpu), vae).to(transformer.dtype)
-                 print(f"ExtendVid: Conditioning concat_latent shape {concat_latent.shape}")
-             finally:
-                 vae.to(dtype=original_vae_dtype)
-             init_latent = None; image_embeddings = None
+            # (Keep logic from previous step, but get size from input, apply VAE fix)
+            stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, f'Preparing for {mode}...'))))
+            if input_video is None or not hasattr(input_video, 'name'): raise ValueError("Input video file required.")
+            video_path = input_video.name; print(f"Video Mode: Loading video {video_path}")
+            vid_frames, _, _ = torchvision.io.read_video(video_path, pts_unit='sec')
+            vid = vid_frames.permute(3, 0, 1, 2)[None].float() / 127.5 - 1.0
+            _, _, T, H, W = vid.shape; height, width = H, W # Derive size from input
+            print(f"Video Mode: Loaded video with {T} frames, {W}x{H}")
+            original_vae_dtype = vae.dtype
+            try:
+                vae.to(dtype=torch.float32) # Apply fix
+                first_frame_np = vid_frames[0].numpy()
+                inp_first_frame = (torch.from_numpy(first_frame_np).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu)
+                first_frame_conditioning_latent = vae_encode(inp_first_frame, vae).to(transformer.dtype)
+                print(f"ExtendVid: First frame latent for conditioning: {first_frame_conditioning_latent.shape}")
+                print(f"ExtendVid: Encoding full video for concat_latent...")
+                concat_latent = vae_encode(vid.to(device=gpu), vae).to(transformer.dtype)
+                print(f"ExtendVid: Conditioning concat_latent shape {concat_latent.shape}")
+            finally:
+                vae.to(dtype=original_vae_dtype)
+            image_embeddings = torch.zeros(expected_emb_shape, dtype=expected_emb_dtype, device=gpu)
+            print(f"ExtendVid: Providing dummy image embeddings.")
+            init_latent = None # Already set
 
         elif mode == 'vid2vid':
              # (Keep logic from previous step, but get size from input, apply VAE fix)
@@ -302,7 +316,8 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
                  print(f"Vid2Vid: Conditioning concat_latent shape {concat_latent.shape}")
              finally:
                  vae.to(dtype=original_vae_dtype)
-             image_embeddings = None
+            image_embeddings = torch.zeros(expected_emb_shape, dtype=expected_emb_dtype, device=gpu)
+            print(f"Vid2Vid: Providing dummy image embeddings.")
 
         # Fallback sizing (should only hit if AR lookup failed)
         if height is None or width is None: height, width = 512, 512; print(f"Warning: Using fallback size {width}x{height}")
@@ -409,17 +424,16 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
 
             # --- Run Sampling ---
             # Pass the correct initial_latent based on mode
-            print(f"Calling sample_hunyuan with: mode={mode}, sampler={sampler}, shift={shift}, strength={strength if mode in ['txt2vid', 'vid2vid'] else 'N/A'}, cfg={cfg}, gs={gs}, rs={rs}")
+            print(f"Calling sample_hunyuan with: mode={mode}, shift={shift}, strength={strength if mode in ['txt2vid', 'vid2vid'] else 'N/A'}, cfg={cfg}, gs={gs}, rs={rs}")
             print(f"  initial_latent provided: {'Yes' if init_latent is not None else 'No'}")
             print(f"  concat_latent provided: {'Yes' if concat_latent is not None else 'No'}")
-            print(f"  image_embeddings provided: {'Yes' if image_embeddings is not None else 'No'}")
+            print(f"  image_embeddings provided: {'Yes' if image_embeddings is not None else 'No'} (Shape: {image_embeddings.shape if image_embeddings is not None else 'N/A'})") # Log shape
 
             generated_latents = sample_hunyuan(
                 transformer=transformer,
-                sampler=sampler,
-                initial_latent=init_latent, # Will be None for img2vid, extend_vid
-                concat_latent=concat_latent, # Will be None for txt2vid, img2vid
-                strength=strength, # Only relevant if initial_latent is not None
+                initial_latent=init_latent, 
+                concat_latent=concat_latent,
+                strength=strength, 
                 width=width, height=height,
                 frames=num_frames_per_window,
                 real_guidance_scale=cfg,
@@ -436,7 +450,7 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
                 negative_prompt_poolers=clip_pool_n,
                 device=gpu,
                 dtype=transformer.dtype,
-                image_embeddings=image_embeddings, # Only for img2vid
+                image_embeddings=image_embeddings,
                 latent_indices=latent_indices,
                 clean_latents=clean_latents_for_cond.to(gpu, dtype=transformer.dtype), # Use the prepared conditioning latent
                 clean_latent_indices=clean_latent_indices,
@@ -531,7 +545,7 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
 
 # -------- Gradio UI --------
 def process_fn(mode, img, vid, aspect_ratio_str,
-               prompt, n_prompt, sampler, shift, cfg, gs, rs,
+               prompt, n_prompt, shift, cfg, gs, rs,
                strength, seed_from_ui, lock_seed_val,
                seconds, window, steps, gpu_mem, tea,
                progress=gr.Progress(track_tqdm=True)):
@@ -555,7 +569,7 @@ def process_fn(mode, img, vid, aspect_ratio_str,
     # Launch worker thread - PASS THE DETERMINED actual_seed
     print("Starting process_fn...")
     async_run(worker, mode, img, vid, aspect_ratio_str, # Pass aspect ratio
-              prompt, n_prompt, sampler, shift, cfg, gs, rs,
+              prompt, n_prompt, shift, cfg, gs, rs,
               strength, actual_seed, # Pass actual_seed here
               seconds, window, steps, gpu_mem, tea)
 
@@ -651,10 +665,11 @@ with gr.Blocks(css=css).queue() as demo:
             with gr.Accordion("Advanced Settings", open=False):
                 sampler = gr.Dropdown(
                     ["unipc", "unipc_bh2", "dpmpp_2m", "dpmpp_sde", "dpmpp_2m_sde", "dpmpp_3m_sde", "ddim", "plms", "euler", "euler_ancestral"],
-                    value="unipc", label="Sampler"
+                    value="unipc", label="Sampler",
+                    visible=False # Hidden until other sampler support can be implemented in the library
                 )
                 # Strength slider - interactive based on mode (img2img, vid2vid)
-                strength = gr.Slider(0., 1., value=0.7, label="Denoise Strength (img2img/vid2vid)", info="How much to change input. 0.7 = default.", visible=True, interactive=False) # Start non-interactive
+                strength = gr.Slider(0., 1., value=0.7, label="Denoise Strength (img2img/vid2vid)", info="How much to change input image/video frame. 0.7 = default. Only used in img2img/vid2vid.", visible=True, interactive=False)
 
                 # Video-specific settings - may hide for img modes
                 shift = gr.Slider(0., 10., value=3.0, label="Shift μ (Temporal Consistency - Video)", info="Higher values might increase consistency but affect motion. Default 3.0.", visible=True)
@@ -716,7 +731,7 @@ with gr.Blocks(css=css).queue() as demo:
     # --- Button Actions ---
     # Add aspect_ratio to inputs list
     inputs = [mode, input_image, input_video, aspect_ratio, # ADDED aspect_ratio
-              prompt, n_prompt, sampler, shift, cfg, gs, rs,
+              prompt, n_prompt, shift, cfg, gs, rs,
               strength, seed, lock_seed, seconds, window, steps, gpu_mem, tea]
 
     # Add result_img to outputs list
