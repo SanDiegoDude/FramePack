@@ -247,7 +247,15 @@ def process(
     assert input_image is not None, 'No input image!'
     if not lock_seed:
         seed = int(time.time()) % 2**32
-    yield None, None, '', '', gr.update(value=seed, interactive=False), gr.update(interactive=True)
+    yield (
+        None,
+        None,
+        '',
+        '',
+        gr.update(interactive=False),         # Start Generation button disabled, text stays
+        gr.update(interactive=True),          # End Generation enabled
+        gr.update(value=seed),                # Seed textbox gets updated
+    )
     stream = AsyncStream()
     async_run(
         worker,
@@ -351,7 +359,7 @@ with block:
     start_button.click(
         fn=process,
         inputs=ips,
-        outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button]
+        outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button, seed]
     )
     end_button.click(fn=end_process)
 
