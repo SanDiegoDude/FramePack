@@ -295,44 +295,44 @@ def worker(mode, input_image, input_video, aspect_ratio_str,
                 print(f"ExtendVid: Conditioning concat_latent shape {concat_latent.shape}")
             finally:
                 vae.to(dtype=original_vae_dtype)
-             # Needs CLIP embeddings from the first frame for the sampler
-             print(f"ExtendVid: Calculating CLIP embeddings from first frame...")
-             if not high_vram: load_model_as_complete(image_encoder, target_device=gpu)
-             first_frame_np = vid_frames[0].numpy() # Already loaded
-             image_encoder_output = hf_clip_vision_encode(first_frame_np, feature_extractor, image_encoder)
-             image_embeddings = image_encoder_output.last_hidden_state.to(transformer.dtype)
-             print(f"ExtendVid: Image embedding shape {image_embeddings.shape}")
+            # Needs CLIP embeddings from the first frame for the sampler
+            print(f"ExtendVid: Calculating CLIP embeddings from first frame...")
+            if not high_vram: load_model_as_complete(image_encoder, target_device=gpu)
+            first_frame_np = vid_frames[0].numpy() # Already loaded
+            image_encoder_output = hf_clip_vision_encode(first_frame_np, feature_extractor, image_encoder)
+            image_embeddings = image_encoder_output.last_hidden_state.to(transformer.dtype)
+            print(f"ExtendVid: Image embedding shape {image_embeddings.shape}")
 
-             init_latent = None # Start from noise
+            init_latent = None # Start from noise
 
         elif mode == 'vid2vid':
-             # (Keep logic from previous step, but get size from input, apply VAE fix)
-             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, f'Preparing for {mode}...'))))
-             if input_video is None or not hasattr(input_video, 'name'): raise ValueError("Input video file required.")
-             video_path = input_video.name; print(f"Video Mode: Loading video {video_path}")
-             vid_frames, _, _ = torchvision.io.read_video(video_path, pts_unit='sec')
-             vid = vid_frames.permute(3, 0, 1, 2)[None].float() / 127.5 - 1.0
-             _, _, T, H, W = vid.shape; height, width = H, W # Derive size from input
-             print(f"Video Mode: Loaded video with {T} frames, {W}x{H}")
-             original_vae_dtype = vae.dtype
-             try:
-                 vae.to(dtype=torch.float32) # Apply fix
-                 first_frame_np = vid_frames[0].numpy()
-                 inp_first_frame = (torch.from_numpy(first_frame_np).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu)
-                 init_latent = vae_encode(inp_first_frame, vae).to(transformer.dtype) # This IS the initial latent
-                 first_frame_conditioning_latent = init_latent # Use for clean_latents too
-                 print(f"Vid2Vid: Initial latent for sampler: {init_latent.shape}")
-                 print(f"Vid2Vid: Encoding full video for concat_latent...")
-                 concat_latent = vae_encode(vid.to(device=gpu), vae).to(transformer.dtype)
-                 print(f"Vid2Vid: Conditioning concat_latent shape {concat_latent.shape}")
-             finally:
-                 vae.to(dtype=original_vae_dtype)
-             print(f"Vid2Vid: Calculating CLIP embeddings from first frame...")
-             if not high_vram: load_model_as_complete(image_encoder, target_device=gpu)
-             first_frame_np = vid_frames[0].numpy() # Already loaded
-             image_encoder_output = hf_clip_vision_encode(first_frame_np, feature_extractor, image_encoder)
-             image_embeddings = image_encoder_output.last_hidden_state.to(transformer.dtype)
-             print(f"Vid2Vid: Image embedding shape {image_embeddings.shape}")
+            # (Keep logic from previous step, but get size from input, apply VAE fix)
+            stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, f'Preparing for {mode}...'))))
+            if input_video is None or not hasattr(input_video, 'name'): raise ValueError("Input video file required.")
+            video_path = input_video.name; print(f"Video Mode: Loading video {video_path}")
+            vid_frames, _, _ = torchvision.io.read_video(video_path, pts_unit='sec')
+            vid = vid_frames.permute(3, 0, 1, 2)[None].float() / 127.5 - 1.0
+            _, _, T, H, W = vid.shape; height, width = H, W # Derive size from input
+            print(f"Video Mode: Loaded video with {T} frames, {W}x{H}")
+            original_vae_dtype = vae.dtype
+            try:
+                vae.to(dtype=torch.float32) # Apply fix
+                first_frame_np = vid_frames[0].numpy()
+                inp_first_frame = (torch.from_numpy(first_frame_np).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu)
+                init_latent = vae_encode(inp_first_frame, vae).to(transformer.dtype) # This IS the initial latent
+                first_frame_conditioning_latent = init_latent # Use for clean_latents too
+                print(f"Vid2Vid: Initial latent for sampler: {init_latent.shape}")
+                print(f"Vid2Vid: Encoding full video for concat_latent...")
+                concat_latent = vae_encode(vid.to(device=gpu), vae).to(transformer.dtype)
+                print(f"Vid2Vid: Conditioning concat_latent shape {concat_latent.shape}")
+            finally:
+                vae.to(dtype=original_vae_dtype)
+            print(f"Vid2Vid: Calculating CLIP embeddings from first frame...")
+            if not high_vram: load_model_as_complete(image_encoder, target_device=gpu)
+            first_frame_np = vid_frames[0].numpy() # Already loaded
+            image_encoder_output = hf_clip_vision_encode(first_frame_np, feature_extractor, image_encoder)
+            image_embeddings = image_encoder_output.last_hidden_state.to(transformer.dtype)
+            print(f"Vid2Vid: Image embedding shape {image_embeddings.shape}")
 
         # Fallback sizing (should only hit if AR lookup failed)
         if height is None or width is None: height, width = 512, 512; print(f"Warning: Using fallback size {width}x{height}")
