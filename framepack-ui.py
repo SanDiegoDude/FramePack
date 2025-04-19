@@ -708,7 +708,7 @@ with gr.Blocks(css=css).queue() as demo:
             with gr.Accordion("Advanced Settings", open=False):
                 # Sampler hidden for now
                 # sampler = gr.Dropdown(...)
-                strength = gr.Slider(0., 1., value=0.7, label="Denoise Strength (img2img/vid2vid)", info="How much to change input image/video frame. 0.7 = default. Only used in img2img/vid2vid.", visible=True, interactive=False) # Interactivity controlled
+                strength = gr.Slider(0., 1., value=1.0, label="Denoise Strength (img2img/vid2vid)", info="How much to change input image/video frame. 1.0 = default. Only used in img2img/vid2vid.", visible=True, interactive=False) # Interactivity controlled
                 shift = gr.Slider(0., 10., value=3.0, label="Shift μ (Temporal Consistency - Video)", info="Higher values might increase consistency but affect motion. Default 3.0.", visible=True) # Visibility controlled
                 window = gr.Slider(1, 33, value=9, step=1, label="Latent Window Size", info="Affects temporal range per step. Default 9.", visible=True) # Visibility controlled
                 cfg = gr.Slider(1., 32., value=1.0, label="CFG Scale (Prompt Guidance)")
