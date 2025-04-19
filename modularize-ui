@@ -166,7 +166,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         flag, data = stream.output_queue.next()
         if flag == 'file':
             output_filename = data
-            yield output_filename, gr.update(), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True)
+            # fixed: wrap output in gr.update() so Gradio renders video properly
+            yield gr.update(value=output_filename), gr.update(), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True)
         elif flag == 'progress':
             preview, desc, html = data
             yield gr.update(), gr.update(visible=True, value=preview), desc, html, gr.update(interactive=False), gr.update(interactive=True)
