@@ -139,9 +139,115 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Start sampling ...'))))
 
-        # Skipping rework of the whole latent sampling loop for now
-        # Leave original sampling logic as-is
-        # TODO in next iteration: modularize sampling sections and decoding
+        # Sampling section reinserted from original worker()
+        rnd = torch.Generator("cpu").manual_seed(seed)
+        num_frames = latent_window_size * 4 - 3
+
+        history_latents = torch.zeros(size=(1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32).cpu()
+        history_pixels = None
+        total_generated_latent_frames = 0
+
+        latent_paddings = reversed(range(total_sections))
+        if total_sections > 4:
+            latent_paddings = [3] + [2] * (total_sections - 3) + [1, 0]
+
+        for latent_padding in latent_paddings:
+            is_last_section = latent_padding == 0
+            latent_padding_size = latent_padding * latent_window_size
+
+            if stream.input_queue.top() == 'end':
+                stream.output_queue.push(('end', None))
+                return
+
+            indices = torch.arange(0, sum([1, latent_padding_size, latent_window_size, 1, 2, 16])).unsqueeze(0)
+            clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split([1, latent_padding_size, latent_window_size, 1, 2, 16], dim=1)
+            clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
+
+            clean_latents_pre = start_latent.to(history_latents)
+            clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
+            clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
+
+            if not high_vram:
+                unload_complete_models()
+                move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
+
+            transformer.initialize_teacache(enable_teacache=use_teacache, num_steps=steps if use_teacache else 0)
+
+            def callback(d):
+                preview = d['denoised']
+                preview = vae_decode_fake(preview)
+                preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
+                preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
+
+                if stream.input_queue.top() == 'end':
+                    stream.output_queue.push(('end', None))
+                    raise KeyboardInterrupt('User ends the task.')
+
+                current_step = d['i'] + 1
+                percentage = int(100.0 * current_step / steps)
+                hint = f'Sampling {current_step}/{steps}'
+                desc = f'Total generated frames: {int(max(0, total_generated_latent_frames * 4 - 3))}, Video length: {max(0, (total_generated_latent_frames * 4 - 3) / 30):.2f} seconds (FPS-30). The video is being extended now ...'
+                stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
+
+            generated_latents = sample_hunyuan(
+                transformer=transformer,
+                sampler='unipc',
+                width=width,
+                height=height,
+                frames=num_frames,
+                real_guidance_scale=cfg,
+                distilled_guidance_scale=gs,
+                guidance_rescale=rs,
+                num_inference_steps=steps,
+                generator=rnd,
+                prompt_embeds=lv,
+                prompt_embeds_mask=m,
+                prompt_poolers=cp,
+                negative_prompt_embeds=lv_n,
+                negative_prompt_embeds_mask=m_n,
+                negative_prompt_poolers=cp_n,
+                device=gpu,
+                dtype=torch.bfloat16,
+                image_embeddings=clip_output,
+                latent_indices=latent_indices,
+                clean_latents=clean_latents,
+                clean_latent_indices=clean_latent_indices,
+                clean_latents_2x=clean_latents_2x,
+                clean_latent_2x_indices=clean_latent_2x_indices,
+                clean_latents_4x=clean_latents_4x,
+                clean_latent_4x_indices=clean_latent_4x_indices,
+                callback=callback,
+            )
+
+            if is_last_section:
+                generated_latents = torch.cat([start_latent.to(generated_latents), generated_latents], dim=2)
+
+            total_generated_latent_frames += int(generated_latents.shape[2])
+            history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
+
+            if not high_vram:
+                offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
+                load_model_as_complete(vae, target_device=gpu)
+
+            real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
+
+            if history_pixels is None:
+                history_pixels = vae_decode(real_history_latents, vae).cpu()
+            else:
+                section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
+                overlapped_frames = latent_window_size * 4 - 3
+                current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae).cpu()
+                history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
+
+            if not high_vram:
+                unload_complete_models()
+
+            output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
+            save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
+            stream.output_queue.push(('file', output_filename))
+
+            if is_last_section:
+                break
 
     except:
         traceback.print_exc()
