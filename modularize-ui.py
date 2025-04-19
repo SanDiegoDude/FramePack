@@ -250,6 +250,7 @@ def worker(
             f"Time taken: {total_time:.2f}s."
         )
         stream.output_queue.push(('progress', (None, summary_string, "")))
+        stream.output_queue.push(('end', None))
         
 # ---- Process Hook ----
 def process(
