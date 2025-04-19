@@ -1,6 +1,7 @@
 from diffusers_helper.hf_login import login
 
 import os
+import time
 
 os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 
@@ -258,14 +259,19 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
     return
 
 # ---- Process Hook ----
-def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache):
+def process(input_image, prompt, n_prompt, seed, total_frames, latent_window_size, frames_per_window, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed):
     global stream
     assert input_image is not None, 'No input image!'
 
-    yield None, None, '', '', gr.update(interactive=False), gr.update(interactive=True)
+    if not lock_seed:
+        seed = int(time.time()) % 2**32
+
+    total_frames = max(frames_per_window, total_frames)  # ensure window size doesn't exceed frame count
+
+    yield None, None, '', '', gr.update(value=seed, interactive=False), gr.update(interactive=True)
 
     stream = AsyncStream()
-    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache)
+    async_run(worker, input_image, prompt, n_prompt, seed, total_frames, latent_window_size, frames_per_window, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache)
 
     output_filename = None
     while True:
@@ -285,11 +291,6 @@ def end_process():
     stream.input_queue.push('end')
 
 # ---- UI ----
-quick_prompts = [[x] for x in [
-    'The girl dances gracefully, with clear movements, full of charm.',
-    'A character doing some simple body movements.',
-]]
-
 css = make_progress_bar_css()
 block = gr.Blocks(css=css).queue()
 with block:
@@ -298,8 +299,6 @@ with block:
         with gr.Column():
             input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)
             prompt = gr.Textbox(label="Prompt", value='')
-            example_quick_prompts = gr.Dataset(samples=quick_prompts, label='Quick List', samples_per_page=1000, components=[prompt])
-            example_quick_prompts.click(lambda x: x[0], inputs=[example_quick_prompts], outputs=prompt, show_progress=False, queue=False)
 
             with gr.Row():
                 start_button = gr.Button(value="Start Generation")
@@ -309,7 +308,9 @@ with block:
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
                 n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
                 seed = gr.Number(label="Seed", value=31337, precision=0)
-                total_second_length = gr.Slider(label="Total Video Length (Seconds)", minimum=1, maximum=120, value=5, step=0.1)
+                lock_seed = gr.Checkbox(label="Lock Seed", value=False)
+                total_frames = gr.Slider(label="Total Video Frames", minimum=2, maximum=1800, value=150, step=1)
+                frames_per_window = gr.Slider(label="Frames Per Window", minimum=1, maximum=33, value=9, step=1, info="Affects temporal memory per step. Default 9.")
                 latent_window_size = gr.Slider(label="Latent Window Size", minimum=1, maximum=33, value=9, step=1, visible=False)
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
                 cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, visible=False)
@@ -324,7 +325,7 @@ with block:
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
 
-    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache]
+    ips = [input_image, prompt, n_prompt, seed, total_frames, latent_window_size, frames_per_window, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed]
     start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button])
     end_button.click(fn=end_process)
 
