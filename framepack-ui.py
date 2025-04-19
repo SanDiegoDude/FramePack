@@ -128,8 +128,9 @@ outputs_folder = './outputs/'; os.makedirs(outputs_folder, exist_ok=True)
 
 # -------- Worker (handles all modes) --------
 @torch.no_grad()
-def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_ratio_str
-           prompt, n_prompt, shift, cfg, gs, rs,
+def worker(mode, input_image, input_video, aspect_ratio_str,
+           prompt, n_prompt, 
+           shift, cfg, gs, rs,
            strength, seed, total_second_length, latent_window_size,
            steps, gpu_memory_preservation, use_teacache):
 
@@ -165,95 +166,99 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
         concat_latent = None    # Latent passed to sampler's concat_latent arg (used by vid2vid, extend_vid)
         image_embeddings = None # CLIP vision embeddings (used by img2vid)
         first_frame_conditioning_latent = None # Latent used only for clean_latents conditioning on step 0 (img2vid, extend_vid)
-        expected_emb_shape = (1, 729, 1152)
-        expected_emb_dtype = transformer.dtype # Should be bfloat16
+        black_frame_latent = None # Variable to store black frame VAE latent if needed
+        black_frame_embeddings = None # Variable to store black frame CLIP embeddings if needed
+
         
         # --- Load VAE and Image Encoder (conditionally) ---
+        # Ensure Image Encoder is loaded for ALL modes now (to encode black frame)
         if not high_vram:
-            if mode in ['txt2vid', 'img2vid', 'vid2vid', 'extend_vid', 'video_inpaint']:
-                load_model_as_complete(vae, target_device=gpu)
-                stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE ready...'))))
-            if mode in ['img2vid', 'img2img']: # ADDED img2img
-                load_model_as_complete(image_encoder, target_device=gpu)
-                stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Image Encoder ready...'))))
+            load_model_as_complete(vae, target_device=gpu) # Load VAE if needed by any mode
+            stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE ready...'))))
+            # Image encoder needed for img2vid, img2img, AND the black frame for others
+            load_model_as_complete(image_encoder, target_device=gpu)
+            stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Image Encoder ready...'))))
 
         # --- Mode Specific Setup ---
+        # Get target W/H for modes that use Aspect Ratio
         if mode in ['txt2img', 'img2img', 'txt2vid']:
-            # Use Aspect Ratio for these modes
-            if aspect_ratio_str in ASPECT_RATIOS:
-                width, height = ASPECT_RATIOS[aspect_ratio_str]
-                print(f"Using aspect ratio {aspect_ratio_str} -> {width}x{height}")
-            else:
-                print(f"Warning: Invalid aspect ratio '{aspect_ratio_str}', using default.")
-                width, height = ASPECT_RATIOS[DEFAULT_ASPECT_RATIO]
-        elif mode in ['img2vid', 'vid2vid', 'extend_vid']:
-             # Video input modes derive size from input (bucketed or direct)
-             pass # Size determined below
+            if aspect_ratio_str in ASPECT_RATIOS: width, height = ASPECT_RATIOS[aspect_ratio_str]
+            else: width, height = ASPECT_RATIOS[DEFAULT_ASPECT_RATIO]; print(f"Warning: Invalid aspect ratio...")
+            print(f"Mode {mode}: Using aspect ratio {aspect_ratio_str} -> {width}x{height}")
+
+        # --- Generate Black Frame Latent & Embeddings (if needed) ---
+        if mode in ['txt2img', 'txt2vid']:
+            print(f"Mode {mode}: Generating black frame latent & embeddings for {width}x{height}...")
+            # Create black frame numpy array
+            black_np = np.zeros((height, width, 3), dtype=np.uint8)
+            # VAE Encode black frame (using float32 fix)
+            original_vae_dtype = vae.dtype
+            try:
+                vae.to(dtype=torch.float32)
+                inp_black = (torch.from_numpy(black_np).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu)
+                black_frame_latent = vae_encode(inp_black, vae).to(transformer.dtype)
+            finally:
+                vae.to(dtype=original_vae_dtype)
+            print(f"  Black frame VAE latent shape: {black_frame_latent.shape}")
+            # Calculate CLIP embeddings for black frame
+            if not high_vram: load_model_as_complete(image_encoder, target_device=gpu) # Ensure loaded
+            black_frame_embeddings_out = hf_clip_vision_encode(black_np, feature_extractor, image_encoder)
+            black_frame_embeddings = black_frame_embeddings_out.last_hidden_state.to(transformer.dtype)
+            print(f"  Black frame CLIP embeddings shape: {black_frame_embeddings.shape}")
 
         # --- Specific Mode Setup Logic ---
         if mode == 'txt2img':
             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Preparing for txt2img...'))))
-            # Starts from noise, guided only by text prompt. No initial_latent.
+            # Conditioning only mode, starts from noise. Uses black frame latent/embeddings.
             init_latent = None
             concat_latent = None
-            image_embeddings = None
-            first_frame_conditioning_latent = None
-            image_embeddings = torch.zeros(expected_emb_shape, dtype=expected_emb_dtype, device=gpu)
-            print(f"Txt2Img: Setup complete ({width}x{height}), providing dummy image embeddings.")
+            first_frame_conditioning_latent = black_frame_latent # Use black frame latent for initial conditioning
+            image_embeddings = black_frame_embeddings # Use black frame embeddings
+            print(f"Txt2Img: Setup complete.")
 
         elif mode == 'img2img':
             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Preparing for img2img...'))))
-            if input_image is None: raise ValueError("Input image required for img2img.")
+            # Uses initial_latent + strength. Needs REAL image embeddings.
+            if input_image is None: raise ValueError("Input image required.")
             np_img = np.array(input_image)
-            # Resize input image to match target aspect ratio
-            img_resized = resize_and_center_crop(np_img, target_width=width, target_height=height)
+            img_resized = resize_and_center_crop(np_img, target_width=width, target_height=height) # Uses target AR size
             print(f"Img2Img: Resized image to {width}x{height}")
-
-            # VAE Encode for initial_latent and conditioning (using float32 fix)
+            # VAE Encode for init_latent (using float32 fix)
             original_vae_dtype = vae.dtype
             try:
                 vae.to(dtype=torch.float32)
                 inp_for_vae = (torch.from_numpy(img_resized).float() / 127.5 - 1.0).permute(2, 0, 1)[None, :, None].to(device=gpu)
-                # This IS the initial latent passed to the sampler, controls starting noise via strength
                 init_latent = vae_encode(inp_for_vae, vae).to(transformer.dtype)
                 first_frame_conditioning_latent = init_latent # Also use for clean_latents
-                print(f"Img2Img: Initial latent shape {init_latent.shape}, dtype {init_latent.dtype}")
             finally:
                 vae.to(dtype=original_vae_dtype)
-
-
+            print(f"Img2Img: Initial latent shape {init_latent.shape}")
             # Calculate REAL Image Embeddings
-            if not high_vram: load_model_as_complete(image_encoder, target_device=gpu) # Ensure loaded
-            print("Img2Img: Calculating Image Embeddings...")
+            if not high_vram: load_model_as_complete(image_encoder, target_device=gpu)
             image_encoder_output = hf_clip_vision_encode(img_resized, feature_extractor, image_encoder)
-            image_embeddings = image_encoder_output.last_hidden_state.to(expected_emb_dtype) # Use expected dtype
+            image_embeddings = image_encoder_output.last_hidden_state.to(transformer.dtype)
             print(f"Img2Img: Image embedding shape {image_embeddings.shape}")
-        
-            # No concat_latent or image_embeddings needed for basic img2img
             concat_latent = None
-
 
         elif mode == 'txt2vid':
-            # (Keep simplified logic from previous step)
             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Preparing for txt2vid...'))))
-            # Size already set from aspect ratio above
+            # Conditioning only mode, starts from noise. Uses black frame latent/embeddings.
             init_latent = None
             concat_latent = None
-            image_embeddings = None
-            first_frame_conditioning_latent = None
-            image_embeddings = torch.zeros(expected_emb_shape, dtype=expected_emb_dtype, device=gpu)
-            print(f"Txt2Vid: Setup complete ({width}x{height}), providing dummy image embeddings.")
+            first_frame_conditioning_latent = black_frame_latent # Use black frame
+            image_embeddings = black_frame_embeddings # Use black frame
+            print(f"Txt2Vid: Setup complete.")
 
         elif mode == 'img2vid':
-            # (Keep logic from previous step, but get size from input)
+            # Conditioning only mode, starts from noise. Uses REAL image latent/embeddings.
             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Preparing for img2vid...'))))
             if input_image is None: raise ValueError("Input image required.")
             np_img = np.array(input_image)
             H, W, _ = np_img.shape
-            height, width = find_nearest_bucket(H, W, resolution=640) # Derive size from input
+            height, width = find_nearest_bucket(H, W, resolution=640) # Size from input
             img_resized = resize_and_center_crop(np_img, target_width=width, target_height=height)
             print(f"Img2Vid: Resized/bucketed image to {width}x{height}")
-            # VAE Encode first frame for conditioning (using float32 fix)
+            # VAE Encode real first frame for conditioning (using float32 fix)
             original_vae_dtype = vae.dtype
             try:
                 vae.to(dtype=torch.float32)
@@ -262,7 +267,7 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
             finally:
                 vae.to(dtype=original_vae_dtype)
             print(f"Img2Vid: First frame latent for conditioning: {first_frame_conditioning_latent.shape}")
-            # Image Embeddings
+            # Calculate REAL Image Embeddings
             if not high_vram: load_model_as_complete(image_encoder, target_device=gpu)
             image_encoder_output = hf_clip_vision_encode(img_resized, feature_extractor, image_encoder)
             image_embeddings = image_encoder_output.last_hidden_state.to(transformer.dtype)
@@ -270,8 +275,8 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
             init_latent = None; concat_latent = None
 
         elif mode == 'extend_vid':
-            # (Keep logic from previous step, but get size from input, apply VAE fix)
-            stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, f'Preparing for {mode}...'))))
+             # Conditioning only mode, starts from noise. Uses REAL first frame latent/concat. Needs CLIP embeddings.
+             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, f'Preparing for {mode}...'))))
             if input_video is None or not hasattr(input_video, 'name'): raise ValueError("Input video file required.")
             video_path = input_video.name; print(f"Video Mode: Loading video {video_path}")
             vid_frames, _, _ = torchvision.io.read_video(video_path, pts_unit='sec')
@@ -290,9 +295,15 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
                 print(f"ExtendVid: Conditioning concat_latent shape {concat_latent.shape}")
             finally:
                 vae.to(dtype=original_vae_dtype)
-            image_embeddings = torch.zeros(expected_emb_shape, dtype=expected_emb_dtype, device=gpu)
-            print(f"ExtendVid: Providing dummy image embeddings.")
-            init_latent = None # Already set
+             # Needs CLIP embeddings from the first frame for the sampler
+             print(f"ExtendVid: Calculating CLIP embeddings from first frame...")
+             if not high_vram: load_model_as_complete(image_encoder, target_device=gpu)
+             first_frame_np = vid_frames[0].numpy() # Already loaded
+             image_encoder_output = hf_clip_vision_encode(first_frame_np, feature_extractor, image_encoder)
+             image_embeddings = image_encoder_output.last_hidden_state.to(transformer.dtype)
+             print(f"ExtendVid: Image embedding shape {image_embeddings.shape}")
+
+             init_latent = None # Start from noise
 
         elif mode == 'vid2vid':
              # (Keep logic from previous step, but get size from input, apply VAE fix)
@@ -316,26 +327,36 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
                  print(f"Vid2Vid: Conditioning concat_latent shape {concat_latent.shape}")
              finally:
                  vae.to(dtype=original_vae_dtype)
-             image_embeddings = torch.zeros(expected_emb_shape, dtype=expected_emb_dtype, device=gpu)
-             print(f"Vid2Vid: Providing dummy image embeddings.")
+             print(f"Vid2Vid: Calculating CLIP embeddings from first frame...")
+             if not high_vram: load_model_as_complete(image_encoder, target_device=gpu)
+             first_frame_np = vid_frames[0].numpy() # Already loaded
+             image_encoder_output = hf_clip_vision_encode(first_frame_np, feature_extractor, image_encoder)
+             image_embeddings = image_encoder_output.last_hidden_state.to(transformer.dtype)
+             print(f"Vid2Vid: Image embedding shape {image_embeddings.shape}")
 
         # Fallback sizing (should only hit if AR lookup failed)
         if height is None or width is None: height, width = 512, 512; print(f"Warning: Using fallback size {width}x{height}")
 
         # --- Sampling loop Setup ---
+        effective_latent_window_size = 1 if is_image_mode else latent_window_size
         if is_image_mode:
             total_latent_sections = 1
             latent_paddings = [0] # Force single run, no padding needed
-            print("Image Mode: Forcing single generation section.")
+            print(f"Image Mode: Forcing single generation section with effective window size 1.")
+            num_frames_per_window = 1 # <<< SET TO 1 FOR IMAGE MODE
+            print(f"Image Mode: Setting num_frames_per_window to {num_frames_per_window}")
         else: # Video modes
-            total_latent_sections = max(int(round((total_second_length * 30) / (latent_window_size * 4))), 1)
+            # Use UI value for window size
+            effective_latent_window_size = latent_window_size
+            total_latent_sections = max(int(round((total_second_length * 30) / (effective_latent_window_size * 4))), 1)
             if total_latent_sections > 4: latent_paddings = [3] + [2] * (total_latent_sections - 3) + [1, 0]
             else: latent_paddings = list(reversed(range(total_latent_sections)))
+            num_frames_per_window = effective_latent_window_size * 4 - 3 # <<< Use effective size
         stream.output_queue.push(('progress', (None, f'Preparing for {total_latent_sections} sections...', make_progress_bar_html(0, 'Initializing Sampler...'))))
         rnd = torch.Generator("cpu").manual_seed(int(seed))
         # Use default window size even for images, loop runs once anyway
         num_frames_per_window = latent_window_size * 4 - 3
-        history_latents = torch.zeros((1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32).cpu()
+        history_latents = torch.zeros((1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32).cpu() # Use determined H/W
         history_pixels = None
         total_generated_latent_frames = 0
         print(f"Latent padding sequence: {latent_paddings}")
@@ -343,16 +364,16 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
         # --- Main Generation Loop (runs once for image modes) ---
         for section_index, latent_padding in enumerate(latent_paddings):
             is_last_section = (latent_padding == 0)
-            latent_padding_size = latent_padding * latent_window_size
+            latent_padding_size = latent_padding * effective_latent_window_size # <<< Use effective size
 
             print(f"\n--- Section {section_index + 1}/{total_latent_sections} (Padding: {latent_padding}, Last: {is_last_section}) ---")
 
             if stream.input_queue.top() == 'end': print("User requested stop."); stream.output_queue.push(('end', None)); return
 
             # Prepare clean latents for conditioning
-            indices = torch.arange(0, sum([1, latent_padding_size, latent_window_size, 1, 2, 16])).unsqueeze(0)
+            indices = torch.arange(0, sum([1, latent_padding_size, effective_latent_window_size, 1, 2, 16])).unsqueeze(0)
             clean_latent_indices_pre, _, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = \
-                indices.split([1, latent_padding_size, latent_window_size, 1, 2, 16], dim=1)
+                indices.split([1, latent_padding_size, effective_latent_window_size, 1, 2, 16], dim=1) # Use effective size
             clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
     
             # Determine the 'clean' reference latent for the *conditioning* input's 'pre' part
@@ -464,17 +485,18 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
 
             # --- Post-processing and History Update ---
             # Prepend the clean first frame latent for img2vid on the last section
-            if is_last_section and mode == 'img2vid':
-                 if first_frame_conditioning_latent is not None:
-                     print("Prepending clean first frame latent for img2vid final output.")
-                     # Ensure dtype and device match
-                     generated_latents = torch.cat([first_frame_conditioning_latent.to(generated_latents.device, dtype=generated_latents.dtype), generated_latents], dim=2)
-                 else:
-                      print("Warning: Cannot prepend first frame latent for img2vid, as it's missing.")
-            # Prepending initial latent for txt2vid/vid2vid (if initial_latent was used)
-            elif is_last_section and init_latent is not None and mode in ['txt2vid', 'vid2vid']:
-                 print("Prepending initial latent to the final output (txt2vid/vid2vid).")
-                 generated_latents = torch.cat([init_latent.to(generated_latents.device, dtype=generated_latents.dtype), generated_latents], dim=2)
+            if is_last_section:
+                 if mode in ['img2vid', 'extend_vid'] or (mode in ['txt2img', 'txt2vid'] and black_frame_latent is not None):
+                      # Prepend the conditioning frame (real or black)
+                      cond_latent_to_prepend = first_frame_conditioning_latent # This holds black_frame_latent for txt modes
+                      if cond_latent_to_prepend is not None:
+                           print(f"Prepending conditioning latent for {mode} final output.")
+                           generated_latents = torch.cat([cond_latent_to_prepend.to(generated_latents.device, dtype=generated_latents.dtype), generated_latents], dim=2)
+                      else: print(f"Warning: Cannot prepend conditioning latent for {mode}, as it's missing.")
+                 elif init_latent is not None and mode == 'vid2vid':
+                      # Prepend initial latent for vid2vid
+                      print(f"Prepending initial latent to the final output (vid2vid).")
+                      generated_latents = torch.cat([init_latent.to(generated_latents.device, dtype=generated_latents.dtype), generated_latents], dim=2)
 
             # (History update logic - keep as is)
             current_section_latent_frames = generated_latents.shape[2]
@@ -494,38 +516,60 @@ def worker(mode, input_image, input_video, aspect_ratio_str, # ADDED aspect_rati
             
             
             # Decode ALL generated latents for this chunk
-            decoded_pixels = vae_decode(real_history_latents_gpu, vae).cpu() # B, C, T, H, W
+            decoded_pixels = vae_decode(real_history_latents_gpu, vae).cpu()
 
             if is_image_mode:
-                 # For image mode, we only need the first frame
-                 print(f"Image Mode: Extracting first frame from decoded pixels shape: {decoded_pixels.shape}")
-                 # Take the first frame T=0. Shape becomes B, C, H, W
-                 output_image_pixels = decoded_pixels[:, :, 0]
-                 # Convert to NumPy HWC uint8
-                 output_image_np = ((output_image_pixels[0].permute(1, 2, 0) + 1.0) * 127.5).clamp(0, 255).numpy().astype(np.uint8)
-                 output_filename = os.path.join(outputs_folder, f'{job_id}_final.png')
-                 print(f"Saving final image to {output_filename}")
-                 Image.fromarray(output_image_np).save(output_filename)
-                 stream.output_queue.push((output_type_flag, output_filename)) # Push image path
-                 # No need for soft append or history_pixels buffer for image mode
-                 history_pixels = None # Clear just in case
+                 # For image mode, take frame (handle if black frame was prepended)
+                 frame_index_to_save = 0
+                 if mode == 'txt2img':
+                      if decoded_pixels.shape[2] > 1: # Check if black frame was prepended + generated frame exists
+                           frame_index_to_save = 1 # Save the second frame (index 1)
+                           print(f"Image Mode (txt2img): Extracting frame {frame_index_to_save} (skipping prepended black frame).")
+                      else: # Only one frame generated (shouldn't happen if prepend worked?)
+                           frame_index_to_save = 0
+                           print(f"Image Mode (txt2img): Only one frame found, extracting frame {frame_index_to_save}.")
+                 else: # img2img
+                      frame_index_to_save = 0 # Save the first frame
+                      print(f"Image Mode (img2img): Extracting frame {frame_index_to_save}.")
+
+                 if decoded_pixels.shape[2] > frame_index_to_save:
+                      output_image_pixels = decoded_pixels[:, :, frame_index_to_save]
+                      output_image_np = ((output_image_pixels[0].permute(1, 2, 0) + 1.0) * 127.5).clamp(0, 255).numpy().astype(np.uint8)
+                      output_filename = os.path.join(outputs_folder, f'{job_id}_final.png')
+                      print(f"Saving final image to {output_filename}")
+                      Image.fromarray(output_image_np).save(output_filename)
+                      stream.output_queue.push((output_type_flag, output_filename))
+                 else:
+                      print(f"Error: Could not extract frame index {frame_index_to_save} from decoded pixels with shape {decoded_pixels.shape}")
+                      stream.output_queue.push(('error', f"Failed to extract output frame for {mode}."))
+
+                 history_pixels = None
             else: # Video Mode VAE/Append logic
+                 # For txt2vid, trim the first (black) frame AFTER appending is done
                  if history_pixels is None:
                      history_pixels = decoded_pixels
                  else:
                      # Use the same soft append logic as before
-                     overlap_pixel_frames = latent_window_size * 4 - 3
-                     # Slice needed for append context
-                     section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
+                     overlap_pixel_frames = effective_latent_window_size * 4 - 3 # <<< Use effective size
+                     section_latent_frames = (effective_latent_window_size * 2 + 1) if is_last_section else (effective_latent_window_size * 2) # <<< Use effective size
                      slice_to_decode = real_history_latents_gpu[:, :, :min(section_latent_frames, real_history_latents_gpu.shape[2])]
                      current_pixels = vae_decode(slice_to_decode, vae).cpu() # Decode the slice again for append context
                      history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlap=overlap_pixel_frames)
                  print(f"Current video history_pixels shape: {history_pixels.shape}")
-                 # Save intermediate video
                  output_filename = os.path.join(outputs_folder, f'{job_id}_section_{section_index+1}.mp4')
-                 print(f"Saving video section to {output_filename} with {history_pixels.shape[2]} frames.")
-                 save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
-                 stream.output_queue.push((output_type_flag, output_filename)) # Push video path
+
+                 # Trim black frame for txt2vid only on the very last save
+                 final_pixels_to_save = history_pixels
+                 if is_last_section and mode == 'txt2vid':
+                      if history_pixels.shape[2] > 1: # Make sure there's more than just the black frame
+                           print("Trimming first (black) frame for final txt2vid output.")
+                           final_pixels_to_save = history_pixels[:, :, 1:] # Save from second frame onwards
+                      else:
+                           print("Warning: txt2vid output has only one frame, cannot trim black frame.")
+
+                 print(f"Saving video section to {output_filename} with {final_pixels_to_save.shape[2]} frames.")
+                 save_bcthw_as_mp4(final_pixels_to_save, output_filename, fps=30)
+                 stream.output_queue.push((output_type_flag, output_filename))
 
             if not high_vram: unload_complete_models(vae)
 
@@ -704,9 +748,11 @@ with gr.Blocks(css=css).queue() as demo:
         is_vid_input_mode = selected_mode in ["vid2vid", "extend_vid"]
         is_video_output_mode = selected_mode in ["txt2vid", "img2vid", "vid2vid", "extend_vid"]
         is_image_output_mode = selected_mode in ["txt2img", "img2img"]
-        is_ar_relevant = selected_mode in ["txt2img", "img2img", "txt2vid"] # AR for video input uses input video's AR
-        is_strength_relevant = selected_mode in ["img2img", "vid2vid"] # Modes using initial_latent + strength
-        is_video_params_relevant = is_video_output_mode # Show shift/window only for video output
+        # AR relevant ONLY for txt2img, txt2vid (where size isn't from input)
+        is_ar_relevant = selected_mode in ["txt2img", "txt2vid"]
+        # Strength relevant ONLY for img2img, vid2vid (modes using init_latent + strength)
+        is_strength_relevant = selected_mode in ["img2img", "vid2vid"]
+        is_video_params_relevant = is_video_output_mode
 
         return {
             input_image: gr.update(visible=is_img_input_mode),
