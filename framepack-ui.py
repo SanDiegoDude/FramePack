@@ -410,8 +410,16 @@ def worker(mode, input_image, input_video,
             print(f"Section {section_index + 1} sampling complete. Output latent shape: {generated_latents.shape}")
 
             # --- Post-processing and History Update ---
-            # Prepending initial latent is only relevant if we *used* the init_latent method AND it's the last section
-            if is_last_section and init_latent is not None and mode in ['txt2vid', 'vid2vid']:
+            # Prepend the clean first frame latent for img2vid on the last section
+            if is_last_section and mode == 'img2vid':
+                 if first_frame_conditioning_latent is not None:
+                     print("Prepending clean first frame latent for img2vid final output.")
+                     # Ensure dtype and device match
+                     generated_latents = torch.cat([first_frame_conditioning_latent.to(generated_latents.device, dtype=generated_latents.dtype), generated_latents], dim=2)
+                 else:
+                      print("Warning: Cannot prepend first frame latent for img2vid, as it's missing.")
+            # Prepending initial latent for txt2vid/vid2vid (if initial_latent was used)
+            elif is_last_section and init_latent is not None and mode in ['txt2vid', 'vid2vid']:
                  print("Prepending initial latent to the final output (txt2vid/vid2vid).")
                  generated_latents = torch.cat([init_latent.to(generated_latents.device, dtype=generated_latents.dtype), generated_latents], dim=2)
 
