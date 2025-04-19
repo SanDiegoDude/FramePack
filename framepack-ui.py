@@ -161,21 +161,19 @@ def worker(mode, input_image, input_video,
 
         # --- Mode Specific Setup ---
         if mode == 'txt2vid':
-            # Uses initial_latent + strength method (effectively starts from noise)
+            # Starts from noise, guided only by text prompt.
+            # Strength slider is ignored for this mode.
             stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Preparing for txt2vid...'))))
             height, width = 512, 512 # Or make configurable
-            dummy = torch.zeros((1, 3, 1, height, width), device=gpu, dtype=vae.dtype)
-            # Need to handle potential VAE dtype issues even for dummy encode if VAE is float16
-            original_vae_dtype = vae.dtype
-            try:
-                vae.to(torch.float32) # Temporarily change VAE
-                init_latent_shape = vae_encode(dummy.to(torch.float32), vae).shape
-            finally:
-                vae.to(original_vae_dtype) # Change back
-            # The actual initial_latent passed to sampler is zeros, sampler mixes noise based on strength
-            init_latent = torch.zeros(init_latent_shape, device=gpu, dtype=transformer.dtype)
-            # No specific first frame conditioning needed
-            print(f"Txt2Vid: Initial latent shape for sampler {init_latent.shape}")
+
+            # No image conditioning needed
+            image_embeddings = None
+            first_frame_conditioning_latent = None # No first frame VAE needed
+
+            # IMPORTANT: No initial_latent passed to sampler for this mode
+            init_latent = None
+            concat_latent = None
+            print(f"Txt2Vid: Set up complete. Sampler will start from noise ({width}x{height}).")
 
         elif mode == 'img2vid':
             # Uses conditioning method (like simple demo), strength is ignored for start noise
