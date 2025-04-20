@@ -255,11 +255,22 @@ def worker(
 
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
             if mode == "text2video" and is_last_section:
-                # Drop first 20% after extra_frames, keep 80% of video
-                total_video_frames = history_pixels.shape[2] - extra_frames
-                drop_count = total_video_frames // 5
-                start_idx = extra_frames + drop_count
-                history_pixels = history_pixels[:, :, start_idx:, :, :]
+                N_actual = history_pixels.shape[2]
+                drop_n = math.floor(N_actual * 0.2)
+                history_pixels = history_pixels[:, :, drop_n:, :, :]
+                N_after = history_pixels.shape[2]
+                # If only one frame left, save as PNG and return a "click to open" image link
+                if N_after == 1:
+                    # Save image to file
+                    last_img = history_pixels[0, :, 0].cpu().numpy()  # [3, H, W]
+                    last_img = np.clip((np.transpose(last_img, (1,2,0)) + 1) * 127.5, 0, 255).astype(np.uint8)
+                    img_filename = os.path.join(outputs_folder, f'{job_id}_final_image.png')
+                    Image.fromarray(last_img).save(img_filename)
+                    # Push a Gradio HTML clickable link instead of a video
+                    html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
+                    stream.output_queue.push(('file_img', img_filename, html_link))
+                    # Don't save empty/1-frame video!
+                    return
             save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
             stream.output_queue.push(('file', output_filename))
             if is_last_section:
@@ -345,13 +356,24 @@ def process(
                 gr.update(), gr.update(visible=True, value=preview), desc, html,
                 gr.update(interactive=False), gr.update(interactive=True), gr.update()
             )
+        elif flag == 'file_img':
+            img_filename, html_link = data
+            yield (
+                gr.update(visible=False),           # hide video
+                gr.update(value=html_link, visible=True),  # show clickable HTML image
+                gr.update(visible=False),           # hide preview image
+                "Generated single frame image.",    # desc
+                gr.update(visible=False),           # hide progress bar
+                gr.update(interactive=False),
+                gr.update(interactive=True),
+                gr.update()
+            )
         elif flag == 'end':
             yield (
                 gr.update(value=output_filename), gr.update(visible=False),
-                gr.update(value=last_desc), '',
+                gr.update(visible=False), gr.update(value=last_desc), '',
                 gr.update(interactive=True), gr.update(interactive=False), gr.update()
             )
-            break
 
 def end_process():
     stream.input_queue.push('end')
@@ -408,6 +430,7 @@ with block:
         with gr.Column(scale=2):
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
             result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
+            result_image_html = gr.HTML(label="Single Frame Image", visible=False)
             gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
@@ -484,7 +507,16 @@ with block:
     start_button.click(
         fn=process,
         inputs=ips,
-        outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button, seed]
+        outputs=[
+            result_video,      # 0
+            result_image_html, # 1 (new, HTML for clickable img)
+            preview_image,     # 2
+            progress_desc,     # 3
+            progress_bar,      # 4
+            start_button,      # 5
+            end_button,        # 6
+            seed               # 7
+        ]
     )
     end_button.click(fn=end_process)
 block.launch(
