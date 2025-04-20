@@ -590,9 +590,9 @@ with block:
         with gr.Column(scale=2):
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
             result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
-            result_image_html = gr.HTML(label="Single Frame Image", visible=False)
+            result_image_html = gr.Image(label='Single Frame Image', visible=False)
             gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
-            progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
+            progress_desc = f"Generated single image!<br>Saved as <code>{img_filename}</code>."
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
 
     # --- calllbacks ---
