@@ -77,6 +77,15 @@ os.makedirs(outputs_folder, exist_ok=True)
 
 # ---- Worker Utility Split ----
 def prepare_inputs(input_image, prompt, n_prompt, cfg):
+    if input_image is None:
+        raise ValueError(
+            "No input image provided! For text2video, a blank will be created in worker -- "
+            "but for image2video, you must upload an image."
+        )
+    if hasattr(input_image, 'shape'):
+        H, W, C = input_image.shape
+    else:
+        raise ValueError("Input image is not a valid numpy array!")
     if not high_vram:
         unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
     fake_diffusers_current_device(text_encoder, gpu)
@@ -88,7 +97,6 @@ def prepare_inputs(input_image, prompt, n_prompt, cfg):
         llama_vec_n, clip_pool_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
     llama_vec, mask = crop_or_pad_yield_mask(llama_vec, 512)
     llama_vec_n, mask_n = crop_or_pad_yield_mask(llama_vec_n, 512)
-    H, W, C = input_image.shape
     h, w = find_nearest_bucket(H, W, resolution=640)
     input_np = resize_and_center_crop(input_image, target_width=w, target_height=h)
     Image.fromarray(input_np).save(os.path.join(outputs_folder, f'{generate_timestamp()}.png'))
@@ -263,8 +271,12 @@ def worker(
         return
     finally:
         t_end = time.time()
-        trimmed_frames = history_pixels.shape[2] if history_pixels is not None else 0
-        video_seconds = trimmed_frames / 30.0
+        if history_pixels is not None:
+            trimmed_frames = history_pixels.shape[2]
+            video_seconds = trimmed_frames / 30.0
+        else:
+            trimmed_frames = 0
+            video_seconds = 0.0
         summary_string = (
             f"Finished!\n"
             f"Total generated frames: {trimmed_frames}, "
@@ -282,6 +294,15 @@ def process(
 ):
     global stream
     assert mode in ['image2video', 'text2video'], "Invalid mode"
+
+    # Robust input image check (optional but recommended)
+    if mode == 'image2video' and input_image is None:
+        yield (
+            None, None, "Please upload an input image!", "",
+            gr.update(interactive=True), gr.update(interactive=False), gr.update()
+        )
+        return
+
     if not lock_seed:
         seed = int(time.time()) % 2**32
     yield (
