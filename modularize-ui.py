@@ -319,21 +319,21 @@ def worker(
                 debug("worker: unloaded complete models (end section)")
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
 
+            if mode == "text2video" and is_last_section and latent_window_size == 2:
+                debug("txt2img branch: pulling last frame, skipping video trim")
+                last_img_tensor = history_pixels[0, :, -1]  # shape [3, H, W]
+                last_img = np.clip((np.transpose(last_img_tensor.cpu().numpy(), (1, 2, 0)) + 1) * 127.5, 0, 255).astype(np.uint8)
+                img_filename = os.path.join(outputs_folder, f'{job_id}_final_image.png')
+                Image.fromarray(last_img).save(img_filename)
+                html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
+                stream.output_queue.push(('file_img', (img_filename, html_link)))
+                stream.output_queue.push(('end', None))
+                return
+
+            
             # TEXT2VIDEO special single-image branch --------
             if mode == "text2video" and is_last_section:
                 N_actual = history_pixels.shape[2]
-                # txt2img branch (minimum patch size)
-                if latent_window_size == 2:
-                    debug("txt2img branch: using last frame as image (latent window size=2)")
-                    last_img = history_pixels[0, :, -1].cpu().numpy()
-                    last_img = np.clip((np.transpose(last_img, (1,2,0)) + 1) * 127.5, 0, 255).astype(np.uint8)
-                    img_filename = os.path.join(outputs_folder, f'{job_id}_final_image.png')
-                    Image.fromarray(last_img).save(img_filename)
-                    html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
-                    stream.output_queue.push(('file_img', (img_filename, html_link)))
-                    stream.output_queue.push(('end', None))
-                    return
-
                 if latent_window_size == 3:
                     drop_n = int(N_actual * 0.75)
                     debug(f"special trim for 3: dropping first {drop_n} frames of {N_actual}")
@@ -547,7 +547,7 @@ with block:
                 value=str(get_valid_frame_stops(9)[0]),
                 visible=True
             )
-            init_color = gr.ColorPicker(label="Initial Frame Color", value="#808080")
+            init_color = gr.ColorPicker(label="Initial Frame Color", value="#808080", visible=False)
             with gr.Group():
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
                 n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
@@ -608,6 +608,14 @@ with block:
         switch_mode,
         inputs=[mode_selector],
         outputs=[input_image, aspect_selector, custom_w, custom_h],
+    )
+    def show_init_color(mode):
+        return gr.update(visible=(mode == "text2video"))
+    
+    mode_selector.change(
+        show_init_color,
+        inputs=[mode_selector],
+        outputs=[init_color]
     )
     aspect_selector.change(
         show_custom,
