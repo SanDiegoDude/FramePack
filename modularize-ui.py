@@ -453,6 +453,9 @@ def process(
     )
     output_filename = None
     last_desc = ""
+    last_is_image = False
+    last_img_path = None
+    
     while True:
         flag, data = stream.output_queue.next()
         debug(f"process: got queue event: {flag}, type(data): {type(data)}")
@@ -469,6 +472,8 @@ def process(
                 gr.update(interactive=True),
                 gr.update()
             )
+            last_is_image = False
+            last_img_path = None
         elif flag == 'progress':
             preview, desc, html = data
             if desc:
@@ -497,9 +502,34 @@ def process(
                 gr.update(interactive=True),
                 gr.update()
             )
-            # Save a flag indicating this was a single-image run
             last_is_image = True
             last_img_path = img_filename
+        elif flag == 'end':
+            debug("process: yielding end event. output_filename =", output_filename)
+            if data == "img" or last_is_image:  # special image end
+                yield (
+                    gr.update(visible=False),               # result_video
+                    gr.update(visible=True),                # result_image_html (keep image visible)
+                    gr.update(visible=False),               # preview_image
+                    f"Finished! Single image generated.<br><code>{last_img_path}</code>",  # progress_desc
+                    gr.update(visible=False),               # progress_bar
+                    gr.update(interactive=True),
+                    gr.update(interactive=False),
+                    gr.update()
+                )
+            else:
+                yield (
+                    gr.update(value=output_filename, visible=True), # result_video
+                    gr.update(visible=False),                       # result_image_html
+                    gr.update(visible=False),                       # preview_image
+                    gr.update(value=last_desc, visible=True),       # progress_desc
+                    gr.update(value="", visible=False),             # progress_bar
+                    gr.update(interactive=True),
+                    gr.update(interactive=False),
+                    gr.update()
+                )
+            debug("process: end event, breaking loop.")
+            break
         else:
             last_is_image = False
             last_img_path = None
