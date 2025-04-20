@@ -403,12 +403,16 @@ with block:
             return gr.update(choices=[str(x) for x in stops], value=str(stops[0]))
         else:
             return gr.update(choices=[''], value='')
-    def show_hide_advanced(show):
-        return (
-            gr.update(visible=show),    # latent_window_size
-            gr.update(visible=show),    # adv_seconds
-            gr.update(visible=not show),# total_frames_dropdown
-        )
+    def show_hide_advanced(show, window):
+        lw_vis = gr.update(visible=show)
+        secs_vis = gr.update(visible=show)
+        dropdown_vis = gr.update(visible=not show)
+        if not show:
+            dropdown_update = update_frame_dropdown(window)
+            dropdown_update["visible"] = True
+            return lw_vis, secs_vis, dropdown_update
+        else:
+            return lw_vis, secs_vis, dropdown_vis
     def switch_mode(mode):
         return (
             gr.update(visible=mode=="image2video"),
@@ -419,14 +423,14 @@ with block:
     def show_custom(aspect):
         show = aspect == "Custom..."
         return gr.update(visible=show), gr.update(visible=show)
+    advanced_mode.change(
+        show_hide_advanced,
+        inputs=[advanced_mode, latent_window_size],
+        outputs=[latent_window_size, adv_seconds, total_frames_dropdown],
+    )
     latent_window_size.change(
         lambda window, adv: update_frame_dropdown(window) if not adv else gr.update(),
         inputs=[latent_window_size, advanced_mode],
-        outputs=[total_frames_dropdown],
-    )
-    advanced_mode.change(
-        lambda adv, window: update_frame_dropdown(window) if not adv else gr.update(),
-        inputs=[advanced_mode, latent_window_size],
         outputs=[total_frames_dropdown],
     )
     mode_selector.change(
