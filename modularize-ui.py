@@ -448,30 +448,43 @@ def process(
         debug(f"process: got queue event: {flag}, type(data): {type(data)}")
         if flag == 'file':
             output_filename = data
-            debug("process: yielding file output", output_filename)
             yield (
-                gr.update(value=output_filename, visible=True), 
-                gr.update(visible=False),                       
-                gr.update(visible=False),                       
-                gr.update(value="", visible=False),             
-                gr.update(value="", visible=False),             
+                gr.update(value=output_filename, visible=True), # result_video (show final video)
+                gr.update(visible=False),                       # result_image_html
+                gr.update(visible=False),                       # preview_image
+                gr.update(value="", visible=False),             # progress_desc
+                gr.update(value="", visible=False),             # progress_bar
                 gr.update(interactive=False),
                 gr.update(interactive=True),
                 gr.update()
             )
             last_is_image = False
             last_img_path = None
+        elif flag == 'preview_video':
+            preview_filename = data
+            debug(f"[UI] Got preview_video event: {preview_filename}")
+            yield (
+                gr.update(value=preview_filename, visible=True), # result_video keep VISIBLE and update with preview
+                gr.update(visible=False),                        # result_image_html
+                gr.update(visible=False),                        # preview_image
+                "Generating preview...",                         # progress_desc
+                gr.update(value="", visible=False),              # progress_bar
+                gr.update(interactive=False),
+                gr.update(interactive=True),
+                gr.update()
+            )
         elif flag == 'progress':
             preview, desc, html = data
             if desc:
                 last_desc = desc
             debug(f"process: yielding progress output: desc={desc}")
+            # Don't touch result_video or result_image_html here!
             yield (
-                gr.update(visible=False),           # result_video
-                gr.update(visible=False),           # result_image_html
-                gr.update(visible=True, value=preview), # preview_image
-                desc,                                  # progress_desc
-                html,                                  # progress_bar
+                gr.update(),                  # NO update to result_video; keep visible
+                gr.update(),                  # NO update to result_image_html; keep as-is
+                gr.update(visible=True, value=preview), # preview_image (show as needed)
+                desc,
+                html,
                 gr.update(interactive=False),
                 gr.update(interactive=True),
                 gr.update()
@@ -491,20 +504,6 @@ def process(
             )
             last_is_image = True
             last_img_path = img_filename
-
-        elif flag == 'preview_video':
-            preview_filename = data
-            debug(f"[UI] Got preview_video event: {preview_filename}")
-            yield (
-                gr.update(value=preview_filename, visible=True), # result_video
-                gr.update(visible=False),                        # result_image_html
-                gr.update(visible=False),                        # preview_image
-                "Generating preview...",                         # progress_desc
-                gr.update(value="", visible=False),              # progress_bar
-                gr.update(interactive=False),
-                gr.update(interactive=True),
-                gr.update()
-            )
         elif flag == 'end':
             debug("process: yielding end event. output_filename =", output_filename)
             if data == "img" or last_is_image:  # special image end
