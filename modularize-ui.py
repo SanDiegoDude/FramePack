@@ -31,7 +31,7 @@ def get_valid_frame_stops(latent_window_size, max_seconds=120, fps=30):
     stops = [frames_per_section * i for i in range(1, max_sections + 1)]
     return stops
 
-DEBUG = True
+DEBUG = False
 def debug(*a, **k):
     if DEBUG:
         print("[DEBUG]", *a, **k)
@@ -79,6 +79,17 @@ else:
 stream = AsyncStream()
 outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
+
+# ---- Color Helper ----
+def parse_hex_color(hexcode):
+    hexcode = hexcode.lstrip('#')
+    if len(hexcode) == 6:
+        r = int(hexcode[0:2], 16) / 255
+        g = int(hexcode[2:4], 16) / 255
+        b = int(hexcode[4:6], 16) / 255
+        return r, g, b
+    # fallback to gray
+    return 0.5, 0.5, 0.5
 
 # ---- Worker Utility Split ----
 def prepare_inputs(input_image, prompt, n_prompt, cfg):
@@ -137,7 +148,8 @@ def worker(
     mode, input_image, aspect, custom_w, custom_h,
     prompt, n_prompt, seed,
     use_adv, adv_window, adv_seconds, selected_frames,
-    steps, cfg, gs, rs, gpu_memory_preservation, use_teacache
+    steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
+    init_color
 ):
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
@@ -164,8 +176,16 @@ def worker(
     try:
         if mode == "text2video":
             width, height = get_dims_from_aspect(aspect, custom_w, custom_h)
-            debug(f"worker: text2video input image: generated zeros [{height},{width},3]")
-            input_image_arr = np.zeros((height, width, 3), dtype=np.uint8)
+            if init_color is not None:
+                r, g, b = parse_hex_color(init_color)
+                debug(f"worker: Using color picker value {init_color} -> RGB {r},{g},{b}")
+                input_image_arr = np.zeros((height, width, 3), dtype=np.uint8)
+                input_image_arr[:, :, 0] = int(r * 255)
+                input_image_arr[:, :, 1] = int(g * 255)
+                input_image_arr[:, :, 2] = int(b * 255)
+            else:
+                debug("worker: No color provided, defaulting to black")
+                input_image_arr = np.zeros((height, width, 3), dtype=np.uint8)
             input_image = input_image_arr
 
         debug("worker: preparing inputs")
@@ -302,11 +322,30 @@ def worker(
             # TEXT2VIDEO special single-image branch --------
             if mode == "text2video" and is_last_section:
                 N_actual = history_pixels.shape[2]
-                drop_n = math.floor(N_actual * 0.2)
-                debug(f"worker: dropping first {drop_n} of {N_actual} frames for text2video")
+                # txt2img branch (minimum patch size)
+                if latent_window_size == 2:
+                    debug("txt2img branch: using last frame as image (latent window size=2)")
+                    last_img = history_pixels[0, :, -1].cpu().numpy()
+                    last_img = np.clip((np.transpose(last_img, (1,2,0)) + 1) * 127.5, 0, 255).astype(np.uint8)
+                    img_filename = os.path.join(outputs_folder, f'{job_id}_final_image.png')
+                    Image.fromarray(last_img).save(img_filename)
+                    html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
+                    stream.output_queue.push(('file_img', (img_filename, html_link)))
+                    stream.output_queue.push(('end', None))
+                    return
+
+                if latent_window_size == 3:
+                    drop_n = int(N_actual * 0.75)
+                    debug(f"special trim for 3: dropping first {drop_n} frames of {N_actual}")
+                elif latent_window_size == 4:
+                    drop_n = int(N_actual * 0.5)
+                    debug(f"special trim for 4: dropping first {drop_n} frames of {N_actual}")
+                else:
+                    drop_n = math.floor(N_actual * 0.2)
+                    debug(f"normal trim: dropping first {drop_n} of {N_actual}")
                 history_pixels = history_pixels[:, :, drop_n:, :, :]
                 N_after = history_pixels.shape[2]
-                debug(f"worker: after drop, {N_after} frames left")
+                debug(f"After trim, {N_after} frames left")
                 if N_after == 1:
                     debug("worker: Only one frame left, exporting as image (image mode!)")
                     last_img = history_pixels[0, :, 0].cpu().numpy()  # [3, H, W]
@@ -359,7 +398,7 @@ def process(
     mode, input_image, aspect_selector, custom_w, custom_h,
     prompt, n_prompt, seed,
     use_adv, adv_window, adv_seconds, selected_frames,
-    steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed
+    steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color
 ):
     global stream
     debug("process: called with mode", mode)
@@ -400,7 +439,8 @@ def process(
         gs,
         rs,
         gpu_memory_preservation,
-        use_teacache
+        use_teacache,
+        init_color
     )
     output_filename = None
     last_desc = ""
@@ -593,6 +633,7 @@ with block:
         gpu_memory_preservation,
         use_teacache,
         lock_seed,
+        init_color,
     ]
     start_button.click(
         fn=process,
