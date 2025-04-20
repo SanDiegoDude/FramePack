@@ -539,7 +539,7 @@ with block:
                 start_button = gr.Button(value="Start Generation")
                 end_button = gr.Button(value="End Generation", interactive=False)
             advanced_mode = gr.Checkbox(label="Advanced Mode", value=False)
-            latent_window_size = gr.Slider(label="Latent Window Size", minimum=1, maximum=33, value=9, step=1, visible=False)
+            latent_window_size = gr.Slider(label="Latent Window Size", minimum=2, maximum=33, value=9, step=1, visible=False)
             adv_seconds = gr.Slider(label="Video Length (Seconds)", minimum=0.1, maximum=120.0, value=5.0, step=0.1, visible=False)
             total_frames_dropdown = gr.Dropdown(
                 label="Output Video Frames",
@@ -547,6 +547,7 @@ with block:
                 value=str(get_valid_frame_stops(9)[0]),
                 visible=True
             )
+            init_color = gr.ColorPicker(label="Initial Frame Color", value="#808080")
             with gr.Group():
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
                 n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
