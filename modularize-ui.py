@@ -493,11 +493,11 @@ def process(
             (img_filename, html_link) = data
             debug("process: yielding file_img/single image output", img_filename)
             yield (
-                gr.update(visible=False),           # result_video
-                gr.update(value=img_filename, visible=True),  # result_image_html as Image!
-                gr.update(visible=False),           # preview_image
-                f'Generated single image!<br><code>{img_filename}</code>',  # progress_desc
-                gr.update(visible=False),           # progress_bar
+                gr.update(visible=False),                           # result_video
+                gr.update(value=img_filename, visible=True),        # result_image_html as Image!
+                gr.update(visible=False),                           # preview_image
+                f"Generated single image!<br>Saved as <code>{img_filename}</code>",  # progress_desc
+                gr.update(visible=False),                           # progress_bar
                 gr.update(interactive=False),
                 gr.update(interactive=True),
                 gr.update()
@@ -592,7 +592,6 @@ with block:
             result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
             result_image_html = gr.Image(label='Single Frame Image', visible=False)
             gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
-            progress_desc = f"Generated single image!<br>Saved as <code>{img_filename}</code>."
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
 
     # --- calllbacks ---
