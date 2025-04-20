@@ -533,34 +533,6 @@ def process(
         else:
             last_is_image = False
             last_img_path = None
-        
-        # And in your end handler:
-        elif flag == 'end':
-            debug("process: yielding end event. output_filename =", output_filename)
-            if data == "img" or (globals().get('last_is_image', False)):  # special image end
-                yield (
-                    gr.update(visible=False),               # result_video
-                    gr.update(visible=True),                # result_image_html (keep image visible)
-                    gr.update(visible=False),               # preview_image
-                    f"Finished! Single image generated.<br><code>{last_img_path}</code>",  # progress_desc (show path!)
-                    gr.update(visible=False),               # progress_bar
-                    gr.update(interactive=True),
-                    gr.update(interactive=False),
-                    gr.update()
-                )
-            else:
-                yield (
-                    gr.update(value=output_filename, visible=True), # result_video
-                    gr.update(visible=False),                       # result_image_html
-                    gr.update(visible=False),                       # preview_image
-                    gr.update(value=last_desc, visible=True),       # progress_desc
-                    gr.update(value="", visible=False),             # progress_bar
-                    gr.update(interactive=True),
-                    gr.update(interactive=False),
-                    gr.update()
-                )
-            debug("process: end event, breaking loop.")
-            break
 
 def end_process():
     stream.input_queue.push('end')
