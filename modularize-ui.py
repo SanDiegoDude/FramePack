@@ -294,12 +294,30 @@ def worker(
             if history_pixels is None:
                 history_pixels = vae_decode(real_history_latents, vae).cpu()
                 debug("worker: vae decoded (first time)")
+                # Save in-progress video for preview
+                preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
+                try:
+                    save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
+                    debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
+                    stream.output_queue.push(('preview_video', preview_filename))
+                    debug(f"[QUEUE] Queued preview_video event: {preview_filename}")
+                except Exception as e:
+                    debug(f"[ERROR] Failed to save preview video: {e}")
             else:
                 section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
                 overlapped_frames = latent_window_size * 4 - 3
                 current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae).cpu()
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
                 debug("worker: vae decoded + soft_append_bcthw")
+                # Save in-progress video for preview
+                preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
+                try:
+                    save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
+                    debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
+                    stream.output_queue.push(('preview_video', preview_filename))
+                    debug(f"[QUEUE] Queued preview_video event: {preview_filename}")
+                except Exception as e:
+                    debug(f"[ERROR] Failed to save preview video: {e}")
             if not high_vram:
                 unload_complete_models()
                 debug("worker: unloaded complete models (end section)")
@@ -472,6 +490,20 @@ def process(
             )
             last_is_image = True
             last_img_path = img_filename
+
+        elif flag == 'preview_video':
+            preview_filename = data
+            debug(f"[UI] Got preview_video event: {preview_filename}")
+            yield (
+                gr.update(value=preview_filename, visible=True), # result_video
+                gr.update(visible=False),                        # result_image_html
+                gr.update(visible=False),                        # preview_image
+                "Generating preview...",                         # progress_desc
+                gr.update(value="", visible=False),              # progress_bar
+                gr.update(interactive=False),
+                gr.update(interactive=True),
+                gr.update()
+            )
         elif flag == 'end':
             debug("process: yielding end event. output_filename =", output_filename)
             if data == "img" or last_is_image:  # special image end
