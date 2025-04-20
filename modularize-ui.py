@@ -25,6 +25,12 @@ from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.bucket_tools import find_nearest_bucket
 import random
 
+def get_valid_frame_stops(latent_window_size, max_seconds=120, fps=30):
+    frames_per_section = latent_window_size * 4 - 3
+    max_sections = int((max_seconds * fps) // frames_per_section)
+    stops = [frames_per_section * i for i in range(1, max_sections + 1)]
+    return stops
+
 # ---- CLI args ----
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
@@ -101,7 +107,6 @@ def get_dims_from_aspect(aspect, custom_w, custom_h):
         width, height = int(custom_w), int(custom_h)
     else:
         width, height = presets.get(aspect, (768, 768))
-    # Restrict to 1 megapixel max
     import math
     max_pixels = 1024 * 1024
     px = width * height
@@ -109,7 +114,6 @@ def get_dims_from_aspect(aspect, custom_w, custom_h):
         scale = math.sqrt(max_pixels / px)
         width = int(width * scale)
         height = int(height * scale)
-    # Ensure dimensions are multiples of 8
     width = (width // 8) * 8
     height = (height // 8) * 8
     return width, height
@@ -117,14 +121,25 @@ def get_dims_from_aspect(aspect, custom_w, custom_h):
 @torch.no_grad()
 def worker(
     mode, input_image, aspect, custom_w, custom_h,
-    prompt, n_prompt, seed, total_frames, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache
+    prompt, n_prompt, seed,
+    use_adv, adv_window, adv_seconds, selected_frames,
+    steps, cfg, gs, rs, gpu_memory_preservation, use_teacache
 ):
-    latent_window_size = 9
-    frames_per_section = latent_window_size * 4 - 3
+    # -- deterministic output choice --
+    # If advanced: use adv_window/adv_seconds, else: derive from frame selector / fixed window=9
+    if use_adv:
+        latent_window_size = adv_window
+        frames_per_section = latent_window_size * 4 - 3
+        total_frames = int(round(adv_seconds * 30))
+    else:
+        latent_window_size = 9
+        frames_per_section = latent_window_size * 4 - 3
+        total_frames = selected_frames
     extra_frames = frames_per_section if mode == "text2video" else 0
     run_frames = total_frames + extra_frames
     total_sections = math.ceil((run_frames + 3) / frames_per_section)
     job_id = generate_timestamp()
+
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
     try:
         if mode == "text2video":
@@ -154,7 +169,6 @@ def worker(
         history_pixels = None
         t_start = time.time()
         total_generated_latent_frames = 0
-
         for section in reversed(range(total_sections)):
             is_last_section = section == 0
             latent_padding_size = section * latent_window_size
@@ -231,11 +245,16 @@ def worker(
             if not high_vram:
                 unload_complete_models()
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
-            # Only trim on last section for text2video
             if mode == "text2video" and is_last_section:
                 # history_pixels is (1, 3, T, H, W) so cut T axis
-                if history_pixels.shape[2] > extra_frames:
+                if history_pixels.shape[2] > extra_frames + total_frames:
+                    history_pixels = history_pixels[:, :, extra_frames:extra_frames+total_frames, :, :]
+                else:
                     history_pixels = history_pixels[:, :, extra_frames:, :, :]
+            elif is_last_section:
+                # Always slice to the user target!
+                if history_pixels.shape[2] > total_frames:
+                    history_pixels = history_pixels[:, :, :total_frames, :, :]
             save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
             stream.output_queue.push(('file', output_filename))
             if is_last_section:
@@ -261,7 +280,9 @@ def worker(
 
 def process(
     mode, input_image, aspect_selector, custom_w, custom_h,
-    prompt, n_prompt, seed, total_frames, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed
+    prompt, n_prompt, seed,
+    use_adv, adv_window, adv_seconds, selected_frames,
+    steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed
 ):
     global stream
     assert mode in ['image2video', 'text2video'], "Invalid mode"
@@ -281,7 +302,7 @@ def process(
         prompt,
         n_prompt,
         seed,
-        total_frames,
+        use_adv, adv_window, adv_seconds, selected_frames,
         steps,
         cfg,
         gs,
@@ -348,12 +369,20 @@ with block:
             with gr.Row():
                 start_button = gr.Button(value="Start Generation")
                 end_button = gr.Button(value="End Generation", interactive=False)
+            advanced_mode = gr.Checkbox(label="Advanced Mode", value=False)
+            latent_window_size = gr.Slider(label="Latent Window Size", minimum=1, maximum=33, value=9, step=1, visible=False)
+            adv_seconds = gr.Slider(label="Video Length (Seconds)", minimum=0.1, maximum=120.0, value=5.0, step=0.1, visible=False)
+            total_frames_dropdown = gr.Dropdown(
+                label="Output Video Frames",
+                choices=[str(x) for x in get_valid_frame_stops(9)],
+                value=str(get_valid_frame_stops(9)[0]),
+                visible=True
+            )
             with gr.Group():
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
                 n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
                 seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
                 lock_seed = gr.Checkbox(label="Lock Seed", value=False)
-                total_frames = gr.Slider(label="Total Video Frames", minimum=2, maximum=1800, value=150, step=1)
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
                 cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, visible=False)
                 gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01)
@@ -366,16 +395,32 @@ with block:
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
 
+    # --- calllbacks ---
+    def update_frame_dropdown(window):
+        stops = get_valid_frame_stops(window)
+        # Only let user select from valid numbers of frames
+        if stops:
+            return gr.update(choices=[str(x) for x in stops], value=str(stops[0]))
+        else:
+            return gr.update(choices=[''], value='')
+    def show_hide_advanced(show):
+        return (
+            gr.update(visible=show),    # latent_window_size
+            gr.update(visible=show),    # adv_seconds
+            gr.update(visible=not show),# total_frames_dropdown
+        )
     def switch_mode(mode):
         return (
             gr.update(visible=mode=="image2video"),
             gr.update(visible=mode=="text2video"),
-            gr.update(visible=False),  # custom_w/h shown from aspect selector callback
-            gr.update(visible=False),
+            gr.update(visible=False),  # custom_w
+            gr.update(visible=False),  # custom_h
         )
     def show_custom(aspect):
         show = aspect == "Custom..."
         return gr.update(visible=show), gr.update(visible=show)
+    latent_window_size.change(update_frame_dropdown, inputs=[latent_window_size], outputs=[total_frames_dropdown])
+    advanced_mode.change(show_hide_advanced, inputs=[advanced_mode], outputs=[latent_window_size, adv_seconds, total_frames_dropdown])
     mode_selector.change(
         switch_mode,
         inputs=[mode_selector],
@@ -395,7 +440,10 @@ with block:
         prompt,
         n_prompt,
         seed,
-        total_frames,
+        advanced_mode,
+        latent_window_size,
+        adv_seconds,
+        total_frames_dropdown,
         steps,
         cfg,
         gs,
