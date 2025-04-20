@@ -269,6 +269,7 @@ def worker(
                     # Push a Gradio HTML clickable link instead of a video
                     html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
                     stream.output_queue.push(('file_img', img_filename, html_link))
+                    stream.output_queue.push(('end', None))
                     # Don't save empty/1-frame video!
                     return
             save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
