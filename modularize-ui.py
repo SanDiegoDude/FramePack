@@ -142,7 +142,8 @@ def get_dims_from_aspect(aspect, custom_w, custom_h):
     height = (height // 8) * 8
     return width, height
     
-# ---- Worker ----
+
+# ---- WORKER ----
 @torch.no_grad()
 def worker(
     mode, input_image, aspect, custom_w, custom_h,
@@ -161,7 +162,7 @@ def worker(
         debug(f"worker: Advanced mode | latent_window_size={latent_window_size} | frames_per_section={frames_per_section} | total_frames={total_frames} | total_sections={total_sections}")
     else:
         latent_window_size = 9
-        frames_per_section = latent_window_size * 4 - 3  # LOCKED at 33
+        frames_per_section = latent_window_size * 4 - 3
         total_frames = int(selected_frames)
         total_sections = total_frames // frames_per_section
         debug(f"worker: Simple mode | latent_window_size=9 | frames_per_section=33 | total_frames={total_frames} | total_sections={total_sections}")
@@ -181,7 +182,6 @@ def worker(
                 debug("worker: No color provided, defaulting to black")
                 input_image_arr = np.zeros((height, width, 3), dtype=np.uint8)
             input_image = input_image_arr
-
         debug("worker: preparing inputs")
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Text encoding ...'))))
         debug("worker: pushed 'Text encoding ...' progress event")
@@ -215,8 +215,6 @@ def worker(
         history_pixels = None
         t_start = time.time()
         total_generated_latent_frames = 0
-
-        # --- PATCH OVERLAP LOGIC MATCHING THE DEMO ---
         for section in reversed(range(total_sections)):
             is_last_section = section == 0
             latent_padding_size = section * latent_window_size
@@ -293,8 +291,6 @@ def worker(
                 load_model_as_complete(vae, target_device=gpu)
                 debug("worker: loaded vae to gpu (again)")
             real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
-
-            # KEY PATCH LOGIC FROM DEMO (this block!) -----------------
             if history_pixels is None:
                 history_pixels = vae_decode(real_history_latents, vae).cpu()
                 debug("worker: vae decoded (first time)")
@@ -304,21 +300,47 @@ def worker(
                 current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae).cpu()
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
                 debug("worker: vae decoded + soft_append_bcthw")
-            # END PATCH BLOCK ------------------------------------------
-
             if not high_vram:
                 unload_complete_models()
                 debug("worker: unloaded complete models (end section)")
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
-
-            # --- txt2img/special trimming as already handled, not repeated here ---
-
             if is_last_section:
                 debug("worker: is_last_section - break")
                 break
 
-        # ---- ...all trimming/saving logic as before ... ----
-        # (not shown for brevity; keep your txt2img, image output, and normal save mp4 blocks as in previous answers)
+        # ---- Final export logic ----
+
+        # Special single-image mode (txt2img)
+        if mode == "text2video" and latent_window_size == 2:
+            last_img_tensor = history_pixels[0, :, -1]
+            last_img = np.clip((np.transpose(last_img_tensor.cpu().numpy(), (1, 2, 0)) + 1) * 127.5, 0, 255).astype(np.uint8)
+            img_filename = os.path.join(outputs_folder, f'{job_id}_final_image.png')
+            debug(f"[FILE] Attempting to save image to {img_filename}")
+            try:
+                Image.fromarray(last_img).save(img_filename)
+                debug(f"[FILE] Image successfully saved to {img_filename}: {os.path.exists(img_filename)}")
+                html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
+                stream.output_queue.push(('file_img', (img_filename, html_link)))
+                debug(f"[QUEUE] Queued event 'file_img' with data: {img_filename}")
+                stream.output_queue.push(('end', "img"))
+                debug("[QUEUE] Queued event 'end' for image")
+                return
+            except Exception as e:
+                debug(f"[ERROR] FAILED to save image {img_filename}: {e}")
+                traceback.print_exc()
+                stream.output_queue.push(('end', "img"))
+                return
+
+        # Otherwise, trim/output video normally
+        debug(f"[FILE] Attempting to save video to {output_filename}")
+        try:
+            save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
+            debug(f"[FILE] Video successfully saved to {output_filename}: {os.path.exists(output_filename)}")
+            stream.output_queue.push(('file', output_filename))
+            debug(f"[QUEUE] Queued event 'file' with data: {output_filename}")
+        except Exception as e:
+            debug(f"[ERROR] FAILED to save video {output_filename}: {e}")
+            traceback.print_exc()
 
     except Exception as ex:
         debug("worker: EXCEPTION THROWN", ex)
@@ -348,7 +370,6 @@ def worker(
         debug("worker: pushed final progress event")
         stream.output_queue.push(('end', None))
         debug("worker: pushed end event in finally (done)")
-            
             
 def process(
     mode, input_image, aspect_selector, custom_w, custom_h,
