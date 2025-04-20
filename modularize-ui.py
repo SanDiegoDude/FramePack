@@ -494,9 +494,9 @@ def process(
             debug("process: yielding file_img/single image output", img_filename)
             yield (
                 gr.update(visible=False),           # result_video
-                gr.update(value=html_link, visible=True),  # result_image_html (shows clickable image)
+                gr.update(value=img_filename, visible=True),  # result_image_html as Image!
                 gr.update(visible=False),           # preview_image
-                f'Generated single image! <a href="file/{img_filename}" target="_blank">Download or open full size</a><br><code>{img_filename}</code>',  # progress_desc
+                f'Generated single image!<br><code>{img_filename}</code>',  # progress_desc
                 gr.update(visible=False),           # progress_bar
                 gr.update(interactive=False),
                 gr.update(interactive=True),
