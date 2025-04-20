@@ -35,6 +35,7 @@ def get_valid_frame_stops(latent_window_size, max_seconds=120, fps=30):
 
 # ---- Worker Utility Split ----
 def prepare_inputs(input_image, prompt, n_prompt, cfg):
+    global high_vram
     if not high_vram:
         unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
     fake_diffusers_current_device(text_encoder, gpu)
@@ -83,6 +84,8 @@ def worker(
     use_adv, adv_window, adv_seconds, selected_frames,
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, display_final_frame
 ):
+    t_start = time.time()             # <--- Add this as the FIRST statement
+    history_pixels = None             # <--- Init for safety in finally
     # -- deterministic output choice --
     if use_adv:
         latent_window_size = adv_window
@@ -374,7 +377,7 @@ with block:
             gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
-            final_frame_out = gr.Image(label="Final Frame", visible=True, interactive=True)
+            final_frame_out = gr.Image(label="Final Frame", visible=False, interactive=False, type="filepath")
 
     def update_frame_dropdown(window):
         stops = get_valid_frame_stops(window)
@@ -398,6 +401,11 @@ with block:
     def show_custom(aspect):
         show = aspect == "Custom..."
         return gr.update(visible=show), gr.update(visible=show)
+
+    def show_final_frame(checked):
+        return gr.update(visible=checked)
+
+    display_final_frame.change(show_final_frame, [display_final_frame], [final_frame_out])
     latent_window_size.change(update_frame_dropdown, inputs=[latent_window_size], outputs=[total_frames_dropdown])
     advanced_mode.change(show_hide_advanced, inputs=[advanced_mode], outputs=[latent_window_size, adv_seconds, total_frames_dropdown])
     mode_selector.change(
