@@ -320,7 +320,13 @@ def worker(
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
 
             if mode == "text2video" and is_last_section and latent_window_size == 2:
-                debug("txt2img branch: pulling last frame, skipping video trim")
+            debug("txt2img branch: pulling last frame, skipping video trim")
+            # Make sure we have decoded at least one frame!
+            if history_pixels is None:
+                debug("txt2img: running vae_decode for single patch")
+                history_pixels = vae_decode(real_history_latents, vae).cpu()
+            # Defensive check:
+            if history_pixels.shape[2] > 0:
                 last_img_tensor = history_pixels[0, :, -1]  # shape [3, H, W]
                 last_img = np.clip((np.transpose(last_img_tensor.cpu().numpy(), (1, 2, 0)) + 1) * 127.5, 0, 255).astype(np.uint8)
                 img_filename = os.path.join(outputs_folder, f'{job_id}_final_image.png')
@@ -329,9 +335,13 @@ def worker(
                 stream.output_queue.push(('file_img', (img_filename, html_link)))
                 stream.output_queue.push(('end', None))
                 return
+            else:
+                debug("txt2img: ERROR: No frames were decoded! This should not happen.")
+                stream.output_queue.push(('end', None))
+                return
 
             
-            # TEXT2VIDEO special single-image branch --------
+            # TEXT2VIDEO --------
             if mode == "text2video" and is_last_section:
                 N_actual = history_pixels.shape[2]
                 if latent_window_size == 3:
