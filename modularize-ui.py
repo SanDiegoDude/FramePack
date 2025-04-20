@@ -325,21 +325,20 @@ def worker(
                 if history_pixels is None:
                     debug("txt2img: running vae_decode for single patch")
                     history_pixels = vae_decode(real_history_latents, vae).cpu()
-                # Defensive check:
                 if history_pixels.shape[2] > 0:
                     last_img_tensor = history_pixels[0, :, -1]  # shape [3, H, W]
                     last_img = np.clip((np.transpose(last_img_tensor.cpu().numpy(), (1, 2, 0)) + 1) * 127.5, 0, 255).astype(np.uint8)
                     img_filename = os.path.join(outputs_folder, f'{job_id}_final_image.png')
                     Image.fromarray(last_img).save(img_filename)
                     html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
+                    # Pass a special signal ('img') in the 'end' flag
                     stream.output_queue.push(('file_img', (img_filename, html_link)))
-                    stream.output_queue.push(('end', None))
+                    stream.output_queue.push(('end', "img"))
                     return
                 else:
                     debug("txt2img: ERROR: No frames were decoded! This should not happen.")
-                    stream.output_queue.push(('end', None))
+                    stream.output_queue.push(('end', "img"))
                     return
-
             
             # TEXT2VIDEO --------
             if mode == "text2video" and is_last_section:
@@ -492,28 +491,46 @@ def process(
                 gr.update(visible=False),           # result_video
                 gr.update(value=html_link, visible=True),  # result_image_html (shows clickable image)
                 gr.update(visible=False),           # preview_image
-                "Generated single frame image.",    # progress_desc
+                f'Generated single image! <a href="file/{img_filename}" target="_blank">Download or open full size</a><br><code>{img_filename}</code>',  # progress_desc
                 gr.update(visible=False),           # progress_bar
                 gr.update(interactive=False),
                 gr.update(interactive=True),
                 gr.update()
             )
+            # Save a flag indicating this was a single-image run
+            last_is_image = True
+            last_img_path = img_filename
+        else:
+            last_is_image = False
+            last_img_path = None
+        
+        # And in your end handler:
         elif flag == 'end':
             debug("process: yielding end event. output_filename =", output_filename)
-            yield (
-                gr.update(value=output_filename, visible=True), # result_video
-                gr.update(visible=False),                       # result_image_html
-                gr.update(visible=False),                       # preview_image
-                gr.update(value=last_desc, visible=True),       # progress_desc
-                gr.update(value="", visible=False),             # progress_bar
-                gr.update(interactive=True),
-                gr.update(interactive=False),
-                gr.update()
-            )
+            if data == "img" or (globals().get('last_is_image', False)):  # special image end
+                yield (
+                    gr.update(visible=False),               # result_video
+                    gr.update(visible=True),                # result_image_html (keep image visible)
+                    gr.update(visible=False),               # preview_image
+                    f"Finished! Single image generated.<br><code>{last_img_path}</code>",  # progress_desc (show path!)
+                    gr.update(visible=False),               # progress_bar
+                    gr.update(interactive=True),
+                    gr.update(interactive=False),
+                    gr.update()
+                )
+            else:
+                yield (
+                    gr.update(value=output_filename, visible=True), # result_video
+                    gr.update(visible=False),                       # result_image_html
+                    gr.update(visible=False),                       # preview_image
+                    gr.update(value=last_desc, visible=True),       # progress_desc
+                    gr.update(value="", visible=False),             # progress_bar
+                    gr.update(interactive=True),
+                    gr.update(interactive=False),
+                    gr.update()
+                )
             debug("process: end event, breaking loop.")
             break
-        else:
-            debug("process: got unknown flag", flag, "data:", data)
 
 def end_process():
     stream.input_queue.push('end')
@@ -659,7 +676,7 @@ with block:
         inputs=ips,
         outputs=[
             result_video,      # 0
-            result_image_html, # 1 (new, HTML for clickable img)
+            result_image_html, # 1 (HTML for clickable img)
             preview_image,     # 2
             progress_desc,     # 3
             progress_bar,      # 4
