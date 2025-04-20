@@ -268,8 +268,9 @@ def worker(
                     Image.fromarray(last_img).save(img_filename)
                     # Push a Gradio HTML clickable link instead of a video
                     html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
-                    stream.output_queue.push(('file_img', img_filename, html_link))
+                    stream.output_queue.push(('file_img', (img_filename, html_link)))
                     stream.output_queue.push(('end', None))
+                    return
                     # Don't save empty/1-frame video!
                     return
             save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
@@ -383,7 +384,7 @@ def process(
                 gr.update()                            # seed
             )
         elif flag == 'file_img':
-            img_filename, html_link = data
+            (img_filename, html_link) = data
             yield (
                 gr.update(visible=False),           # result_video
                 gr.update(value=html_link, visible=True),  # result_image_html (shows clickable image)
