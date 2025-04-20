@@ -26,6 +26,27 @@ from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.bucket_tools import find_nearest_bucket
 import random
 
+import subprocess
+
+def make_mp4_faststart(mp4_path):
+    tmpfile = mp4_path + ".tmp"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", mp4_path,
+        "-c", "copy",
+        "-movflags", "+faststart",
+        tmpfile
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        os.replace(tmpfile, mp4_path)
+        debug(f"[FFMPEG] Moved moov atom to front of {mp4_path} (faststart applied)")
+    except Exception as e:
+        debug(f"[FFMPEG] Faststart failed for {mp4_path}: {e}")
+        if os.path.exists(tmpfile):
+            os.remove(tmpfile)
+
 def get_valid_frame_stops(latent_window_size, max_seconds=120, fps=30):
     frames_per_section = latent_window_size * 4 - 3
     max_sections = int((max_seconds * fps) // frames_per_section)
@@ -390,6 +411,8 @@ def worker(
         try:
             save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
             debug(f"[FILE] Video successfully saved to {output_filename}: {os.path.exists(output_filename)}")
+            make_mp4_faststart(output_filename)  # <--- faststart patch right here
+            debug(f"[FILE] Faststart patch applied to {output_filename}: {os.path.exists(output_filename)}")
             stream.output_queue.push(('file', output_filename))
             debug(f"[QUEUE] Queued event 'file' with data: {output_filename}")
         except Exception as e:
