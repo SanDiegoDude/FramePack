@@ -31,6 +31,11 @@ def get_valid_frame_stops(latent_window_size, max_seconds=120, fps=30):
     stops = [frames_per_section * i for i in range(1, max_sections + 1)]
     return stops
 
+DEBUG = True
+def debug(*a, **k):
+    if DEBUG:
+        print("[DEBUG]", *a, **k)
+
 # ---- CLI args ----
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
@@ -125,7 +130,8 @@ def get_dims_from_aspect(aspect, custom_w, custom_h):
     width = (width // 8) * 8
     height = (height // 8) * 8
     return width, height
-
+    
+# ---- Worker ----
 @torch.no_grad()
 def worker(
     mode, input_image, aspect, custom_w, custom_h,
@@ -133,55 +139,80 @@ def worker(
     use_adv, adv_window, adv_seconds, selected_frames,
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache
 ):
+    job_id = generate_timestamp()
+    debug("worker(): started", mode, "job_id:", job_id)
+
     # -- deterministic output choice --
-    # If advanced: use adv_window/adv_seconds, else: derive from fixed window size and dropdown
     if use_adv:
         latent_window_size = adv_window
         frames_per_section = latent_window_size * 4 - 3
         total_frames = int(round(adv_seconds * 30))
         total_sections = math.ceil(total_frames / frames_per_section)
+        debug(f"worker: Advanced mode | latent_window_size={latent_window_size} | frames_per_section={frames_per_section} | total_frames={total_frames} | total_sections={total_sections}")
     else:
         latent_window_size = 9
         frames_per_section = latent_window_size * 4 - 3  # LOCKED at 33
-        total_frames = int(selected_frames)  # Must be a multiple of 33
-        total_sections = total_frames // frames_per_section  # User can only select multiples of 33
+        total_frames = int(selected_frames)
+        total_sections = total_frames // frames_per_section
+        debug(f"worker: Simple mode | latent_window_size=9 | frames_per_section=33 | total_frames={total_frames} | total_sections={total_sections}")
 
-    extra_frames = frames_per_section if mode == "text2video" else 0
-    run_frames = total_sections * frames_per_section + extra_frames  # total frames generated (prior to extra frames trim)
     job_id = generate_timestamp()
+    debug("worker: job_id assigned", job_id)
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
+    debug("worker: pushed progress event 'Starting ...'")
+
     try:
         if mode == "text2video":
             width, height = get_dims_from_aspect(aspect, custom_w, custom_h)
+            debug(f"worker: text2video input image: generated zeros [{height},{width},3]")
             input_image_arr = np.zeros((height, width, 3), dtype=np.uint8)
             input_image = input_image_arr
+
+        debug("worker: preparing inputs")
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Text encoding ...'))))
+        debug("worker: pushed 'Text encoding ...' progress event")
         inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = prepare_inputs(input_image, prompt, n_prompt, cfg)
+        debug("worker: inputs prepared")
+
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE encoding ...'))))
+        debug("worker: pushed 'VAE encoding ...' progress event")
         if not high_vram:
             load_model_as_complete(vae, target_device=gpu)
+            debug("worker: loaded vae to gpu")
         start_latent = vae_encode(inp_tensor, vae)
+        debug("worker: VAE encoded")
+
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
+        debug("worker: pushed 'CLIP Vision encoding ...' progress event")
         if not high_vram:
             load_model_as_complete(image_encoder, target_device=gpu)
+            debug("worker: loaded image_encoder to gpu")
         clip_output = hf_clip_vision_encode(inp_np, feature_extractor, image_encoder).last_hidden_state
+        debug("worker: got clip output last_hidden_state")
+
         lv = lv.to(transformer.dtype)
         lv_n = lv_n.to(transformer.dtype)
         cp = cp.to(transformer.dtype)
         cp_n = cp_n.to(transformer.dtype)
         clip_output = clip_output.to(transformer.dtype)
+
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Start sampling ...'))))
+        debug("worker: pushed 'Start sampling ...' progress event")
         rnd = torch.Generator("cpu").manual_seed(seed)
+
         history_latents = torch.zeros(
             size=(1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32
         ).cpu()
         history_pixels = None
         t_start = time.time()
         total_generated_latent_frames = 0
+        debug("worker: entering section loop")
         for section in reversed(range(total_sections)):
             is_last_section = section == 0
+            debug(f"worker: Section {section}/{total_sections-1} (is_last_section={is_last_section})")
             latent_padding_size = section * latent_window_size
             if stream.input_queue.top() == 'end':
+                debug("worker: input_queue 'end' received. Aborting generation.")
                 stream.output_queue.push(('end', None))
                 return
             indices = torch.arange(0, sum([1, latent_padding_size, latent_window_size, 1, 2, 16])).unsqueeze(0)
@@ -192,20 +223,26 @@ def worker(
             clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
             if not high_vram:
                 unload_complete_models()
+                debug("worker: unloaded complete models")
                 move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
+                debug("worker: moved transformer to gpu (memory preservation)")
+
             transformer.initialize_teacache(enable_teacache=use_teacache, num_steps=steps if use_teacache else 0)
+            debug("worker: teacache initialized", "use_teacache", use_teacache)
             def callback(d):
                 preview = d['denoised']
                 preview = vae_decode_fake(preview)
                 preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
                 preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
                 if stream.input_queue.top() == 'end':
+                    debug("worker: callback: received 'end', stopping generation.")
                     stream.output_queue.push(('end', None))
                     raise KeyboardInterrupt('User ends the task.')
                 current_step = d['i'] + 1
                 percentage = int(100.0 * current_step / steps)
                 hint = f'Sampling {current_step}/{steps}'
                 desc = f'Total generated frames: {total_generated_latent_frames}, Video length: {total_generated_latent_frames / 30.0:.2f} seconds (FPS-30).'
+                debug("worker: In callback, push progress preview at step", current_step, "/", steps)
                 stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
             generated_latents = sample_hunyuan(
                 transformer=transformer,
@@ -236,55 +273,72 @@ def worker(
                 clean_latent_4x_indices=clean_latent_4x_indices,
                 callback=callback,
             )
+            debug("worker: generated_latents.shape", generated_latents.shape)
             if is_last_section:
                 generated_latents = torch.cat([start_latent.to(generated_latents), generated_latents], dim=2)
+                debug("worker: is_last_section => concatenated latent")
             total_generated_latent_frames += int(generated_latents.shape[2])
             history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
+            debug("worker: history_latents.shape after concat", history_latents.shape)
             if not high_vram:
                 offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
+                debug("worker: offloaded transformer")
                 load_model_as_complete(vae, target_device=gpu)
+                debug("worker: loaded vae to gpu (again)")
             real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
             if history_pixels is None:
                 history_pixels = vae_decode(real_history_latents, vae).cpu()
+                debug("worker: vae decoded (first time)")
             else:
                 overlapped_frames = frames_per_section
                 current_pixels = vae_decode(real_history_latents[:, :, :overlapped_frames], vae).cpu()
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
+                debug("worker: vae decoded + soft_append_bcthw")
             if not high_vram:
                 unload_complete_models()
-
+                debug("worker: unloaded complete models (end section)")
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
+
+            # TEXT2VIDEO special single-image branch --------
             if mode == "text2video" and is_last_section:
                 N_actual = history_pixels.shape[2]
                 drop_n = math.floor(N_actual * 0.2)
+                debug(f"worker: dropping first {drop_n} of {N_actual} frames for text2video")
                 history_pixels = history_pixels[:, :, drop_n:, :, :]
                 N_after = history_pixels.shape[2]
-                # If only one frame left, save as PNG and return a "click to open" image link
+                debug(f"worker: after drop, {N_after} frames left")
                 if N_after == 1:
-                    # Save image to file
+                    debug("worker: Only one frame left, exporting as image (image mode!)")
                     last_img = history_pixels[0, :, 0].cpu().numpy()  # [3, H, W]
                     last_img = np.clip((np.transpose(last_img, (1,2,0)) + 1) * 127.5, 0, 255).astype(np.uint8)
                     img_filename = os.path.join(outputs_folder, f'{job_id}_final_image.png')
                     Image.fromarray(last_img).save(img_filename)
-                    # Push a Gradio HTML clickable link instead of a video
                     html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
                     stream.output_queue.push(('file_img', (img_filename, html_link)))
+                    debug("worker: pushed file_img event")
                     stream.output_queue.push(('end', None))
-                    return
-                    # Don't save empty/1-frame video!
+                    debug("worker: pushed end after single image, returning early from worker")
                     return
             save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
+            debug("worker: called save_bcthw_as_mp4", output_filename)
             stream.output_queue.push(('file', output_filename))
+            debug("worker: pushed file", output_filename)
             if is_last_section:
+                debug("worker: is_last_section - break")
                 break
-    except Exception:
+    except Exception as ex:
+        debug("worker: EXCEPTION THROWN", ex)
         traceback.print_exc()
         if not high_vram:
             unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
+        debug("worker: after exception and possible unload, exiting worker.")
+        stream.output_queue.push(('end', None))
+        debug("worker: exception: pushed end event")
         return
     finally:
+        debug("worker: in finally block, writing final summary/progress/end")
         t_end = time.time()
-        if history_pixels is not None:
+        if 'history_pixels' in locals() and history_pixels is not None:
             trimmed_frames = history_pixels.shape[2]
             video_seconds = trimmed_frames / 30.0
         else:
@@ -297,7 +351,9 @@ def worker(
             f"Time taken: {t_end - t_start:.2f}s."
         )
         stream.output_queue.push(('progress', (None, summary_string, "")))
+        debug("worker: pushed final progress event")
         stream.output_queue.push(('end', None))
+        debug("worker: pushed end event in finally (done)")
 
 def process(
     mode, input_image, aspect_selector, custom_w, custom_h,
@@ -306,30 +362,23 @@ def process(
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed
 ):
     global stream
+    debug("process: called with mode", mode)
     assert mode in ['image2video', 'text2video'], "Invalid mode"
-
-    # Robust input image check (optional but recommended)
     if mode == 'image2video' and input_image is None:
+        debug("process: Aborting early -- no input image for image2video")
         yield (
-            None,         # result_video
-            None,         # result_image_html
-            None,         # preview_image
-            "Please upload an input image!",  # progress_desc (or use as error message!)
-            None,         # progress_bar
-            gr.update(interactive=True),  # start_button
-            gr.update(interactive=False), # end_button
-            gr.update()                   # seed
+            None, None, None,
+            "Please upload an input image!", None,
+            gr.update(interactive=True),
+            gr.update(interactive=False),
+            gr.update()
         )
         return
-
     if not lock_seed:
         seed = int(time.time()) % 2**32
+    debug("process: entering main async_run yield cycle, seed:", seed)
     yield (
-        None,              # result_video
-        None,              # result_image_html
-        None,              # preview_image
-        '',                # progress_desc
-        '',                # progress_bar
+        None, None, None, '', '',
         gr.update(interactive=False),
         gr.update(interactive=True),
         gr.update(value=seed)
@@ -357,8 +406,10 @@ def process(
     last_desc = ""
     while True:
         flag, data = stream.output_queue.next()
+        debug(f"process: got queue event: {flag}, type(data): {type(data)}")
         if flag == 'file':
             output_filename = data
+            debug("process: yielding file output", output_filename)
             yield (
                 gr.update(value=output_filename, visible=True), # result_video
                 gr.update(visible=False),                       # result_image_html
@@ -367,12 +418,13 @@ def process(
                 gr.update(value="", visible=False),             # progress_bar
                 gr.update(interactive=False),
                 gr.update(interactive=True),
-                gr.update()  # seed
+                gr.update()
             )
         elif flag == 'progress':
             preview, desc, html = data
             if desc:
                 last_desc = desc
+            debug(f"process: yielding progress output: desc={desc}")
             yield (
                 gr.update(visible=False),           # result_video
                 gr.update(visible=False),           # result_image_html
@@ -381,10 +433,11 @@ def process(
                 html,                                  # progress_bar
                 gr.update(interactive=False),
                 gr.update(interactive=True),
-                gr.update()                            # seed
+                gr.update()
             )
         elif flag == 'file_img':
             (img_filename, html_link) = data
+            debug("process: yielding file_img/single image output", img_filename)
             yield (
                 gr.update(visible=False),           # result_video
                 gr.update(value=html_link, visible=True),  # result_image_html (shows clickable image)
@@ -393,9 +446,10 @@ def process(
                 gr.update(visible=False),           # progress_bar
                 gr.update(interactive=False),
                 gr.update(interactive=True),
-                gr.update()                         # seed
+                gr.update()
             )
         elif flag == 'end':
+            debug("process: yielding end event. output_filename =", output_filename)
             yield (
                 gr.update(value=output_filename, visible=True), # result_video
                 gr.update(visible=False),                       # result_image_html
@@ -404,8 +458,12 @@ def process(
                 gr.update(value="", visible=False),             # progress_bar
                 gr.update(interactive=True),
                 gr.update(interactive=False),
-                gr.update()  # seed
+                gr.update()
             )
+            debug("process: end event, breaking loop.")
+            break
+        else:
+            debug("process: got unknown flag", flag, "data:", data)
 
 def end_process():
     stream.input_queue.push('end')
