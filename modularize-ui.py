@@ -247,12 +247,11 @@ def worker(
 
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
             if mode == "text2video" and is_last_section:
-                # Drop the first 20% of frames on the final round (rounding down)
-                # After extra_frames are skipped, the *remaining* frames get cropped
+                # Drop first 20% after extra_frames, keep 80% of video
                 total_video_frames = history_pixels.shape[2] - extra_frames
-                start_idx = extra_frames + (total_video_frames // 5)  # drop first 20%, rounding down
+                drop_count = total_video_frames // 5
+                start_idx = extra_frames + drop_count
                 history_pixels = history_pixels[:, :, start_idx:, :, :]
-            # Do not trim for image2video or elsewhere!
             save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
             stream.output_queue.push(('file', output_filename))
             if is_last_section:
