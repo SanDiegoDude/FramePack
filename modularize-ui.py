@@ -652,20 +652,6 @@ with block:
         inputs=[aspect_selector],
         outputs=[custom_w, custom_h],
     )
-    prompt.submit(
-        fn=process,
-        inputs=ips,
-        outputs=[
-            result_video,
-            result_image_html,
-            preview_image,
-            progress_desc,
-            progress_bar,
-            start_button,
-            end_button,
-            seed
-        ]
-    )
     ips = [
         mode_selector,
         input_image,
@@ -688,6 +674,20 @@ with block:
         lock_seed,
         init_color,
     ]
+    prompt.submit(
+        fn=process,
+        inputs=ips,
+        outputs=[
+            result_video,
+            result_image_html,
+            preview_image,
+            progress_desc,
+            progress_bar,
+            start_button,
+            end_button,
+            seed
+        ]
+    )
     start_button.click(
         fn=process,
         inputs=ips,
