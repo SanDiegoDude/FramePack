@@ -126,20 +126,21 @@ def worker(
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache
 ):
     # -- deterministic output choice --
-    # If advanced: use adv_window/adv_seconds, else: derive from frame selector / fixed window=9
+    # If advanced: use adv_window/adv_seconds, else: derive from fixed window size and dropdown
     if use_adv:
         latent_window_size = adv_window
         frames_per_section = latent_window_size * 4 - 3
         total_frames = int(round(adv_seconds * 30))
+        total_sections = math.ceil(total_frames / frames_per_section)
     else:
         latent_window_size = 9
-        frames_per_section = latent_window_size * 4 - 3
-        total_frames = int(selected_frames)
-    extra_frames = frames_per_section if mode == "text2video" else 0
-    run_frames = total_frames + extra_frames
-    total_sections = math.ceil((run_frames + 3) / frames_per_section)
-    job_id = generate_timestamp()
+        frames_per_section = latent_window_size * 4 - 3  # LOCKED at 33
+        total_frames = int(selected_frames)  # Must be a multiple of 33
+        total_sections = total_frames // frames_per_section  # User can only select multiples of 33
 
+    extra_frames = frames_per_section if mode == "text2video" else 0
+    run_frames = total_sections * frames_per_section + extra_frames  # total frames generated (prior to extra frames trim)
+    job_id = generate_timestamp()
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
     try:
         if mode == "text2video":
@@ -238,23 +239,17 @@ def worker(
             if history_pixels is None:
                 history_pixels = vae_decode(real_history_latents, vae).cpu()
             else:
-                section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
                 overlapped_frames = frames_per_section
-                current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae).cpu()
+                current_pixels = vae_decode(real_history_latents[:, :, :overlapped_frames], vae).cpu()
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
             if not high_vram:
                 unload_complete_models()
+
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
             if mode == "text2video" and is_last_section:
-                # history_pixels is (1, 3, T, H, W) so cut T axis
-                if history_pixels.shape[2] > extra_frames + total_frames:
-                    history_pixels = history_pixels[:, :, extra_frames:extra_frames+total_frames, :, :]
-                else:
-                    history_pixels = history_pixels[:, :, extra_frames:, :, :]
-            elif is_last_section:
-                # Always slice to the user target!
-                if history_pixels.shape[2] > total_frames:
-                    history_pixels = history_pixels[:, :, :total_frames, :, :]
+                # Only skip initial extra frames, DO NOT TRIM
+                history_pixels = history_pixels[:, :, extra_frames:, :, :]
+            # Do not trim for image2video or elsewhere!
             save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
             stream.output_queue.push(('file', output_filename))
             if is_last_section:
@@ -266,14 +261,13 @@ def worker(
         return
     finally:
         t_end = time.time()
-        total_time = t_end - t_start
         trimmed_frames = history_pixels.shape[2] if history_pixels is not None else 0
         video_seconds = trimmed_frames / 30.0
         summary_string = (
             f"Finished!\n"
             f"Total generated frames: {trimmed_frames}, "
             f"Video length: {video_seconds:.2f} seconds (FPS-30), "
-            f"Time taken: {total_time:.2f}s."
+            f"Time taken: {t_end - t_start:.2f}s."
         )
         stream.output_queue.push(('progress', (None, summary_string, "")))
         stream.output_queue.push(('end', None))
