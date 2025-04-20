@@ -349,69 +349,7 @@ def worker(
         stream.output_queue.push(('end', None))
         debug("worker: pushed end event in finally (done)")
             
-            # TEXT2VIDEO --------
-            if mode == "text2video" and is_last_section:
-                N_actual = history_pixels.shape[2]
-                if latent_window_size == 3:
-                    drop_n = int(N_actual * 0.75)
-                    debug(f"special trim for 3: dropping first {drop_n} frames of {N_actual}")
-                elif latent_window_size == 4:
-                    drop_n = int(N_actual * 0.5)
-                    debug(f"special trim for 4: dropping first {drop_n} frames of {N_actual}")
-                else:
-                    drop_n = math.floor(N_actual * 0.2)
-                    debug(f"normal trim: dropping first {drop_n} of {N_actual}")
-                history_pixels = history_pixels[:, :, drop_n:, :, :]
-                N_after = history_pixels.shape[2]
-                debug(f"After trim, {N_after} frames left")
-                if N_after == 1:
-                    debug("worker: Only one frame left, exporting as image (image mode!)")
-                    last_img = history_pixels[0, :, 0].cpu().numpy()  # [3, H, W]
-                    last_img = np.clip((np.transpose(last_img, (1,2,0)) + 1) * 127.5, 0, 255).astype(np.uint8)
-                    img_filename = os.path.join(outputs_folder, f'{job_id}_final_image.png')
-                    Image.fromarray(last_img).save(img_filename)
-                    html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
-                    stream.output_queue.push(('file_img', (img_filename, html_link)))
-                    debug("worker: pushed file_img event")
-                    stream.output_queue.push(('end', None))
-                    debug("worker: pushed end after single image, returning early from worker")
-                    return
-            save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
-            debug("worker: called save_bcthw_as_mp4", output_filename)
-            stream.output_queue.push(('file', output_filename))
-            debug("worker: pushed file", output_filename)
-            if is_last_section:
-                debug("worker: is_last_section - break")
-                break
-    except Exception as ex:
-        debug("worker: EXCEPTION THROWN", ex)
-        traceback.print_exc()
-        if not high_vram:
-            unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
-        debug("worker: after exception and possible unload, exiting worker.")
-        stream.output_queue.push(('end', None))
-        debug("worker: exception: pushed end event")
-        return
-    finally:
-        debug("worker: in finally block, writing final summary/progress/end")
-        t_end = time.time()
-        if 'history_pixels' in locals() and history_pixels is not None:
-            trimmed_frames = history_pixels.shape[2]
-            video_seconds = trimmed_frames / 30.0
-        else:
-            trimmed_frames = 0
-            video_seconds = 0.0
-        summary_string = (
-            f"Finished!\n"
-            f"Total generated frames: {trimmed_frames}, "
-            f"Video length: {video_seconds:.2f} seconds (FPS-30), "
-            f"Time taken: {t_end - t_start:.2f}s."
-        )
-        stream.output_queue.push(('progress', (None, summary_string, "")))
-        debug("worker: pushed final progress event")
-        stream.output_queue.push(('end', None))
-        debug("worker: pushed end event in finally (done)")
-
+            
 def process(
     mode, input_image, aspect_selector, custom_w, custom_h,
     prompt, n_prompt, seed,
