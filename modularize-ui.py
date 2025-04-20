@@ -419,8 +419,16 @@ with block:
     def show_custom(aspect):
         show = aspect == "Custom..."
         return gr.update(visible=show), gr.update(visible=show)
-    latent_window_size.change(update_frame_dropdown, inputs=[latent_window_size], outputs=[total_frames_dropdown])
-    advanced_mode.change(show_hide_advanced, inputs=[advanced_mode], outputs=[latent_window_size, adv_seconds, total_frames_dropdown])
+    latent_window_size.change(
+        lambda window, adv: update_frame_dropdown(window) if not adv else gr.update(),
+        inputs=[latent_window_size, advanced_mode],
+        outputs=[total_frames_dropdown],
+    )
+    advanced_mode.change(
+        lambda adv, window: update_frame_dropdown(window) if not adv else gr.update(),
+        inputs=[advanced_mode, latent_window_size],
+        outputs=[total_frames_dropdown],
+    )
     mode_selector.change(
         switch_mode,
         inputs=[mode_selector],
