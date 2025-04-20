@@ -410,11 +410,11 @@ def process(
             output_filename = data
             debug("process: yielding file output", output_filename)
             yield (
-                gr.update(value=output_filename, visible=True), # result_video
-                gr.update(visible=False),                       # result_image_html
-                gr.update(visible=False),                       # preview_image
-                gr.update(value="", visible=False),             # progress_desc
-                gr.update(value="", visible=False),             # progress_bar
+                gr.update(value=output_filename, visible=True), 
+                gr.update(visible=False),                       
+                gr.update(visible=False),                       
+                gr.update(value="", visible=False),             
+                gr.update(value="", visible=False),             
                 gr.update(interactive=False),
                 gr.update(interactive=True),
                 gr.update()
@@ -510,7 +510,7 @@ with block:
             )
             custom_w = gr.Number(label="Width", value=768, visible=False)
             custom_h = gr.Number(label="Height", value=768, visible=False)
-            prompt = gr.Textbox(label="Prompt", value='')
+            prompt = gr.Textbox(label="Prompt", value='', lines=3)
             with gr.Row():
                 start_button = gr.Button(value="Start Generation")
                 end_button = gr.Button(value="End Generation", interactive=False)
