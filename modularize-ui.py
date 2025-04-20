@@ -309,15 +309,28 @@ def process(
     # Robust input image check (optional but recommended)
     if mode == 'image2video' and input_image is None:
         yield (
-            None, None, "Please upload an input image!", "",
-            gr.update(interactive=True), gr.update(interactive=False), gr.update()
+            None,         # result_video
+            None,         # result_image_html
+            None,         # preview_image
+            "Please upload an input image!",  # progress_desc (or use as error message!)
+            None,         # progress_bar
+            gr.update(interactive=True),  # start_button
+            gr.update(interactive=False), # end_button
+            gr.update()                   # seed
         )
         return
 
     if not lock_seed:
         seed = int(time.time()) % 2**32
     yield (
-        None, None, '', '', gr.update(interactive=False), gr.update(interactive=True), gr.update(value=seed)
+        None,              # result_video
+        None,              # result_image_html
+        None,              # preview_image
+        '',                # progress_desc
+        '',                # progress_bar
+        gr.update(interactive=False),
+        gr.update(interactive=True),
+        gr.update(value=seed)
     )
     stream = AsyncStream()
     async_run(
@@ -345,34 +358,51 @@ def process(
         if flag == 'file':
             output_filename = data
             yield (
-                gr.update(value=output_filename), gr.update(), gr.update(), gr.update(),
-                gr.update(interactive=False), gr.update(interactive=True), gr.update()
+                gr.update(value=output_filename, visible=True), # result_video
+                gr.update(visible=False),                       # result_image_html
+                gr.update(visible=False),                       # preview_image
+                gr.update(value="", visible=False),             # progress_desc
+                gr.update(value="", visible=False),             # progress_bar
+                gr.update(interactive=False),
+                gr.update(interactive=True),
+                gr.update()  # seed
             )
         elif flag == 'progress':
             preview, desc, html = data
             if desc:
                 last_desc = desc
             yield (
-                gr.update(), gr.update(visible=True, value=preview), desc, html,
-                gr.update(interactive=False), gr.update(interactive=True), gr.update()
+                gr.update(visible=False),           # result_video
+                gr.update(visible=False),           # result_image_html
+                gr.update(visible=True, value=preview), # preview_image
+                desc,                                  # progress_desc
+                html,                                  # progress_bar
+                gr.update(interactive=False),
+                gr.update(interactive=True),
+                gr.update()                            # seed
             )
         elif flag == 'file_img':
             img_filename, html_link = data
             yield (
-                gr.update(visible=False),           # hide video
-                gr.update(value=html_link, visible=True),  # show clickable HTML image
-                gr.update(visible=False),           # hide preview image
-                "Generated single frame image.",    # desc
-                gr.update(visible=False),           # hide progress bar
+                gr.update(visible=False),           # result_video
+                gr.update(value=html_link, visible=True),  # result_image_html (shows clickable image)
+                gr.update(visible=False),           # preview_image
+                "Generated single frame image.",    # progress_desc
+                gr.update(visible=False),           # progress_bar
                 gr.update(interactive=False),
                 gr.update(interactive=True),
-                gr.update()
+                gr.update()                         # seed
             )
         elif flag == 'end':
             yield (
-                gr.update(value=output_filename), gr.update(visible=False),
-                gr.update(visible=False), gr.update(value=last_desc), '',
-                gr.update(interactive=True), gr.update(interactive=False), gr.update()
+                gr.update(value=output_filename, visible=True), # result_video
+                gr.update(visible=False),                       # result_image_html
+                gr.update(visible=False),                       # preview_image
+                gr.update(value=last_desc, visible=True),       # progress_desc
+                gr.update(value="", visible=False),             # progress_bar
+                gr.update(interactive=True),
+                gr.update(interactive=False),
+                gr.update()  # seed
             )
 
 def end_process():
