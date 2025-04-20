@@ -31,7 +31,7 @@ def get_valid_frame_stops(latent_window_size, max_seconds=120, fps=30):
     stops = [frames_per_section * i for i in range(1, max_sections + 1)]
     return stops
 
-DEBUG = False
+DEBUG = True
 def debug(*a, **k):
     if DEBUG:
         print("[DEBUG]", *a, **k)
