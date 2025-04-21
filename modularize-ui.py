@@ -522,6 +522,45 @@ def worker(
                         traceback.print_exc()
                         stream.output_queue.push(('end', "img"))
                     return
+                    
+        # ----- keyframes trim when no start frame provided -----
+        elif mode == "keyframes" and start_frame is None:
+            N_actual = history_pixels.shape[2]
+            debug(f"keyframe mode with no start frame: considering trimming {N_actual} frames")
+            
+            # Use similar trim logic as text2video
+            if latent_window_size == 3:
+                drop_n = int(N_actual * 0.75)
+                debug(f"keyframe special trim for 3: dropping first {drop_n} frames of {N_actual}")
+            elif latent_window_size == 4:
+                drop_n = int(N_actual * 0.5)
+                debug(f"keyframe special trim for 4: dropping first {drop_n} frames of {N_actual}")
+            else:
+                drop_n = math.floor(N_actual * 0.2)  # Default to 20% trim
+                debug(f"keyframe normal trim: dropping first {drop_n} of {N_actual}")
+            
+            history_pixels = history_pixels[:, :, drop_n:, :, :]
+            N_after = history_pixels.shape[2]
+            debug(f"Final video after trim for keyframe (no start frame), {N_after} frames left")
+            
+            # Handle case where trimming leaves just one frame
+            if N_after == 1:
+                debug("After trimming keyframe video, only one frame remains - will save as image")
+                last_img_tensor = history_pixels[0, :, 0]
+                last_img = np.clip((np.transpose(last_img_tensor.cpu().numpy(), (1,2,0)) + 1) * 127.5, 0, 255).astype(np.uint8)
+                img_filename = os.path.join(outputs_folder, f'{job_id}_keyframe_final.png')
+                try:
+                    Image.fromarray(last_img).save(img_filename)
+                    debug(f"[FILE] Image saved: {img_filename}")
+                    html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
+                    stream.output_queue.push(('file_img', (img_filename, html_link)))
+                    stream.output_queue.push(('end', "img"))
+                    return
+                except Exception as e:
+                    debug(f"[ERROR] Save failed for keyframe single image: {e}")
+                    traceback.print_exc()
+                    stream.output_queue.push(('end', "img"))
+                    return
         
         # --------- Final MP4 Export ---------
         debug(f"[FILE] Attempting to save video to {output_filename}")
