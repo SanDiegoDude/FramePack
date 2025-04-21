@@ -203,27 +203,28 @@ def worker(
         if mode == "keyframes":
             if end_frame is None:
                 raise ValueError("Keyframes mode requires End Frame to be set!")
-            width, height = end_frame.shape[1], end_frame.shape[0]
             
-            # --- Build start-frame numpy image (may be uploaded or fallback) ---
+            # Use end_frame dimensions as the reference for everything
+            width, height = end_frame.shape[1], end_frame.shape[0]
+            debug(f"Using end frame dimensions for keyframe mode: {width}x{height}")
+            
+            # --- Build start-frame numpy image ---
             if start_frame is not None:
+                # Always resize start_frame to match end_frame dimensions
+                debug(f"Resizing start frame from {start_frame.shape[1]}x{start_frame.shape[0]} to {width}x{height}")
                 s_np = resize_and_center_crop(start_frame, target_width=width, target_height=height)
                 input_anchor_np = s_np
             else:
-                # Option 1: Use text2vid-style gray
+                # Use gray color if no start frame, using end frame dimensions
                 input_anchor_np = np.ones((height, width, 3), dtype=np.uint8) * 128
-                # Option 2: Use black: np.zeros((height, width, 3), dtype=np.uint8)
-                # Option 3: Use color picker/other logic as you like
-            
-            # Save for debugging (optional)
-            Image.fromarray(input_anchor_np).save(os.path.join(outputs_folder, f'{generate_timestamp()}_keyframes_start.png'))
+                debug(f"Created gray start frame with dimensions {width}x{height}")
             
             # --- VAE encode ---
             input_anchor_tensor = torch.from_numpy(input_anchor_np).float() / 127.5 - 1
             input_anchor_tensor = input_anchor_tensor.permute(2, 0, 1)[None, :, None].float()
-            start_latent = vae_encode(input_anchor_tensor, vae.float())  # always shape [1,16,1,H//8,W//8]
+            start_latent = vae_encode(input_anchor_tensor, vae.float())
             
-            # --- End frame processing (always required) ---
+            # --- End frame processing (no need to resize, use directly) ---
             end_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
             end_tensor = torch.from_numpy(end_np).float() / 127.5 - 1
             end_tensor = end_tensor.permute(2, 0, 1)[None, :, None].float()
