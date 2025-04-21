@@ -176,30 +176,37 @@ def worker(
 ):
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
+
+    # -- section/frames logic
     if use_adv:
         latent_window_size = adv_window
         frames_per_section = latent_window_size * 4 - 3
         total_frames = int(round(adv_seconds * 30))
         total_sections = math.ceil(total_frames / frames_per_section)
-        debug(f"worker: Advanced mode | latent_window_size={latent_window_size} | frames_per_section={frames_per_section} | total_frames={total_frames} | total_sections={total_sections}")
+        debug(f"worker: Advanced mode | latent_window_size={latent_window_size} "
+              f"| frames_per_section={frames_per_section} | total_frames={total_frames} | total_sections={total_sections}")
     else:
         latent_window_size = 9
         frames_per_section = latent_window_size * 4 - 3
         total_frames = int(selected_frames)
         total_sections = total_frames // frames_per_section
-        debug(f"worker: Simple mode | latent_window_size=9 | frames_per_section=33 | total_frames={total_frames} | total_sections={total_sections}")
+        debug(f"worker: Simple mode | latent_window_size=9 | frames_per_section=33 | "
+              f"total_frames={total_frames} | total_sections={total_sections}")
+
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
     debug("worker: pushed progress event 'Starting ...'")
 
     try:
         t_start = time.time()
 
+        # ----------- Mode and input setup -------------
         if mode == "keyframes":
             if end_frame is None:
                 raise ValueError("Keyframes mode requires End Frame to be set!")
             width, height = end_frame.shape[1], end_frame.shape[0]
         elif mode == "text2video":
             width, height = get_dims_from_aspect(aspect, custom_w, custom_h)
+            input_image_arr = None
             if init_color is not None:
                 r, g, b = parse_hex_color(init_color)
                 debug(f"worker: Using color picker value {init_color} -> RGB {r},{g},{b}")
@@ -208,34 +215,39 @@ def worker(
                 input_image_arr[:, :, 1] = int(g * 255)
                 input_image_arr[:, :, 2] = int(b * 255)
             else:
-                debug("worker: No color provided, defaulting to black")
                 input_image_arr = np.zeros((height, width, 3), dtype=np.uint8)
+                debug("worker: No color provided, defaulting to black")
             input_image = input_image_arr
 
+        # ---------- Text & Prompt encodings ----------
         debug("worker: preparing inputs")
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Text encoding ...'))))
         debug("worker: pushed 'Text encoding ...' progress event")
 
         if mode == "keyframes":
+            # --- Keyframes logic (custom): latents from VAE
             if start_frame is not None:
                 s_np = resize_and_center_crop(start_frame, target_width=width, target_height=height)
                 s_tensor = torch.from_numpy(s_np).float() / 127.5 - 1
                 s_tensor = s_tensor.permute(2, 0, 1)[None, :, None].float()
-                start_latent = vae_encode(s_tensor, vae.float())
+                start_latent = vae_encode(s_tensor.float(), vae.float())
             else:
                 start_latent = torch.zeros((1, 16, 1, height//8, width//8), dtype=torch.float32)
             e_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
             e_tensor = torch.from_numpy(e_np).float() / 127.5 - 1
             e_tensor = e_tensor.permute(2, 0, 1)[None, :, None].float()
-            end_latent = vae_encode(e_tensor, vae.float())
+            end_latent = vae_encode(e_tensor.float(), vae.float())
             # Prompts for all modes, for simplicity:
-            lv, cp = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
+            lv, cp     = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
             lv_n, cp_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
-            # Fallback mask is all ones (no mask effect) shape compatible w/ LV
-            m = torch.ones_like(lv)
-            m_n = torch.ones_like(lv_n)
+            m    = torch.ones_like(lv)
+            m_n  = torch.ones_like(lv_n)
+            inp_np = None
         else:
-            inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = prepare_inputs(input_image, prompt, n_prompt, cfg)
+            # --- Image2Video/Text2Video (legacy/unchanged)
+            inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = prepare_inputs(
+                input_image, prompt, n_prompt, cfg
+            )
             start_latent = vae_encode(inp_tensor.float(), vae.float())
 
         debug("worker: VAE encoded")
@@ -255,18 +267,25 @@ def worker(
         cp_n = cp_n.to(transformer.dtype)
         if clip_output is not None:
             clip_output = clip_output.to(transformer.dtype)
+
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Start sampling ...'))))
         debug("worker: pushed 'Start sampling ...' progress event")
         rnd = torch.Generator("cpu").manual_seed(seed)
+
         history_latents = torch.zeros(
             size=(1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32
         ).cpu()
         history_pixels = None
         total_generated_latent_frames = 0
+
+        # -------- SECTION PATCH/STITCH LOOP ----------
         for section in reversed(range(total_sections)):
-            is_first_section = section == (total_sections-1)
+            is_first_section = section == (total_sections - 1)
             is_last_section = section == 0
+
+            # ===== PATCH LOGIC =====
             if mode == "keyframes":
+                # --- Keyframes mode custom patching logic (OK to diverge)
                 if start_frame is not None:
                     pre_latent = start_latent
                 else:
@@ -276,19 +295,33 @@ def worker(
                 if is_first_section:
                     clean_latents_post = post_latent.to(history_latents)
                 else:
-                    clean_latents_post = history_latents[:, :, :1+2+16, :, :].split([1, 2, 16], dim=2)[1]
+                    clean_latents_post = history_latents[:, :, :1+2+16, :, :].split([1,2,16],dim=2)[1]
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
+                # NOTE: You can further tailor indices if required for keyframes logic
             else:
+                # ====== 100% LEGACY PATCH OVERLAP CODE: DO NOT TOUCH! ======
+                clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = \
+                    torch.arange(1 + 1 + latent_window_size + 1 + 2 + 16).split( [1, latent_window_size, latent_window_size, 1, 2, 16] )
                 clean_latents_pre = start_latent.to(history_latents)
                 clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
+                # ====== END LEGACY PATCH CODE ======
+
+            # ------- mask fallback safeguard -------
+            m   = m if m is not None else torch.ones_like(lv)
+            m_n = m_n if m_n is not None else torch.ones_like(lv_n)
+
+            # -- memory mgmt
             if not high_vram:
                 unload_complete_models()
                 debug("worker: unloaded complete models")
                 move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
                 debug("worker: moved transformer to gpu (memory preservation)")
+
             transformer.initialize_teacache(enable_teacache=use_teacache, num_steps=steps if use_teacache else 0)
             debug("worker: teacache initialized", "use_teacache", use_teacache)
+
+            # --- sampling ---
             def callback(d):
                 preview = d['denoised']
                 preview = vae_decode_fake(preview)
@@ -301,9 +334,10 @@ def worker(
                 current_step = d['i'] + 1
                 percentage = int(100.0 * current_step / steps)
                 hint = f'Sampling {current_step}/{steps}'
-                desc = f'Total generated frames: {total_generated_latent_frames}, Video length: {total_generated_latent_frames / 30.0:.2f} seconds (FPS-30).'
+                desc = f'Total generated frames: {total_generated_latent_frames}, Video length: {total_generated_latent_frames/30.0:.2f} seconds (FPS-30).'
                 debug("worker: In callback, push progress preview at step", current_step, "/", steps)
                 stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
+
             generated_latents = sample_hunyuan(
                 transformer=transformer,
                 sampler='unipc',
@@ -316,10 +350,10 @@ def worker(
                 num_inference_steps=steps,
                 generator=rnd,
                 prompt_embeds=lv,
-                prompt_embeds_mask=m,            # <--- CRUCIAL: use real mask from prepare_inputs!
+                prompt_embeds_mask=m,
                 prompt_poolers=cp,
                 negative_prompt_embeds=lv_n,
-                negative_prompt_embeds_mask=m_n, # <--- CRUCIAL: use real negative mask!
+                negative_prompt_embeds_mask=m_n,
                 negative_prompt_poolers=cp_n,
                 device=gpu,
                 dtype=torch.bfloat16,
@@ -331,7 +365,7 @@ def worker(
                 clean_latent_2x_indices=None,
                 clean_latents_4x=None,
                 clean_latent_4x_indices=None,
-                callback=callback,
+                callback=callback
             )
             if is_last_section:
                 generated_latents = torch.cat([start_latent.to(generated_latents), generated_latents], dim=2)
@@ -339,6 +373,8 @@ def worker(
             total_generated_latent_frames += int(generated_latents.shape[2])
             history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
             debug("worker: history_latents.shape after concat", history_latents.shape)
+
+            # ------- decode & video preview -----
             if not high_vram:
                 offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
                 debug("worker: offloaded transformer")
@@ -346,41 +382,41 @@ def worker(
                 debug("worker: loaded vae to gpu (again)")
             real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
             if history_pixels is None:
-                history_pixels = vae_decode(real_history_latents, vae).cpu()
+                history_pixels = vae_decode(real_history_latents.float(), vae.float()).cpu()
                 debug("worker: vae decoded (first time)")
-                # Save in-progress video for preview
                 preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
                 try:
                     save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
                     debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
                     stream.output_queue.push(('preview_video', preview_filename))
-                    debug(f"[QUEUE] Queued preview_video event: {preview_filename}")
                 except Exception as e:
                     debug(f"[ERROR] Failed to save preview video: {e}")
             else:
+                # If not first, do overlap/soft-append (legacy): (fix your typo here!)
                 section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
-                overlapped_frames = latent_window_size * 4 - 3
-                current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae).cpu()
+                overlapped_frames = frames_per_section
+                current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames].float(), vae.float()).cpu()
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
                 debug("worker: vae decoded + soft_append_bcthw")
-                # Save in-progress video for preview
                 preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
                 try:
                     save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
                     debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
                     stream.output_queue.push(('preview_video', preview_filename))
-                    debug(f"[QUEUE] Queued preview_video event: {preview_filename}")
                 except Exception as e:
                     debug(f"[ERROR] Failed to save preview video: {e}")
+
             if not high_vram:
                 unload_complete_models()
                 debug("worker: unloaded complete models (end section)")
+
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
+
             if is_last_section:
                 debug("worker: is_last_section - break")
                 break
 
-        # ---- Final export logic ----
+        # --------- Final MP4 Export ---------
         debug(f"[FILE] Attempting to save video to {output_filename}")
         try:
             save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
@@ -392,6 +428,7 @@ def worker(
         except Exception as e:
             debug(f"[ERROR] FAILED to save video {output_filename}: {e}")
             traceback.print_exc()
+
     except Exception as ex:
         debug("worker: EXCEPTION THROWN", ex)
         traceback.print_exc()
