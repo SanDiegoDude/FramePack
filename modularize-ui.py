@@ -424,65 +424,65 @@ def worker(
             history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
             debug("worker: history_latents.shape after concat", history_latents.shape)
 
-       # ------- decode & video preview -----
-        if not high_vram:
-            offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
-            debug("worker: offloaded transformer")
-            load_model_as_complete(vae, target_device=gpu)
-            debug("worker: loaded vae to gpu (again)")
-        
-        # ---- Guarantee the last N latent frames match encoded end_frame ----
-        if mode == "keyframes" and end_frame is not None:
-            n_force = 1  # Number of frames to anchor exactly; tweak if you want a hold
-            end_latent = vae_encode(
-                torch.from_numpy(resize_and_center_crop(end_frame, target_width=width, target_height=height))
-                .float() / 127.5 - 1
-                .permute(2, 0, 1)[None, :, None].float(), vae.float())
-            history_latents[:, :, -n_force:, :, :] = end_latent.expand_as(history_latents[:, :, -n_force:, :, :])
-            debug(f"worker: forced last {n_force} latent frame(s) to end_frame.")
-        
-        real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
-        
-        if history_pixels is None:
-            history_pixels = vae_decode(real_history_latents.float(), vae.float()).cpu()
-            debug("worker: vae decoded (first time)")
-            preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
-            try:
-                save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
-                debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
-                stream.output_queue.push(('preview_video', preview_filename))
-            except Exception as e:
-                debug(f"[ERROR] Failed to save preview video: {e}")
-        else:
-            section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
-            overlapped_frames = frames_per_section
-            current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames].float(), vae.float()).cpu()
-            history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
-            debug("worker: vae decoded + soft_append_bcthw")
-            preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
-            try:
-                save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
-                debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
-                stream.output_queue.push(('preview_video', preview_filename))
-            except Exception as e:
-                debug(f"[ERROR] Failed to save preview video: {e}")
-        
-        # ---- Guarantee the last pixel frame matches the (resized) end_frame ----
-        if mode == "keyframes" and end_frame is not None:
-            end_img_np = resize_and_center_crop(end_frame, target_width=history_pixels.shape[-2], target_height=history_pixels.shape[-1])
-            end_img_tensor = torch.from_numpy(end_img_np).float() / 127.5 - 1
-            end_img_tensor = end_img_tensor.permute(2, 0, 1)
-            history_pixels[0, :, -1, :, :] = end_img_tensor
-            debug("worker: forced last decoded frame to exact end_image.")
-        
-        if not high_vram:
-            unload_complete_models()
-            debug("worker: unloaded complete models (end section)")
-        
-        output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
-        if is_last_section:
-            debug("worker: is_last_section - break")
-            break
+           # ------- decode & video preview -----
+            if not high_vram:
+                offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
+                debug("worker: offloaded transformer")
+                load_model_as_complete(vae, target_device=gpu)
+                debug("worker: loaded vae to gpu (again)")
+            
+            # ---- Guarantee the last N latent frames match encoded end_frame ----
+            if mode == "keyframes" and end_frame is not None:
+                n_force = 1  # Number of frames to anchor exactly; tweak if you want a hold
+                end_latent = vae_encode(
+                    torch.from_numpy(resize_and_center_crop(end_frame, target_width=width, target_height=height))
+                    .float() / 127.5 - 1
+                    .permute(2, 0, 1)[None, :, None].float(), vae.float())
+                history_latents[:, :, -n_force:, :, :] = end_latent.expand_as(history_latents[:, :, -n_force:, :, :])
+                debug(f"worker: forced last {n_force} latent frame(s) to end_frame.")
+            
+            real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
+            
+            if history_pixels is None:
+                history_pixels = vae_decode(real_history_latents.float(), vae.float()).cpu()
+                debug("worker: vae decoded (first time)")
+                preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
+                try:
+                    save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
+                    debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
+                    stream.output_queue.push(('preview_video', preview_filename))
+                except Exception as e:
+                    debug(f"[ERROR] Failed to save preview video: {e}")
+            else:
+                section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
+                overlapped_frames = frames_per_section
+                current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames].float(), vae.float()).cpu()
+                history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
+                debug("worker: vae decoded + soft_append_bcthw")
+                preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
+                try:
+                    save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
+                    debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
+                    stream.output_queue.push(('preview_video', preview_filename))
+                except Exception as e:
+                    debug(f"[ERROR] Failed to save preview video: {e}")
+            
+            # ---- Guarantee the last pixel frame matches the (resized) end_frame ----
+            if mode == "keyframes" and end_frame is not None:
+                end_img_np = resize_and_center_crop(end_frame, target_width=history_pixels.shape[-2], target_height=history_pixels.shape[-1])
+                end_img_tensor = torch.from_numpy(end_img_np).float() / 127.5 - 1
+                end_img_tensor = end_img_tensor.permute(2, 0, 1)
+                history_pixels[0, :, -1, :, :] = end_img_tensor
+                debug("worker: forced last decoded frame to exact end_image.")
+            
+            if not high_vram:
+                unload_complete_models()
+                debug("worker: unloaded complete models (end section)")
+            
+            output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
+            if is_last_section:
+                debug("worker: is_last_section - break")
+                break
 
         # ---- Final export logic (txt2video special handling) ----
         if mode == "text2video":
