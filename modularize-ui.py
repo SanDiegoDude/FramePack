@@ -276,8 +276,6 @@ def worker(
             debug("worker: loaded image_encoder to gpu")
         if mode == "text2video" or mode == "image2video":
             clip_output = hf_clip_vision_encode(inp_np, feature_extractor, image_encoder).last_hidden_state
-        else:
-            clip_output = None
         debug("worker: got clip output last_hidden_state")
         lv = lv.to(transformer.dtype)
         lv_n = lv_n.to(transformer.dtype)
