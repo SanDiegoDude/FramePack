@@ -418,29 +418,29 @@ def worker(
                 break
 
 
-            # ---- Final export logic (txt2video special handling) ----
-            if mode == "text2video":
-                N_actual = history_pixels.shape[2]
-                # ----- txt2img edge-case: make a single image if very short/low window -----
-                if latent_window_size == 2 and total_sections == 1 and total_frames <= 8:
-                    debug("txt2img branch: pulling last frame, skipping video trim (window=2, adv=0.1)")
-                    last_img_tensor = history_pixels[0, :, -1]
-                    last_img = np.clip((np.transpose(last_img_tensor.cpu().numpy(), (1, 2, 0)) + 1) * 127.5, 0, 255).astype(np.uint8)
-                    img_filename = os.path.join(outputs_folder, f'{job_id}_final_image.png')
-                    debug(f"[FILE] Saving single-frame image {img_filename}")
-                    try:
-                        Image.fromarray(last_img).save(img_filename)
-                        debug(f"[FILE] Image saved: {img_filename}")
-                        html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
-                        stream.output_queue.push(('file_img', (img_filename, html_link)))
-                        debug(f"[QUEUE] Queued file_img event: {img_filename}")
-                        stream.output_queue.push(('end', "img"))
-                        debug("[QUEUE] Queued event 'end' for image")
-                    except Exception as e:
-                        debug(f"[ERROR] Save failed for txt2img: {e}")
-                        traceback.print_exc()
-                        stream.output_queue.push(('end', "img"))
-                    return
+        # ---- Final export logic (txt2video special handling) ----
+        if mode == "text2video":
+            N_actual = history_pixels.shape[2]
+            # ----- txt2img edge-case: make a single image if very short/low window -----
+            if latent_window_size == 2 and total_sections == 1 and total_frames <= 8:
+                debug("txt2img branch: pulling last frame, skipping video trim (window=2, adv=0.1)")
+                last_img_tensor = history_pixels[0, :, -1]
+                last_img = np.clip((np.transpose(last_img_tensor.cpu().numpy(), (1, 2, 0)) + 1) * 127.5, 0, 255).astype(np.uint8)
+                img_filename = os.path.join(outputs_folder, f'{job_id}_final_image.png')
+                debug(f"[FILE] Saving single-frame image {img_filename}")
+                try:
+                    Image.fromarray(last_img).save(img_filename)
+                    debug(f"[FILE] Image saved: {img_filename}")
+                    html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
+                    stream.output_queue.push(('file_img', (img_filename, html_link)))
+                    debug(f"[QUEUE] Queued file_img event: {img_filename}")
+                    stream.output_queue.push(('end', "img"))
+                    debug("[QUEUE] Queued event 'end' for image")
+                except Exception as e:
+                    debug(f"[ERROR] Save failed for txt2img: {e}")
+                    traceback.print_exc()
+                    stream.output_queue.push(('end', "img"))
+                return
                 # ----- else: normal text2video, trim initial frames -----
                 else:
                     if latent_window_size == 3:
