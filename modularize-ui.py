@@ -433,7 +433,6 @@ def worker(
             
             # ---- Guarantee the last N latent frames match encoded end_frame ----
             if mode == "keyframes" and end_frame is not None:
-                # Note the swap in target_height/target_width:
                 target_h = history_pixels.shape[-2]
                 target_w = history_pixels.shape[-1]
                 end_img_np = resize_and_center_crop(end_frame, target_width=target_w, target_height=target_h)
