@@ -118,7 +118,6 @@ def prepare_inputs(input_image, prompt, n_prompt, cfg):
     if not high_vram:
         unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
     fake_diffusers_current_device(text_encoder, gpu)
-    load_model_as_complete(text_encoder, target_device=gpu)
     load_model_as_complete(text_encoder_2, target_device=gpu)
     llama_vec, clip_pool = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
     if cfg == 1:
