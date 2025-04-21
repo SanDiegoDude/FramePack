@@ -433,11 +433,11 @@ def worker(
             
             # ---- Guarantee the last N latent frames match encoded end_frame ----
             if mode == "keyframes" and end_frame is not None:
-                n_force = 1  # Number of frames to anchor exactly; tweak if you want a hold
-                end_latent = vae_encode(
-                    torch.from_numpy(resize_and_center_crop(end_frame, target_width=width, target_height=height))
-                    .float() / 127.5 - 1
-                    .permute(2, 0, 1)[None, :, None].float(), vae.float())
+                n_force = 1
+                end_img_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
+                end_img_tensor = torch.from_numpy(end_img_np).float() / 127.5 - 1
+                end_img_tensor = end_img_tensor.permute(2, 0, 1)[None, :, None].float()
+                end_latent = vae_encode(end_img_tensor, vae.float())
                 history_latents[:, :, -n_force:, :, :] = end_latent.expand_as(history_latents[:, :, -n_force:, :, :])
                 debug(f"worker: forced last {n_force} latent frame(s) to end_frame.")
             
