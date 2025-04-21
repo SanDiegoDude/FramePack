@@ -30,6 +30,11 @@ def encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokeniz
     llama_attention_mask = llama_inputs.attention_mask.to(text_encoder.device)
     llama_attention_length = int(llama_attention_mask.sum())
 
+    # --- DEBUG OUTPUT ---
+    print("ENCODE DEBUG llama_input_ids.device", llama_input_ids.device)
+    print("ENCODE DEBUG text_encoder.device", text_encoder.device)
+    print("ENCODE DEBUG text_encoder type", type(text_encoder), id(text_encoder))
+    
     llama_outputs = text_encoder(
         input_ids=llama_input_ids,
         attention_mask=llama_attention_mask,
