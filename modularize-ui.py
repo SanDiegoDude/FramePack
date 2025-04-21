@@ -243,6 +243,12 @@ def worker(
             fake_diffusers_current_device(text_encoder, gpu)
             load_model_as_complete(text_encoder, target_device=gpu)
             load_model_as_complete(text_encoder_2, target_device=gpu)
+
+            # --- DEBUGGING OUTPUT ---
+            debug("text_encoder:", text_encoder)        # print repr for class AND id()
+            debug("text_encoder.device:", getattr(text_encoder, "device", "no .device"))
+            debug("text_encoder_2:", text_encoder_2)
+            debug("text_encoder_2.device:", getattr(text_encoder_2, "device", "no .device"))
             
             # --- Prompt/CLIP encodings ---
             lv, cp = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
