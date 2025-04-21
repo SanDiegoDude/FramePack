@@ -663,7 +663,13 @@ def worker(
         stream.output_queue.push(('end', None))
         debug("worker: pushed end event in finally (done)")
             
-global stream
+def process(
+    mode, input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h,
+    prompt, n_prompt, seed,
+    use_adv, adv_window, adv_seconds, selected_frames,
+    steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color
+):
+    global stream
     debug("process: called with mode", mode)
     assert mode in ['image2video', 'text2video', 'keyframes'], "Invalid mode"
     
