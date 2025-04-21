@@ -238,6 +238,11 @@ def worker(
             e_tensor = e_tensor.permute(2, 0, 1)[None, :, None].float()
             end_latent = vae_encode(e_tensor.float(), vae.float())
             # Prompts for all modes, for simplicity:
+            if not high_vram:
+                unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
+            fake_diffusers_current_device(text_encoder, gpu)
+            load_model_as_complete(text_encoder_2, target_device=gpu)
+        
             lv, cp     = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
             lv_n, cp_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
             m    = torch.ones_like(lv)
