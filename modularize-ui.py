@@ -127,8 +127,8 @@ def prepare_inputs(input_image, prompt, n_prompt, cfg):
     if not high_vram:
         unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
     fake_diffusers_current_device(text_encoder, gpu)
-    load_model_as_complete(text_encoder, target_device=gpu)
-    load_model_as_complete(text_encoder_2, target_device=gpu)
+    text_encoder = load_model_as_complete(text_encoder, target_device=gpu)
+    text_encoder_2 = load_model_as_complete(text_encoder_2, target_device=gpu)
     llama_vec, clip_pool = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
     if cfg == 1:
         llama_vec_n, clip_pool_n = torch.zeros_like(llama_vec), torch.zeros_like(clip_pool)
@@ -242,8 +242,8 @@ def worker(
             if not high_vram:
                 unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
             fake_diffusers_current_device(text_encoder, gpu)
-            text_encoder     = load_model_as_complete(text_encoder, target_device=gpu)
-            text_encoder_2   = load_model_as_complete(text_encoder_2, target_device=gpu)
+            text_encoder = load_model_as_complete(text_encoder, target_device=gpu)
+            text_encoder_2 = load_model_as_complete(text_encoder_2, target_device=gpu)
 
             # --- DEBUGGING OUTPUT ---
             debug("text_encoder:", text_encoder)        # print repr for class AND id()
@@ -252,6 +252,7 @@ def worker(
             debug("text_encoder_2.device:", getattr(text_encoder_2, "device", "no .device"))
             
             # --- Prompt/CLIP encodings ---
+            llama_input_ids = llama_input_ids.to(text_encoder.device) if 'llama_input_ids' in locals() else None
             lv, cp = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
             lv_n, cp_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
             lv, mask = crop_or_pad_yield_mask(lv, 512)
