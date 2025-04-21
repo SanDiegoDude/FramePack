@@ -417,6 +417,63 @@ def worker(
                 debug("worker: is_last_section - break")
                 break
 
+
+            # ---- Final export logic (txt2video special handling) ----
+            if mode == "text2video":
+                N_actual = history_pixels.shape[2]
+                # ----- txt2img edge-case: make a single image if very short/low window -----
+                if latent_window_size == 2 and total_sections == 1 and total_frames <= 8:
+                    debug("txt2img branch: pulling last frame, skipping video trim (window=2, adv=0.1)")
+                    last_img_tensor = history_pixels[0, :, -1]
+                    last_img = np.clip((np.transpose(last_img_tensor.cpu().numpy(), (1, 2, 0)) + 1) * 127.5, 0, 255).astype(np.uint8)
+                    img_filename = os.path.join(outputs_folder, f'{job_id}_final_image.png')
+                    debug(f"[FILE] Saving single-frame image {img_filename}")
+                    try:
+                        Image.fromarray(last_img).save(img_filename)
+                        debug(f"[FILE] Image saved: {img_filename}")
+                        html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
+                        stream.output_queue.push(('file_img', (img_filename, html_link)))
+                        debug(f"[QUEUE] Queued file_img event: {img_filename}")
+                        stream.output_queue.push(('end', "img"))
+                        debug("[QUEUE] Queued event 'end' for image")
+                    except Exception as e:
+                        debug(f"[ERROR] Save failed for txt2img: {e}")
+                        traceback.print_exc()
+                        stream.output_queue.push(('end', "img"))
+                    return
+                # ----- else: normal text2video, trim initial frames -----
+                else:
+                    if latent_window_size == 3:
+                        drop_n = int(N_actual * 0.75)
+                        debug(f"special trim for 3: dropping first {drop_n} frames of {N_actual}")
+                    elif latent_window_size == 4:
+                        drop_n = int(N_actual * 0.5)
+                        debug(f"special trim for 4: dropping first {drop_n} frames of {N_actual}")
+                    else:
+                        drop_n = math.floor(N_actual * 0.2)
+                        debug(f"normal trim: dropping first {drop_n} of {N_actual}")
+                    history_pixels = history_pixels[:, :, drop_n:, :, :]
+                    N_after = history_pixels.shape[2]
+                    debug(f"Final video after trim for txt2vid, {N_after} frames left")
+                    if N_after == 1:
+                        last_img_tensor = history_pixels[0, :, 0]
+                        last_img = np.clip((np.transpose(last_img_tensor.cpu().numpy(), (1,2,0)) + 1) * 127.5, 0, 255).astype(np.uint8)
+                        img_filename = os.path.join(outputs_folder, f'{job_id}_final_image.png')
+                        debug(f"[FILE] Final single-frame image due to trim: {img_filename}")
+                        try:
+                            Image.fromarray(last_img).save(img_filename)
+                            debug(f"[FILE] Image saved: {img_filename}")
+                            html_link = f'<a href="file/{img_filename}" target="_blank"><img src="file/{img_filename}" style="max-width:100%;border:3px solid orange;border-radius:8px;" title="Click for full size"></a>'
+                            stream.output_queue.push(('file_img', (img_filename, html_link)))
+                            debug(f"[QUEUE] Queued file_img event: {img_filename}")
+                            stream.output_queue.push(('end', "img"))
+                            debug("[QUEUE] Queued event 'end' for image")
+                        except Exception as e:
+                            debug(f"[ERROR] Save failed for trimmed single image: {e}")
+                            traceback.print_exc()
+                            stream.output_queue.push(('end', "img"))
+                        return
+        
         # --------- Final MP4 Export ---------
         debug(f"[FILE] Attempting to save video to {output_filename}")
         try:
@@ -688,10 +745,12 @@ with block:
             return lw_vis, secs_vis, dropdown_vis
     def switch_mode(mode):
         return (
-            gr.update(visible=mode=="image2video"),
-            gr.update(visible=mode=="text2video"),
-            gr.update(visible=False),  # custom_w
-            gr.update(visible=False),  # custom_h
+            gr.update(visible=mode == "image2video"),  # input_image
+            gr.update(visible=(mode == "keyframes")),  # start_frame
+            gr.update(visible=(mode == "keyframes")),  # end_frame
+            gr.update(visible=(mode == "text2video")),  # aspect_selector
+            gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_w
+            gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_h
         )
     def show_custom(aspect):
         show = aspect == "Custom..."
