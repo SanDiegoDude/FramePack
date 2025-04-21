@@ -199,11 +199,13 @@ def worker(
     try:
         t_start = time.time()
 
-        # ----------- Mode and input setup -------------
+        # ----------- Mode and input setup & prompts -------------
         if mode == "keyframes":
             if end_frame is None:
                 raise ValueError("Keyframes mode requires End Frame to be set!")
             width, height = end_frame.shape[1], end_frame.shape[0]
+        
+            # Start frame (optional)
             if start_frame is not None:
                 s_np = resize_and_center_crop(start_frame, target_width=width, target_height=height)
                 s_tensor = torch.from_numpy(s_np).float() / 127.5 - 1
@@ -211,14 +213,38 @@ def worker(
                 start_latent = vae_encode(s_tensor.float(), vae.float())
                 inp_np = s_np
             else:
-                start_latent = torch.zeros((1, 16, 1, height//8, width//8), dtype=torch.float32)
-                # build a blank RGB frame for vision encoder:
-                s_np = np.zeros((height, width, 3), dtype=np.uint8)
-                inp_np = s_np
-            # ...now use inp_np for vision encoder embeddings below regardless ...
+                # If missing, use zeros for both VAE and image embeddings
+                start_latent = torch.zeros((1, 16, 1, height // 8, width // 8), dtype=torch.float32)
+                inp_np = np.zeros((height, width, 3), dtype=np.uint8)
+        
+            # End frame (always required)
+            e_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
+            e_tensor = torch.from_numpy(e_np).float() / 127.5 - 1
+            e_tensor = e_tensor.permute(2, 0, 1)[None, :, None].float()
+            end_latent = vae_encode(e_tensor.float(), vae.float())
+        
+            # Device moves for encoders (same as prepare_inputs)
+            if not high_vram:
+                unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
+            fake_diffusers_current_device(text_encoder, gpu)
+            load_model_as_complete(text_encoder_2, target_device=gpu)
+        
+            # Prompt encodings *with correct mask shapes*
+            lv, cp     = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
+            lv, mask   = crop_or_pad_yield_mask(lv, 512)
+            lv_n, cp_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
+            lv_n, mask_n = crop_or_pad_yield_mask(lv_n, 512)
+            m    = mask
+            m_n  = mask_n
+        
+            # CLIP Vision embedding
+            if not high_vram:
+                load_model_as_complete(image_encoder, target_device=gpu)
+                debug("worker: loaded image_encoder to gpu")
+            clip_output = hf_clip_vision_encode(inp_np, feature_extractor, image_encoder).last_hidden_state
+        
         elif mode == "text2video":
             width, height = get_dims_from_aspect(aspect, custom_w, custom_h)
-            input_image_arr = None
             if init_color is not None:
                 r, g, b = parse_hex_color(init_color)
                 debug(f"worker: Using color picker value {init_color} -> RGB {r},{g},{b}")
@@ -230,47 +256,12 @@ def worker(
                 input_image_arr = np.zeros((height, width, 3), dtype=np.uint8)
                 debug("worker: No color provided, defaulting to black")
             input_image = input_image_arr
-
+        
         # ---------- Text & Prompt encodings ----------
         debug("worker: preparing inputs")
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Text encoding ...'))))
         debug("worker: pushed 'Text encoding ...' progress event")
-
-        if mode == "keyframes":
-            # --- Keyframes logic (custom): latents from VAE
-            if start_frame is not None:
-                s_np = resize_and_center_crop(start_frame, target_width=width, target_height=height)
-                s_tensor = torch.from_numpy(s_np).float() / 127.5 - 1
-                s_tensor = s_tensor.permute(2, 0, 1)[None, :, None].float()
-                start_latent = vae_encode(s_tensor.float(), vae.float())
-            else:
-                start_latent = torch.zeros((1, 16, 1, height//8, width//8), dtype=torch.float32)
-            e_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
-            e_tensor = torch.from_numpy(e_np).float() / 127.5 - 1
-            e_tensor = e_tensor.permute(2, 0, 1)[None, :, None].float()
-            end_latent = vae_encode(e_tensor.float(), vae.float())
-            # Prompts for all modes, for simplicity:
-            if not high_vram:
-                unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
-            fake_diffusers_current_device(text_encoder, gpu)
-            load_model_as_complete(text_encoder_2, target_device=gpu)
-        
-            lv, cp     = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
-            lv, mask   = crop_or_pad_yield_mask(lv, 512)
-            lv_n, cp_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
-            lv_n, mask_n = crop_or_pad_yield_mask(lv_n, 512)
-            m    = mask
-            m_n  = mask_n
-            s_np = resize_and_center_crop(start_frame, target_width=width, target_height=height)
-            s_tensor = torch.from_numpy(s_np).float() / 127.5 - 1
-            s_tensor = s_tensor.permute(2, 0, 1)[None, :, None].float()
-            start_latent = vae_encode(s_tensor.float(), vae.float())                        
-            inp_np = s_np
-            if not high_vram:
-                load_model_as_complete(image_encoder, target_device=gpu)
-                debug("worker: loaded image_encoder to gpu")
-            clip_output = hf_clip_vision_encode(inp_np, feature_extractor, image_encoder).last_hidden_state
-        else:
+        if mode != "keyframes":
             # --- Image2Video/Text2Video (legacy/unchanged)
             inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = prepare_inputs(
                 input_image, prompt, n_prompt, cfg
