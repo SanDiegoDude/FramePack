@@ -244,9 +244,11 @@ def worker(
             load_model_as_complete(text_encoder_2, target_device=gpu)
         
             lv, cp     = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
+            lv, mask   = crop_or_pad_yield_mask(lv, 512)
             lv_n, cp_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
-            m    = torch.ones_like(lv)
-            m_n  = torch.ones_like(lv_n)
+            lv_n, mask_n = crop_or_pad_yield_mask(lv_n, 512)
+            m    = mask
+            m_n  = mask_n
             inp_np = None
         else:
             # --- Image2Video/Text2Video (legacy/unchanged)
