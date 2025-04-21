@@ -165,10 +165,10 @@ def get_dims_from_aspect(aspect, custom_w, custom_h):
     return width, height
     
 
-# ---- IM2VID/TXT2VID WORKER ----
+# ---- WORKER ----
 @torch.no_grad()
 def worker(
-    mode, input_image, aspect, custom_w, custom_h,
+    mode, input_image, start_frame, end_frame, aspect, custom_w, custom_h,
     prompt, n_prompt, seed,
     use_adv, adv_window, adv_seconds, selected_frames,
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
@@ -191,7 +191,13 @@ def worker(
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
     debug("worker: pushed progress event 'Starting ...'")
     try:
-        if mode == "text2video":
+        if mode == "keyframes":
+            # Use start_frame and end_frame
+            if end_frame is None:
+                raise ValueError("Keyframes mode requires End Frame to be set!")
+            width, height = end_frame.shape[1], end_frame.shape[0]
+            # If start_frame missing, will use zeros/noise in patch logic below
+        elif mode == "text2video":
             width, height = get_dims_from_aspect(aspect, custom_w, custom_h)
             if init_color is not None:
                 r, g, b = parse_hex_color(init_color)
@@ -204,17 +210,28 @@ def worker(
                 debug("worker: No color provided, defaulting to black")
                 input_image_arr = np.zeros((height, width, 3), dtype=np.uint8)
             input_image = input_image_arr
+        # image2video: as before, just uses uploaded input_image
         debug("worker: preparing inputs")
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Text encoding ...'))))
         debug("worker: pushed 'Text encoding ...' progress event")
-        inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = prepare_inputs(input_image, prompt, n_prompt, cfg)
-        debug("worker: inputs prepared")
-        stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE encoding ...'))))
-        debug("worker: pushed 'VAE encoding ...' progress event")
-        if not high_vram:
-            load_model_as_complete(vae, target_device=gpu)
-            debug("worker: loaded vae to gpu")
-        start_latent = vae_encode(inp_tensor, vae)
+        if mode == "keyframes":
+            # ENCODE start and end frames, handle missing start as zeros
+            if start_frame is not None:
+                s_np = resize_and_center_crop(start_frame, target_width=width, target_height=height)
+                s_tensor = torch.from_numpy(s_np).float() / 127.5 - 1
+                s_tensor = s_tensor.permute(2, 0, 1)[None, :, None]
+                start_latent = vae_encode(s_tensor, vae)
+            else:
+                # You can switch to torch.randn for wild journeys; zeros for "fade in/neutral"
+                start_latent = torch.zeros((1, 16, 1, height//8, width//8), dtype=torch.float32)
+            e_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
+            e_tensor = torch.from_numpy(e_np).float() / 127.5 - 1
+            e_tensor = e_tensor.permute(2, 0, 1)[None, :, None]
+            end_latent = vae_encode(e_tensor, vae)
+        # else, for other modes, proceed as before:
+        elif mode == "text2video" or mode == "image2video":
+            inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = prepare_inputs(input_image, prompt, n_prompt, cfg)
+            start_latent = vae_encode(inp_tensor, vae)
         debug("worker: VAE encoded")
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
         debug("worker: pushed 'CLIP Vision encoding ...' progress event")
@@ -238,18 +255,27 @@ def worker(
         t_start = time.time()
         total_generated_latent_frames = 0
         for section in reversed(range(total_sections)):
-            is_last_section = section == 0
-            latent_padding_size = section * latent_window_size
-            if stream.input_queue.top() == 'end':
-                debug("worker: input_queue 'end' received. Aborting generation.")
-                stream.output_queue.push(('end', None))
-                return
-            indices = torch.arange(0, sum([1, latent_padding_size, latent_window_size, 1, 2, 16])).unsqueeze(0)
-            clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split([1, latent_padding_size, latent_window_size, 1, 2, 16], dim=1)
-            clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
-            clean_latents_pre = start_latent.to(history_latents)
-            clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
-            clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
+            is_first_section = section == (total_sections-1)
+            ...
+            if mode == "keyframes":
+                # Use start_latent/end_latent logic:
+                if start_frame is not None:
+                    pre_latent = start_latent
+                else:
+                    pre_latent = torch.zeros_like(end_latent)
+                post_latent = end_latent
+                clean_latents_pre = pre_latent.to(history_latents)
+                # ONLY on first section: provide both pre and post latents; after that, carryover from history
+                if is_first_section:
+                    clean_latents_post = post_latent.to(history_latents)
+                else:
+                    clean_latents_post = history_latents[:, :, :1+2+16, :, :].split([1, 2, 16], dim=2)[1]
+                clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
+            else:
+                # Existing logic:
+                clean_latents_pre = start_latent.to(history_latents)
+                clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
+                clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
             if not high_vram:
                 unload_complete_models()
                 debug("worker: unloaded complete models")
@@ -447,137 +473,9 @@ def worker(
         debug("worker: pushed final progress event")
         stream.output_queue.push(('end', None))
         debug("worker: pushed end event in finally (done)")
-
-# ---- Keyframes Worker ----
-@torch.no_grad()
-def keyframes_worker(
-    start_image, end_image, prompt, n_prompt, seed, length, window_sz, steps, cfg, gs, rs, use_teacache
-):
-    job_id = generate_timestamp()
-    debug("keyframes_worker(): started, job_id:", job_id)
-    # Preprocess
-    if start_image is not None:
-        H, W, C = start_image.shape
-    elif end_image is not None:
-        H, W, C = end_image.shape
-    else:
-        raise ValueError("Must provide at least end keyframe!")
-    height, width = find_nearest_bucket(H, W, resolution=640)
-    # Resize/crop
-    if start_image is not None:
-        input_np = resize_and_center_crop(start_image, target_width=width, target_height=height)
-        Image.fromarray(input_np).save(os.path.join(outputs_folder, f'{job_id}_start.png'))
-        input_tensor = torch.from_numpy(input_np).float() / 127.5 - 1
-        input_tensor = input_tensor.permute(2, 0, 1)[None, :, None]
-        start_latent = vae_encode(input_tensor, vae)
-    else:
-        start_latent = torch.zeros((1, 16, 1, height//8, width//8), dtype=torch.float32)  # Random latent could also be considered instead of zeros!
-    # Always encode/supply end frame
-    if end_image is None:
-        raise ValueError("End Frame is required!")
-    end_np = resize_and_center_crop(end_image, target_width=width, target_height=height)
-    Image.fromarray(end_np).save(os.path.join(outputs_folder, f'{job_id}_end.png'))
-    end_tensor = torch.from_numpy(end_np).float() / 127.5 - 1
-    end_tensor = end_tensor.permute(2, 0, 1)[None, :, None]
-    end_latent = vae_encode(end_tensor, vae)
-    # Prompts
-    llama_vec, clip_pool = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
-    llama_vec_n, clip_pool_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
-    llama_vec, mask = crop_or_pad_yield_mask(llama_vec, 512)
-    llama_vec_n, mask_n = crop_or_pad_yield_mask(llama_vec_n, 512)
-    # Set up video
-    n_sections = int(max(round(length * 30 / ((window_sz * 4) - 3)), 1))
-    history_latents = torch.zeros((1, 16, 1 + 2 + 16, height//8, width//8), dtype=torch.float32)
-    # Patch loop
-    for section in reversed(range(n_sections)):
-        is_last_section = section == 0
-        is_first_section = section == (n_sections-1)
-        latent_padding_size = section * window_sz
-        indices = torch.arange(0, sum([1, latent_padding_size, window_sz, 1, 2, 16])).unsqueeze(0)
-        clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split([1, latent_padding_size, window_sz, 1, 2, 16], dim=1)
-        if start_image is not None:
-            pre_latent = start_latent
-        else:
-            pre_latent = torch.zeros_like(end_latent)
-        if end_image is not None:
-            post_latent = end_latent
-        else:
-            post_latent = torch.zeros_like(pre_latent)
-        # Patch logic: only provide post_latent at first ("end") pass if only an end image; both if both
-        clean_latents_pre = pre_latent.to(history_latents)
-        if is_first_section:
-            clean_latents_post = post_latent.to(history_latents)
-        else:
-            clean_latents_post = history_latents[:, :, :1+2+16, :, :].split([1, 2, 16], dim=2)[1]
-        clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
-        # Usual inference...
-        generated_latents = sample_hunyuan(
-            transformer=transformer,
-            sampler='unipc',
-            width=width,
-            height=height,
-            frames=(window_sz * 4 - 3),
-            real_guidance_scale=cfg,
-            distilled_guidance_scale=gs,
-            guidance_rescale=rs,
-            num_inference_steps=steps,
-            generator=torch.Generator("cpu").manual_seed(seed),
-            prompt_embeds=llama_vec,
-            prompt_embeds_mask=mask,
-            prompt_poolers=clip_pool,
-            negative_prompt_embeds=llama_vec_n,
-            negative_prompt_embeds_mask=mask_n,
-            negative_prompt_poolers=clip_pool_n,
-            device=gpu,
-            dtype=torch.bfloat16,
-            image_embeddings=None,
-            latent_indices=latent_indices,
-            clean_latents=clean_latents,
-            clean_latent_indices=None,
-            clean_latents_2x=None,
-            clean_latent_2x_indices=None,
-            clean_latents_4x=None,
-            clean_latent_4x_indices=None,
-            callback=None,
-        )
-        if is_last_section:
-            generated_latents = torch.cat([pre_latent.to(generated_latents), generated_latents], dim=2)
-        total_generated_latent_frames = generated_latents.shape[2]
-        history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
-    # After patching, decode and save video
-    history_pixels = vae_decode(history_latents, vae).cpu()
-    output_filename = os.path.join(outputs_folder, f'{job_id}_keyframes.mp4')
-    save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
-    make_mp4_faststart(output_filename)
-    stream.output_queue.push(('file', output_filename))
-    stream.output_queue.push(('end', None))
-
-def keyframes_process(
-    start_image, end_image, prompt, n_prompt, seed, length, window_sz, steps, cfg, gs, rs, use_teacache
-):
-    global stream
-    debug("keyframes_process: called")
-    if end_image is None:
-        yield None, None, "You must select an end frame!", '', '', gr.update(interactive=True)
-        return
-    yield None, None, '', '', '', gr.update(interactive=False)
-    stream = AsyncStream()
-    async_run(
-        keyframes_worker,
-        start_image, end_image, prompt, n_prompt, seed, length, window_sz, steps, cfg, gs, rs, use_teacache
-    )
-    output_filename = None
-    while True:
-        flag, data = stream.output_queue.next()
-        if flag == 'file':
-            output_filename = data
-            yield output_filename, gr.update(), gr.update(), gr.update(), gr.update(interactive=False)
-        if flag == 'end':
-            yield output_filename, gr.update(visible=False), gr.update(), '', gr.update(interactive=True)
-            break
-
+            
 def process(
-    mode, input_image, aspect_selector, custom_w, custom_h,
+    mode, input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h
     prompt, n_prompt, seed,
     use_adv, adv_window, adv_seconds, selected_frames,
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color
@@ -609,6 +507,8 @@ def process(
         worker,
         mode,
         input_image,
+        start_frame,
+        end_frame,
         aspect_selector,
         custom_w,
         custom_h,
@@ -738,9 +638,11 @@ with block:
     with gr.Row():
         with gr.Column(scale=2):
             mode_selector = gr.Radio(
-                ["image2video", "text2video"], value="image2video", label="Mode"
+                ["image2video", "text2video", "keyframes"], value="image2video", label="Mode"
             )
-            input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)
+            input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)  # always present, sometimes hidden
+            start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)", height=320, visible=False)
+            end_frame = gr.Image(sources='upload', type="numpy", label="End Frame (Required)", height=320, visible=False)
             aspect_selector = gr.Dropdown(
                 ["16:9", "9:16", "1:1", "4:5", "3:2", "2:3", "21:9", "4:3", "Custom..."],
                 label="Aspect Ratio",
@@ -780,30 +682,6 @@ with block:
             gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
-
-        with gr.Tab("Keyframes"):
-            with gr.Row():
-                start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)", height=320)
-                end_frame = gr.Image(sources='upload', type="numpy", label="End Frame (Required)", height=320)
-            key_prompt = gr.Textbox(label="Prompt", value='', lines=3)
-            with gr.Row():
-                kf_start = gr.Button(value="Start Generation")
-                kf_end = gr.Button(value="End Generation", interactive=False)
-            with gr.Group():
-                kf_use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
-                kf_n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
-                kf_seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
-                kf_steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
-                kf_cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01)
-                kf_gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01)
-                kf_rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01)
-                kf_len = gr.Slider(label="Total Video Length (Seconds)", minimum=1, maximum=120, value=5, step=0.1)
-                kf_win = gr.Slider(label="Latent Window Size", minimum=2, maximum=33, value=9, step=1)
-            kf_preview_image = gr.Image(label="Next Latents", height=200, visible=False)
-            kf_result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
-            kf_result_image = gr.Image(label='Single Frame Image', visible=False)
-            kf_progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
-            kf_progress_bar = gr.HTML('', elem_classes='no-generating-animation')
 
     # --- calllbacks ---
     def update_frame_dropdown(window):
@@ -846,7 +724,7 @@ with block:
     mode_selector.change(
         switch_mode,
         inputs=[mode_selector],
-        outputs=[input_image, aspect_selector, custom_w, custom_h],
+        outputs=[input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h]
     )
     def show_init_color(mode):
         return gr.update(visible=(mode == "text2video"))
@@ -863,7 +741,9 @@ with block:
     )
     ips = [
         mode_selector,
-        input_image,
+        input_image,    # For im2vid/txt2vid
+        start_frame,    # For keyframes (optional)
+        end_frame,      # For keyframes (required)
         aspect_selector,
         custom_w,
         custom_h,
@@ -883,24 +763,6 @@ with block:
         lock_seed,
         init_color,
     ]
-    kf_ips = [
-        start_frame,  # can be None!
-        end_frame,    # required!
-        key_prompt,
-        kf_n_prompt,
-        kf_seed,
-        kf_len,
-        kf_win,
-        kf_steps,
-        kf_cfg,
-        kf_gs,
-        kf_rs,
-        kf_use_teacache,
-    ]
-    kf_start.click(fn=keyframes_process, inputs=kf_ips,
-        outputs=[kf_result_video, kf_result_image, kf_preview_image, kf_progress_desc, kf_progress_bar, kf_start, kf_end]
-    )
-    kf_end.click(fn=end_process)
     prompt.submit(
         fn=process,
         inputs=ips,
@@ -915,6 +777,17 @@ with block:
             seed
         ]
     )
+
+    def switch_mode(mode):
+        return (
+            gr.update(visible=(mode=="image2video" or mode=="text2video")),  # input_image
+            gr.update(visible=(mode=="keyframes")),  # start_frame
+            gr.update(visible=(mode=="keyframes")),  # end_frame
+            gr.update(visible=(mode=="text2video")), # aspect_selector
+            gr.update(visible=(mode=="image2video")),# custom_w
+            gr.update(visible=False),                # custom_h  (or whatever fields you want to hide always unless manual aspect)
+        )
+    
     start_button.click(
         fn=process,
         inputs=ips,
