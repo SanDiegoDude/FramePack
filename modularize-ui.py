@@ -710,17 +710,6 @@ def process(
         seed = int(time.time()) % 2**32
     debug("process: entering main async_run yield cycle, seed:", seed)
     
-    # Update this yield to include the empty progress bars
-    yield (
-        None, None, None, 'Starting generation...', empty_progress,
-        gr.update(interactive=False),
-        gr.update(interactive=True),
-        gr.update(value=seed)
-    )
-        return
-    if not lock_seed:
-        seed = int(time.time()) % 2**32
-    debug("process: entering main async_run yield cycle, seed:", seed)
     yield (
         None, None, None, '', '',
         gr.update(interactive=False),
