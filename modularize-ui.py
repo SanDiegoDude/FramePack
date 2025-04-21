@@ -438,9 +438,9 @@ def worker(
                 debug("worker: vae decoded (first time)")
                 # ---- Guarantee the last pixel frame matches the (resized) end_frame ----
                 if mode == "keyframes" and end_frame is not None:
-                    target_h = history_pixels.shape[-2]
-                    target_w = history_pixels.shape[-1]
-                    end_img_np = resize_and_center_crop(end_frame, target_width=target_w, target_height=target_h)
+                    target_h = history_pixels.shape[-2]   # height
+                    target_w = history_pixels.shape[-1]   # width
+                    end_img_np = resize_and_center_crop(end_frame, target_height=target_h, target_width=target_w)
                     end_img_tensor = torch.from_numpy(end_img_np).float() / 127.5 - 1
                     end_img_tensor = end_img_tensor.permute(2, 0, 1)
                     history_pixels[0, :, -1, :, :] = end_img_tensor
