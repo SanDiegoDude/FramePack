@@ -317,20 +317,12 @@ def worker(
             clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split(split_sizes, dim=1)
             clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
         
-            if mode == "keyframes":
-                # Always build pre-latent from start_latent
-                clean_latents_pre = start_latent.to(history_latents)
-                if is_first_section:
-                    # ONLY set clean_latents_post to end_latent
-                    clean_latents_post = end_latent.to(history_latents)
-                else:
-                    # For subsequent sections, use overlapping frames exactly like img2vid
-                    clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1+2+16, :, :].split([1,2,16], dim=2)
-                clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
-            else:
-                # Leave the original code for other modes untouched
-                clean_latents_pre = start_latent.to(history_latents)
-                clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
+            clean_latents_pre = start_latent.to(history_latents)
+            clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
+            clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
+            
+            if mode == "keyframes" and is_first_section:
+                clean_latents_post = end_latent.to(history_latents)
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
             
             # ------- mask fallback safeguard -------
