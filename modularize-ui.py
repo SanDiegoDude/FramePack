@@ -432,19 +432,19 @@ def worker(
                 debug("worker: loaded vae to gpu (again)")
             
             # ---- Guarantee the last N latent frames match encoded end_frame ----
-            if mode == "keyframes" and end_frame is not None:
-                target_h = history_pixels.shape[-2]
-                target_w = history_pixels.shape[-1]
-                end_img_np = resize_and_center_crop(end_frame, target_width=target_w, target_height=target_h)
-                end_img_tensor = torch.from_numpy(end_img_np).float() / 127.5 - 1
-                end_img_tensor = end_img_tensor.permute(2, 0, 1)
-                history_pixels[0, :, -1, :, :] = end_img_tensor
-                debug("worker: forced last decoded frame to exact end_image.")
-            
             real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
-            
             if history_pixels is None:
                 history_pixels = vae_decode(real_history_latents.float(), vae.float()).cpu()
+                debug("worker: vae decoded (first time)")
+                # ---- Guarantee the last pixel frame matches the (resized) end_frame ----
+                if mode == "keyframes" and end_frame is not None:
+                    target_h = history_pixels.shape[-2]
+                    target_w = history_pixels.shape[-1]
+                    end_img_np = resize_and_center_crop(end_frame, target_width=target_w, target_height=target_h)
+                    end_img_tensor = torch.from_numpy(end_img_np).float() / 127.5 - 1
+                    end_img_tensor = end_img_tensor.permute(2, 0, 1)
+                    history_pixels[0, :, -1, :, :] = end_img_tensor
+                    debug("worker: forced last decoded frame to exact end_image.")
                 debug("worker: vae decoded (first time)")
                 preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
                 try:
@@ -459,6 +459,15 @@ def worker(
                 current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames].float(), vae.float()).cpu()
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
                 debug("worker: vae decoded + soft_append_bcthw")
+                # ---- Guarantee the last pixel frame matches (resized) end_frame in keyframes mode ----
+                if mode == "keyframes" and end_frame is not None:
+                    target_h = history_pixels.shape[-2]
+                    target_w = history_pixels.shape[-1]
+                    end_img_np = resize_and_center_crop(end_frame, target_width=target_w, target_height=target_h)
+                    end_img_tensor = torch.from_numpy(end_img_np).float() / 127.5 - 1
+                    end_img_tensor = end_img_tensor.permute(2, 0, 1)
+                    history_pixels[0, :, -1, :, :] = end_img_tensor
+                    debug("worker: forced last decoded frame to exact end_image. (merge/append branch)")
                 preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
                 try:
                     save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
