@@ -307,38 +307,46 @@ def worker(
         total_generated_latent_frames = 0
 
         # -------- SECTION PATCH/STITCH LOOP ----------
-        for section in reversed(range(total_sections)):
-            is_first_section = section == (total_sections - 1)
-            is_last_section  = section == 0
-        
+        # Calculate latent paddings with special pattern
+        if total_sections > 4:
+            # Special pattern for longer videos that improves transitions
+            latent_paddings = [3] + [2] * (total_sections - 3) + [1, 0]
+            debug(f"worker: Using special padding pattern for {total_sections} sections: {latent_paddings}")
+        else:
+            # For 4 or fewer sections, use the standard reversed range
             latent_paddings = list(reversed(range(total_sections)))
-            if total_sections > 4:
-                # Special pattern for longer videos that improves transitions
-                latent_paddings = [3] + [2] * (total_sections - 3) + [1, 0]
-                debug(f"worker: Using special padding pattern for {total_sections} sections: {latent_paddings}")
+            debug(f"worker: Using standard padding for {total_sections} sections: {latent_paddings}")
+        
+        # Initialize video tracking variables
+        history_latents = torch.zeros(
+            size=(1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32
+        ).cpu()
+        history_pixels = None
+        total_generated_latent_frames = 0
+        
+        # Process each section with the padding pattern
+        for latent_padding in latent_paddings:
+            is_first_section = latent_padding == latent_paddings[0]
+            is_last_section = latent_padding == 0
+            latent_padding_size = latent_padding * latent_window_size
             
-            # Then iterate through the paddings instead of section numbers
-            for latent_padding in latent_paddings:
-                is_first_section = latent_padding == latent_paddings[0]
-                is_last_section = latent_padding == 0
-                latent_padding_size = latent_padding * latent_window_size
-                
-                debug(f'latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}, is_first_section = {is_first_section}')
-                
-                split_sizes = [1, latent_padding_size, latent_window_size, 1, 2, 16]
-                total_indices = sum(split_sizes)
-                indices = torch.arange(total_indices).unsqueeze(0)
-                clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split(split_sizes, dim=1)
-                clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
-                
-                # Rest of your existing loop body remains the same
-                clean_latents_pre = start_latent.to(history_latents)
-                clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
+            debug(f'latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}, is_first_section = {is_first_section}')
+            
+            split_sizes = [1, latent_padding_size, latent_window_size, 1, 2, 16]
+            total_indices = sum(split_sizes)
+            indices = torch.arange(total_indices).unsqueeze(0)
+            clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split(split_sizes, dim=1)
+            clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
+            
+            # Setup the clean latents for ALL modes first
+            clean_latents_pre = start_latent.to(history_latents)
+            clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
+            clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
+            
+            # Then selectively override for keyframes mode first section
+            if mode == "keyframes" and is_first_section:
+                clean_latents_post = end_latent.to(history_latents)
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
-                
-                if mode == "keyframes" and is_first_section:
-                    clean_latents_post = end_latent.to(history_latents)
-                    clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
             
             # ------- mask fallback safeguard -------
             m   = m if m is not None else torch.ones_like(lv)
@@ -435,10 +443,13 @@ def worker(
             )
             if is_last_section:
                 generated_latents = torch.cat([start_latent.to(generated_latents), generated_latents], dim=2)
-                debug("worker: is_last_section => concatenated latent")
+                debug(f"worker: is_last_section => concatenated latent, new shape: {generated_latents.shape}")
+            
             total_generated_latent_frames += int(generated_latents.shape[2])
+            debug(f"worker: Added {generated_latents.shape[2]} frames, total now: {total_generated_latent_frames}")
+            
             history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
-            debug("worker: history_latents.shape after concat", history_latents.shape)
+            debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
 
            # ------- decode & video preview -----
             if not high_vram:
