@@ -252,8 +252,8 @@ def worker(
             # Process end frame with CLIP Vision
             end_clip_output = hf_clip_vision_encode(end_np, feature_extractor, image_encoder).last_hidden_state
             
-            # Combine both image embeddings (similar to reference code)
-            clip_output = (start_clip_output + end_clip_output) / 2
+            # Weight more heavily toward start frame (70% start, 30% end)
+            clip_output = (0.7 * start_clip_output + 0.3 * end_clip_output)
         
         elif mode == "text2video":
             width, height = get_dims_from_aspect(aspect, custom_w, custom_h)
@@ -711,7 +711,7 @@ def process(
     debug("process: entering main async_run yield cycle, seed:", seed)
     
     yield (
-        None, None, None, '', '',
+        None, None, None, '', gr.update(visible=False),  # Progress bar hidden at start
         gr.update(interactive=False),
         gr.update(interactive=True),
         gr.update(value=seed)
@@ -778,13 +778,13 @@ def process(
             if desc:
                 last_desc = desc
             debug(f"process: yielding progress output: desc={desc}")
-            # Don't touch result_video or result_image_html here!
+            # Make sure to set visible=True for progress bar
             yield (
-                gr.update(),                  # NO update to result_video; keep visible
-                gr.update(),                  # NO update to result_image_html; keep as-is
-                gr.update(visible=True, value=preview), # preview_image (show as needed)
-                desc,
-                html,
+                gr.update(),                           # result_video
+                gr.update(),                           # result_image_html
+                gr.update(visible=True, value=preview), # preview_image
+                desc,                                  # progress_desc
+                gr.update(value=html, visible=True),   # Make progress bar visible with EACH update
                 gr.update(interactive=False),
                 gr.update(interactive=True),
                 gr.update()
@@ -921,8 +921,8 @@ with block:
                 rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False)
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
         with gr.Column(scale=2):
-            progress_bar = gr.HTML('', elem_classes='dual-progress-container')
-            progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
+            progress_bar = gr.HTML(visible=False)  # Start hidden
+            progress_desc = gr.Markdown(visible=False)
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
             result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
             result_image_html = gr.Image(label='Single Frame Image', visible=False)
