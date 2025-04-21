@@ -52,7 +52,7 @@ def get_valid_frame_stops(latent_window_size, max_seconds=120, fps=30):
 DEBUG = True
 def debug(*a, **k):
     if DEBUG:
-        print("[DEBUG]", _a,_ *k)
+        print("[DEBUG]", a, *k)
 # ---- CLI args ----
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
@@ -187,7 +187,7 @@ def worker(
         t_start = time.time()
         # ----------- Mode and input setup & prompts -------------
         if mode == "keyframes":
-            # --- First, always determine the _output video_ shape up front ---
+            # --- First, always determine the output video shape up front ---
             # Use end image as reference, fallback to start image or default
             if end_frame is not None:    # shape [H, W, 3]
                 target_h, target_w = end_frame.shape[0], end_frame.shape[1]
@@ -273,7 +273,7 @@ def worker(
         if not high_vram:
             load_model_as_complete(image_encoder, target_device=gpu)
             debug("worker: loaded image_encoder to gpu")
-        if mode "text2video" or mode "image2video":
+        if mode  "text2video" or mode  "image2video":
             clip_output = hf_clip_vision_encode(inp_np, feature_extractor, image_encoder).last_hidden_state
         debug("worker: got clip output last_hidden_state")
         lv = lv.to(transformer.dtype)
@@ -304,7 +304,7 @@ def worker(
                 # Always build pre-latent from start_latent
                 clean_latents_pre = start_latent.to(history_latents)
                 # For last section, replace clean_latents_post with end_latent!
-                if is_first_section:     # This is the _last_ section due to reverse loop
+                if is_first_section:     # This is the last section due to reverse loop
                     clean_latents_post = end_latent.to(history_latents)
                 else:
                     clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1+2+16, :, :].split([1,2,16], dim=2)
@@ -436,7 +436,7 @@ def worker(
                 except Exception as e:
                     debug(f"[ERROR] Failed to save preview video: {e}")
             else:
-                section_latent_frames = (latent_window_size _2 + 1) if is_last_section else (latent_window_size_ 2)
+                section_latent_frames = (latent_window_size  2 + 1) if is_last_section else (latent_window_size  2)
                 overlapped_frames = frames_per_section
                 current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames].float(), vae.float()).cpu()
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
@@ -475,7 +475,7 @@ def worker(
         if mode == "text2video":
             N_actual = history_pixels.shape[2]
             # ----- txt2img edge-case: make a single image if very short/low window -----
-            if latent_window_size 2 and total_sections 1 and total_frames <= 8:
+            if latent_window_size  2 and total_sections  1 and total_frames <= 8:
                 debug("txt2img branch: pulling last frame, skipping video trim (window=2, adv=0.1)")
                 last_img_tensor = history_pixels[0, :, -1]
                 last_img = np.clip((np.transpose(last_img_tensor.cpu().numpy(), (1, 2, 0)) + 1) * 127.5, 0, 255).astype(np.uint8)
@@ -794,8 +794,8 @@ with block:
             gr.update(visible=(mode == "keyframes")),  # start_frame
             gr.update(visible=(mode == "keyframes")),  # end_frame
             gr.update(visible=(mode == "text2video")),  # aspect_selector
-            gr.update(visible=(mode "text2video" and aspect_selector.value "Custom...")), # custom_w
-            gr.update(visible=(mode "text2video" and aspect_selector.value "Custom...")), # custom_h
+            gr.update(visible=(mode  "text2video" and aspect_selector.value  "Custom...")), # custom_w
+            gr.update(visible=(mode  "text2video" and aspect_selector.value  "Custom...")), # custom_h
         )
     def show_custom(aspect):
         show = aspect == "Custom..."
@@ -894,4 +894,4 @@ block.launch(
     server_port=args.port,
     share=args.share,
     inbrowser=args.inbrowser,
-)  
+)
