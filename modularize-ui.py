@@ -284,8 +284,18 @@ def worker(
             is_last_section  = section == 0
         
             if mode == "keyframes":
-                # ... your separate keyframes patch/overlap logic here ...
-                # (Leave as your previous code)
+                if start_frame is not None:
+                    pre_latent = start_latent
+                else:
+                    pre_latent = torch.zeros_like(end_latent)
+                post_latent = end_latent
+                clean_latents_pre = pre_latent.to(history_latents)
+                if is_first_section:
+                    clean_latents_post = post_latent.to(history_latents)
+                else:
+                    clean_latents_post = history_latents[:, :, :1+2+16, :, :].split([1,2,16],dim=2)[1]
+                clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
+                
             else:
                 # --- Compute correct splits for patch overlap ---
                 latent_padding_size = section * latent_window_size
