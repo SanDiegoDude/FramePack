@@ -295,19 +295,7 @@ def worker(
                 else:
                     clean_latents_post = history_latents[:, :, :1+2+16, :, :].split([1,2,16],dim=2)[1]
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
-                
-            else:
-                # --- Compute correct splits for patch overlap ---
-                latent_padding_size = section * latent_window_size
-                split_sizes = [1, latent_padding_size, latent_window_size, 1, 2, 16]
-                total_indices = sum(split_sizes)
-                indices = torch.arange(total_indices).unsqueeze(0)
-                clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split(split_sizes, dim=1)
-                clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
-                clean_latents_pre = start_latent.to(history_latents)
-                clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
-                clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
-                # NOTE: You can further tailor indices if required for keyframes logic
+            
             else:
                 # === FIXED (matches your working main branch logic!) ===
                 latent_padding_size = section * latent_window_size
