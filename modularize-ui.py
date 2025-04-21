@@ -172,7 +172,7 @@ def worker(
     prompt, n_prompt, seed,
     use_adv, adv_window, adv_seconds, selected_frames,
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
-    init_color
+    init_color, keyframe_weight
 ):
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
@@ -246,14 +246,21 @@ def worker(
             if not high_vram:
                 load_model_as_complete(image_encoder, target_device=gpu)
             
-            # Process start frame with CLIP Vision
-            start_clip_output = hf_clip_vision_encode(input_anchor_np, feature_extractor, image_encoder).last_hidden_state
-            
-            # Process end frame with CLIP Vision
-            end_clip_output = hf_clip_vision_encode(end_np, feature_extractor, image_encoder).last_hidden_state
-            
-            # Weight more heavily toward start frame (70% start, 30% end)
-            clip_output = (0.7 * start_clip_output + 0.3 * end_clip_output)
+           if mode == "keyframes":
+                # Process end frame with CLIP
+                end_clip_output = hf_clip_vision_encode(end_np, feature_extractor, image_encoder).last_hidden_state
+                
+                if start_frame is not None:
+                    # Process start frame with CLIP
+                    start_clip_output = hf_clip_vision_encode(input_anchor_np, feature_extractor, image_encoder).last_hidden_state
+                    
+                    # Use weighted combination based on slider value
+                    clip_output = (keyframe_weight * start_clip_output + (1.0 - keyframe_weight) * end_clip_output)
+                    debug(f"Using weighted combination: {keyframe_weight:.1f} start frame, {1.0-keyframe_weight:.1f} end frame")
+                else:
+                    # No start frame provided - use 100% end frame embedding
+                    clip_output = end_clip_output
+                    debug("No start frame provided - using 100% end frame embedding")
         
         elif mode == "text2video":
             width, height = get_dims_from_aspect(aspect, custom_w, custom_h)
@@ -667,7 +674,8 @@ def process(
     mode, input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h,
     prompt, n_prompt, seed,
     use_adv, adv_window, adv_seconds, selected_frames,
-    steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color
+    steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color,
+    keyframe_weight
 ):
     global stream
     debug("process: called with mode", mode)
@@ -736,7 +744,8 @@ def process(
         rs,
         gpu_memory_preservation,
         use_teacache,
-        init_color
+        init_color,
+        keyframe_weight
     )
     output_filename = None
     last_desc = ""
@@ -929,6 +938,15 @@ with block:
             gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
+            with gr.Group(visible=False) as keyframes_options:
+                keyframe_weight = gr.Slider(
+                    label="Start Frame Influence", 
+                    minimum=0.0, 
+                    maximum=1.0, 
+                    value=0.7, 
+                    step=0.1,
+                    info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)"
+                )
 
     # --- calllbacks ---
     def update_frame_dropdown(window):
@@ -956,6 +974,7 @@ with block:
             gr.update(visible=(mode == "text2video")),  # aspect_selector
             gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_w
             gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_h
+            gr.update(visible=(mode == "keyframes")),  # keyframes_options
         )
     def show_custom(aspect):
         show = aspect == "Custom..."
@@ -973,7 +992,7 @@ with block:
     mode_selector.change(
         switch_mode,
         inputs=[mode_selector],
-        outputs=[input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h]
+        outputs=[input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h,  keyframes_options]
     )
     def show_init_color(mode):
         return gr.update(visible=(mode == "text2video"))
@@ -1011,6 +1030,7 @@ with block:
         use_teacache,
         lock_seed,
         init_color,
+        keyframe_weight,
     ]
     prompt.submit(
         fn=process,
