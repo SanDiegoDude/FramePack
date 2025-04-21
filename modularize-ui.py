@@ -205,43 +205,47 @@ def worker(
                 raise ValueError("Keyframes mode requires End Frame to be set!")
             width, height = end_frame.shape[1], end_frame.shape[0]
         
-            # Start frame (optional)
+            # --- Build start-frame numpy image (may be uploaded or fallback) ---
             if start_frame is not None:
                 s_np = resize_and_center_crop(start_frame, target_width=width, target_height=height)
-                s_tensor = torch.from_numpy(s_np).float() / 127.5 - 1
-                s_tensor = s_tensor.permute(2, 0, 1)[None, :, None].float()
-                start_latent = vae_encode(s_tensor.float(), vae.float())
-                inp_np = s_np
+                input_anchor_np = s_np
             else:
-                # If missing, use zeros for both VAE and image embeddings
-                start_latent = torch.zeros((1, 16, 1, height // 8, width // 8), dtype=torch.float32)
-                inp_np = np.zeros((height, width, 3), dtype=np.uint8)
+                # Option 1: Use text2vid-style gray
+                input_anchor_np = np.ones((height, width, 3), dtype=np.uint8) * 128
+                # Option 2: Use black: np.zeros((height, width, 3), dtype=np.uint8)
+                # Option 3: Use color picker/other logic as you like
         
-            # End frame (always required)
-            e_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
-            e_tensor = torch.from_numpy(e_np).float() / 127.5 - 1
-            e_tensor = e_tensor.permute(2, 0, 1)[None, :, None].float()
-            end_latent = vae_encode(e_tensor.float(), vae.float())
+            # Save for debugging (optional)
+            Image.fromarray(input_anchor_np).save(os.path.join(outputs_folder, f'{generate_timestamp()}_keyframes_start.png'))
         
-            # Device moves for encoders (same as prepare_inputs)
+            # --- VAE encode ---
+            input_anchor_tensor = torch.from_numpy(input_anchor_np).float() / 127.5 - 1
+            input_anchor_tensor = input_anchor_tensor.permute(2, 0, 1)[None, :, None].float()
+            start_latent = vae_encode(input_anchor_tensor, vae.float())  # always shape [1,16,1,H//8,W//8]
+        
+            # --- End frame processing (always required) ---
+            end_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
+            end_tensor = torch.from_numpy(end_np).float() / 127.5 - 1
+            end_tensor = end_tensor.permute(2, 0, 1)[None, :, None].float()
+            end_latent = vae_encode(end_tensor, vae.float())
+        
+            # --- Text prompt encoding & mask logic ---
             if not high_vram:
                 unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
             fake_diffusers_current_device(text_encoder, gpu)
             load_model_as_complete(text_encoder_2, target_device=gpu)
         
-            # Prompt encodings *with correct mask shapes*
-            lv, cp     = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
-            lv, mask   = crop_or_pad_yield_mask(lv, 512)
+            lv, cp = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
+            lv, mask = crop_or_pad_yield_mask(lv, 512)
             lv_n, cp_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
             lv_n, mask_n = crop_or_pad_yield_mask(lv_n, 512)
-            m    = mask
-            m_n  = mask_n
+            m = mask
+            m_n = mask_n
         
-            # CLIP Vision embedding
+            # --- CLIP Vision feature extraction ---
             if not high_vram:
                 load_model_as_complete(image_encoder, target_device=gpu)
-                debug("worker: loaded image_encoder to gpu")
-            clip_output = hf_clip_vision_encode(inp_np, feature_extractor, image_encoder).last_hidden_state
+            clip_output = hf_clip_vision_encode(input_anchor_np, feature_extractor, image_encoder).last_hidden_state
         
         elif mode == "text2video":
             width, height = get_dims_from_aspect(aspect, custom_w, custom_h)
@@ -299,17 +303,24 @@ def worker(
             is_first_section = section == (total_sections - 1)
             is_last_section  = section == 0
         
+            latent_padding_size = section * latent_window_size
+            split_sizes = [1, latent_padding_size, latent_window_size, 1, 2, 16]
+            total_indices = sum(split_sizes)
+            indices = torch.arange(total_indices).unsqueeze(0)
+            clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split(split_sizes, dim=1)
+            clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
+        
             if mode == "keyframes":
-                if start_frame is not None:
-                    pre_latent = start_latent
-                else:
-                    pre_latent = torch.zeros_like(end_latent)
-                post_latent = end_latent
-                clean_latents_pre = pre_latent.to(history_latents)
+                clean_latents_pre = start_latent.to(history_latents)
                 if is_first_section:
-                    clean_latents_post = post_latent.to(history_latents)
+                    clean_latents_post = end_latent.to(history_latents)
+                    clean_latents_2x = clean_latents_4x = None  # Not used for first
                 else:
-                    clean_latents_post = history_latents[:, :, :1+2+16, :, :].split([1,2,16],dim=2)[1]
+                    clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1+2+16, :, :].split([1,2,16],dim=2)
+                clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
+            else:
+                clean_latents_pre = start_latent.to(history_latents)
+                clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
             
             else:
