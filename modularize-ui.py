@@ -175,7 +175,6 @@ def worker(
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
     init_color
 ):
-    global text_encoder, text_encoder_2
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
 
