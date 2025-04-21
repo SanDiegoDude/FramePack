@@ -204,7 +204,7 @@ def worker(
             if end_frame is None:
                 raise ValueError("Keyframes mode requires End Frame to be set!")
             width, height = end_frame.shape[1], end_frame.shape[0]
-        
+            
             # --- Build start-frame numpy image (may be uploaded or fallback) ---
             if start_frame is not None:
                 s_np = resize_and_center_crop(start_frame, target_width=width, target_height=height)
@@ -214,38 +214,45 @@ def worker(
                 input_anchor_np = np.ones((height, width, 3), dtype=np.uint8) * 128
                 # Option 2: Use black: np.zeros((height, width, 3), dtype=np.uint8)
                 # Option 3: Use color picker/other logic as you like
-        
+            
             # Save for debugging (optional)
             Image.fromarray(input_anchor_np).save(os.path.join(outputs_folder, f'{generate_timestamp()}_keyframes_start.png'))
-        
+            
             # --- VAE encode ---
             input_anchor_tensor = torch.from_numpy(input_anchor_np).float() / 127.5 - 1
             input_anchor_tensor = input_anchor_tensor.permute(2, 0, 1)[None, :, None].float()
             start_latent = vae_encode(input_anchor_tensor, vae.float())  # always shape [1,16,1,H//8,W//8]
-        
+            
             # --- End frame processing (always required) ---
             end_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
             end_tensor = torch.from_numpy(end_np).float() / 127.5 - 1
             end_tensor = end_tensor.permute(2, 0, 1)[None, :, None].float()
             end_latent = vae_encode(end_tensor, vae.float())
-        
+            
             # --- Text prompt encoding & mask logic ---
             if not high_vram:
                 unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
             fake_diffusers_current_device(text_encoder, gpu)
             load_model_as_complete(text_encoder_2, target_device=gpu)
-        
             lv, cp = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
             lv, mask = crop_or_pad_yield_mask(lv, 512)
             lv_n, cp_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
             lv_n, mask_n = crop_or_pad_yield_mask(lv_n, 512)
             m = mask
             m_n = mask_n
-        
+            
             # --- CLIP Vision feature extraction ---
             if not high_vram:
                 load_model_as_complete(image_encoder, target_device=gpu)
-            clip_output = hf_clip_vision_encode(input_anchor_np, feature_extractor, image_encoder).last_hidden_state
+            
+            # Process start frame with CLIP Vision
+            start_clip_output = hf_clip_vision_encode(input_anchor_np, feature_extractor, image_encoder).last_hidden_state
+            
+            # Process end frame with CLIP Vision
+            end_clip_output = hf_clip_vision_encode(end_np, feature_extractor, image_encoder).last_hidden_state
+            
+            # Combine both image embeddings (similar to reference code)
+            clip_output = (start_clip_output + end_clip_output) / 2
         
         elif mode == "text2video":
             width, height = get_dims_from_aspect(aspect, custom_w, custom_h)
@@ -314,13 +321,14 @@ def worker(
                 # Always build pre-latent from start_latent
                 clean_latents_pre = start_latent.to(history_latents)
                 if is_first_section:
+                    # ONLY set clean_latents_post to end_latent
                     clean_latents_post = end_latent.to(history_latents)
                 else:
-                    # HERE: use true overlap like im2vid!
+                    # For subsequent sections, use overlapping frames exactly like img2vid
                     clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1+2+16, :, :].split([1,2,16], dim=2)
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
             else:
-                # Reference unchanged im2vid/txt2vid legacy, which you report works:
+                # Leave the original code for other modes untouched
                 clean_latents_pre = start_latent.to(history_latents)
                 clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
@@ -357,7 +365,7 @@ def worker(
                 stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
 
             if mode == "keyframes":
-                    generated_latents = sample_hunyuan(
+                generated_latents = sample_hunyuan(
                     transformer=transformer,
                     sampler="unipc",
                     width=width,
@@ -377,15 +385,16 @@ def worker(
                     device=gpu,
                     dtype=torch.bfloat16,
                     image_embeddings=clip_output,
-                    latent_indices=None,
-                    clean_latents=clean_latents,  # as built in your keyframes branch
-                    clean_latent_indices=None,
-                    clean_latents_2x=None,
-                    clean_latent_2x_indices=None,
-                    clean_latents_4x=None,
-                    clean_latent_4x_indices=None,
+                    # IMPORTANT: Use all indices instead of None
+                    latent_indices=latent_indices,
+                    clean_latents=clean_latents,
+                    clean_latent_indices=clean_latent_indices,
+                    clean_latents_2x=clean_latents_2x,
+                    clean_latent_2x_indices=clean_latent_2x_indices,
+                    clean_latents_4x=clean_latents_4x,
+                    clean_latent_4x_indices=clean_latent_4x_indices,
                     callback=callback,
-                )    
+                )   
                 
             else: 
                 generated_latents = sample_hunyuan(
