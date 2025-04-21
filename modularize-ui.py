@@ -235,7 +235,14 @@ def worker(
             else:
                 raise ValueError("Keyframes mode requires End Frame to be set!")
         
-            # --- Prompt/CLIP encodings (unchanged) ---
+            
+            # --- handle models prior to encoding ---
+            if not high_vram:
+                unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
+            fake_diffusers_current_device(text_encoder, gpu)
+            load_model_as_complete(text_encoder_2, target_device=gpu)
+            
+            # --- Prompt/CLIP encodings ---
             lv, cp = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
             lv_n, cp_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
             lv, mask = crop_or_pad_yield_mask(lv, 512)
