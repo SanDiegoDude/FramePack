@@ -201,46 +201,53 @@ def worker(
 
         # ----------- Mode and input setup & prompts -------------
         if mode == "keyframes":
-            if end_frame is None:
-                raise ValueError("Keyframes mode requires End Frame to be set!")
-            width, height = end_frame.shape[1], end_frame.shape[0]
-        
-            # --- Build start-frame numpy image (may be uploaded or fallback) ---
-            if start_frame is not None:
-                s_np = resize_and_center_crop(start_frame, target_width=width, target_height=height)
-                input_anchor_np = s_np
+            # --- First, always determine the *output video* shape up front ---
+            # Use end image as reference, fallback to start image or default
+            if end_frame is not None:    # shape [H, W, 3]
+                target_h, target_w = end_frame.shape[0], end_frame.shape[1]
+            elif start_frame is not None:
+                target_h, target_w = start_frame.shape[0], start_frame.shape[1]
             else:
-                # Option 1: Use text2vid-style gray
-                input_anchor_np = np.ones((height, width, 3), dtype=np.uint8) * 128
-                # Option 2: Use black: np.zeros((height, width, 3), dtype=np.uint8)
-                # Option 3: Use color picker/other logic as you like
+                target_h, target_w = 640, 640  # Fallback or use UI aspect logic
         
-            # Save for debugging (optional)
-            Image.fromarray(input_anchor_np).save(os.path.join(outputs_folder, f'{generate_timestamp()}_keyframes_start.png'))
+            # --- Resize/Crop anchors to output video shape (match video, NEVER force video to match anchor) ---
+            # Start frame (optional)
+            if start_frame is not None:
+                start_frame_np = resize_and_center_crop(start_frame, target_height=target_h, target_width=target_w)
+                Image.fromarray(start_frame_np).save(os.path.join(outputs_folder, f'{generate_timestamp()}_keyframes_start.png'))
+                start_frame_tensor = torch.from_numpy(start_frame_np).float() / 127.5 - 1
+                start_frame_tensor = start_frame_tensor.permute(2, 0, 1)[None, :, None]  # [1,3,1,H,W]
+                start_latent = vae_encode(start_frame_tensor, vae.float())
+            else:
+                # Optionally: Use gray or black image as anchor if none
+                start_frame_np = np.ones((target_h, target_w, 3), dtype=np.uint8) * 128
+                start_frame_tensor = torch.from_numpy(start_frame_np).float() / 127.5 - 1
+                start_frame_tensor = start_frame_tensor.permute(2, 0, 1)[None, :, None]
+                start_latent = vae_encode(start_frame_tensor, vae.float())
         
-            # --- VAE encode ---
-            input_anchor_tensor = torch.from_numpy(input_anchor_np).float() / 127.5 - 1
-            input_anchor_tensor = input_anchor_tensor.permute(2, 0, 1)[None, :, None].float()
-            start_latent = vae_encode(input_anchor_tensor, vae.float())  # always shape [1,16,1,H//8,W//8]
+            # End frame (required)
+            if end_frame is not None:
+                end_frame_np = resize_and_center_crop(end_frame, target_height=target_h, target_width=target_w)
+                Image.fromarray(end_frame_np).save(os.path.join(outputs_folder, f'{generate_timestamp()}_keyframes_end.png'))
+                end_frame_tensor = torch.from_numpy(end_frame_np).float() / 127.5 - 1
+                end_frame_tensor = end_frame_tensor.permute(2, 0, 1)[None, :, None]
+                end_latent = vae_encode(end_frame_tensor, vae.float())
+            else:
+                raise ValueError("Keyframes mode requires End Frame to be set!")
         
-            # --- End frame processing (always required) ---
-            end_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
-            end_tensor = torch.from_numpy(end_np).float() / 127.5 - 1
-            end_tensor = end_tensor.permute(2, 0, 1)[None, :, None].float()
-            end_latent = vae_encode(end_tensor, vae.float())
-        
-            # --- Text prompt encoding & mask logic ---
-            if not high_vram:
-                unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
-            fake_diffusers_current_device(text_encoder, gpu)
-            load_model_as_complete(text_encoder_2, target_device=gpu)
-        
+            # --- Prompt/CLIP encodings (unchanged) ---
             lv, cp = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
-            lv, mask = crop_or_pad_yield_mask(lv, 512)
             lv_n, cp_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
+            lv, mask = crop_or_pad_yield_mask(lv, 512)
             lv_n, mask_n = crop_or_pad_yield_mask(lv_n, 512)
-            m = mask
-            m_n = mask_n
+        
+            # CLIP-Vision: Optionally, as in the reference, average CLIP embeddings of start and end frames
+            clip_output = hf_clip_vision_encode(start_frame_np, feature_extractor, image_encoder).last_hidden_state
+            clip_output_end = hf_clip_vision_encode(end_frame_np, feature_extractor, image_encoder).last_hidden_state
+            clip_output = (clip_output + clip_output_end) / 2.0
+        
+            # --- Dynamic shape for VAE/Latents ---
+            height, width = target_h, target_w
         
             # --- CLIP Vision feature extraction ---
             if not high_vram:
@@ -313,10 +320,10 @@ def worker(
             if mode == "keyframes":
                 # Always build pre-latent from start_latent
                 clean_latents_pre = start_latent.to(history_latents)
-                if is_first_section:
+                # For last section, replace clean_latents_post with end_latent!
+                if is_first_section:     # This is the *last* section due to reverse loop
                     clean_latents_post = end_latent.to(history_latents)
                 else:
-                    # HERE: use true overlap like im2vid!
                     clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1+2+16, :, :].split([1,2,16], dim=2)
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
             else:
