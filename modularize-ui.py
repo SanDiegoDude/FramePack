@@ -249,7 +249,15 @@ def worker(
             lv_n, mask_n = crop_or_pad_yield_mask(lv_n, 512)
             m    = mask
             m_n  = mask_n
-            inp_np = None
+            s_np = resize_and_center_crop(start_frame, target_width=width, target_height=height)
+            s_tensor = torch.from_numpy(s_np).float() / 127.5 - 1
+            s_tensor = s_tensor.permute(2, 0, 1)[None, :, None].float()
+            start_latent = vae_encode(s_tensor.float(), vae.float())                        
+            inp_np = s_np
+            if not high_vram:
+                load_model_as_complete(image_encoder, target_device=gpu)
+                debug("worker: loaded image_encoder to gpu")
+            clip_output = hf_clip_vision_encode(inp_np, feature_extractor, image_encoder).last_hidden_state
         else:
             # --- Image2Video/Text2Video (legacy/unchanged)
             inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = prepare_inputs(
