@@ -344,7 +344,39 @@ def worker(
                 debug("worker: In callback, push progress preview at step", current_step, "/", steps)
                 stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
 
-            generated_latents = sample_hunyuan(
+            if mode == "keyframes":
+                    generated_latents = sample_hunyuan(
+                    transformer=transformer,
+                    sampler="unipc",
+                    width=width,
+                    height=height,
+                    frames=frames_per_section,
+                    real_guidance_scale=cfg,
+                    distilled_guidance_scale=gs,
+                    guidance_rescale=rs,
+                    num_inference_steps=steps,
+                    generator=rnd,
+                    prompt_embeds=lv,
+                    prompt_embeds_mask=m,
+                    prompt_poolers=cp,
+                    negative_prompt_embeds=lv_n,
+                    negative_prompt_embeds_mask=m_n,
+                    negative_prompt_poolers=cp_n,
+                    device=gpu,
+                    dtype=torch.bfloat16,
+                    image_embeddings=clip_output,
+                    latent_indices=None,
+                    clean_latents=clean_latents,  # as built in your keyframes branch
+                    clean_latent_indices=None,
+                    clean_latents_2x=None,
+                    clean_latent_2x_indices=None,
+                    clean_latents_4x=None,
+                    clean_latent_4x_indices=None,
+                    callback=callback,
+                )    
+                
+            else: 
+                generated_latents = sample_hunyuan(
                 transformer=transformer,
                 sampler='unipc',
                 width=width,
