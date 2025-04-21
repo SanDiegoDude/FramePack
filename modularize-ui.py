@@ -311,14 +311,16 @@ def worker(
             clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
         
             if mode == "keyframes":
+                # Always build pre-latent from start_latent
                 clean_latents_pre = start_latent.to(history_latents)
                 if is_first_section:
                     clean_latents_post = end_latent.to(history_latents)
-                    clean_latents_2x = clean_latents_4x = None  # Not used for first
                 else:
-                    clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1+2+16, :, :].split([1,2,16],dim=2)
+                    # HERE: use true overlap like im2vid!
+                    clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1+2+16, :, :].split([1,2,16], dim=2)
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
             else:
+                # Reference unchanged im2vid/txt2vid legacy, which you report works:
                 clean_latents_pre = start_latent.to(history_latents)
                 clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
