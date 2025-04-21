@@ -246,7 +246,7 @@ def worker(
             if not high_vram:
                 load_model_as_complete(image_encoder, target_device=gpu)
             
-           if mode == "keyframes":
+            if mode == "keyframes":
                 # Process end frame with CLIP
                 end_clip_output = hf_clip_vision_encode(end_np, feature_extractor, image_encoder).last_hidden_state
                 
