@@ -524,7 +524,7 @@ def process(
 ):
     global stream
     debug("process: called with mode", mode)
-    assert mode in ['image2video', 'text2video'], "Invalid mode"
+    assert mode in ['image2video', 'text2video', 'keyframes'], "Invalid mode"
     if mode == 'image2video' and input_image is None:
         debug("process: Aborting early -- no input image for image2video")
         yield (
