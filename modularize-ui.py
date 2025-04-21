@@ -204,6 +204,18 @@ def worker(
             if end_frame is None:
                 raise ValueError("Keyframes mode requires End Frame to be set!")
             width, height = end_frame.shape[1], end_frame.shape[0]
+            if start_frame is not None:
+                s_np = resize_and_center_crop(start_frame, target_width=width, target_height=height)
+                s_tensor = torch.from_numpy(s_np).float() / 127.5 - 1
+                s_tensor = s_tensor.permute(2, 0, 1)[None, :, None].float()
+                start_latent = vae_encode(s_tensor.float(), vae.float())
+                inp_np = s_np
+            else:
+                start_latent = torch.zeros((1, 16, 1, height//8, width//8), dtype=torch.float32)
+                # build a blank RGB frame for vision encoder:
+                s_np = np.zeros((height, width, 3), dtype=np.uint8)
+                inp_np = s_np
+            # ...now use inp_np for vision encoder embeddings below regardless ...
         elif mode == "text2video":
             width, height = get_dims_from_aspect(aspect, custom_w, custom_h)
             input_image_arr = None
