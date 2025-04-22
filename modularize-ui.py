@@ -490,7 +490,6 @@ def worker(
             is_first_section = latent_padding == latent_paddings[0]
             is_last_section = latent_padding == 0
             latent_padding_size = latent_padding * latent_window_size
-            
             debug(f'latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}, is_first_section = {is_first_section}')
             
             split_sizes = [1, latent_padding_size, latent_window_size, 1, 2, 16]
@@ -643,62 +642,62 @@ def worker(
                 generated_latents = torch.cat([start_latent.to(generated_latents), generated_latents], dim=2)
                 debug(f"worker: is_last_section => concatenated latent, new shape: {generated_latents.shape}")
             
-                num_new_latents = generated_latents.shape[2]
-                prev_total = total_generated_latent_frames
-                total_generated_latent_frames += num_new_latents
-                history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
-                debug(f"worker: Added {num_new_latents} frames, total now: {total_generated_latent_frames}")
-                debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
-                
-                if not high_vram:
-                    offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
-                    load_model_as_complete(vae, target_device=gpu)
-                    debug("worker: loaded vae to gpu (again)")
-                
-                real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
-                
-                # --- Section-wise decoding ---
-                if is_last_section:
-                    # The last section may need a slightly different number of frames
-                    section_latent_frames = (latent_window_size * 2 + 1)
-                else:
-                    section_latent_frames = (latent_window_size * 2)
-                overlapped_frames = latent_window_size * 4 - 3
-                # Always decode only the *newest* section
-                start_idx = max(0, real_history_latents.shape[2] - section_latent_frames)
-                new_section_latents = real_history_latents[:, :, start_idx:, :, :]
-                debug(f"decoding latents {start_idx}:{real_history_latents.shape[2]} (frames={new_section_latents.shape[2]})")
-                
-                current_pixels = vae_decode_chunked(new_section_latents, vae).cpu()
-                adjusted_overlap = min(current_pixels.shape[2], overlapped_frames)
-                debug(f"soft_append: current={current_pixels.shape[2]}, prev={'0' if history_pixels is None else history_pixels.shape[2]}, overlap={adjusted_overlap}")
-                
-                if history_pixels is None:
-                    history_pixels = current_pixels
-                else:
-                    history_pixels = soft_append_bcthw(current_pixels, history_pixels, adjusted_overlap)
-                debug(f"Successfully appended section, history now has {history_pixels.shape[2]} frames")
-                
-                # Always update preview with the full accumulated history_pixels
-                preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
+            num_new_latents = generated_latents.shape[2]
+            prev_total = total_generated_latent_frames
+            total_generated_latent_frames += num_new_latents
+            history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
+            debug(f"worker: Added {num_new_latents} frames, total now: {total_generated_latent_frames}")
+            debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
+            
+            if not high_vram:
+                offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
+                load_model_as_complete(vae, target_device=gpu)
+                debug("worker: loaded vae to gpu (again)")
+            
+            real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
+            
+            # --- Section-wise decoding ---
+            if is_last_section:
+                # The last section may need a slightly different number of frames
+                section_latent_frames = (latent_window_size * 2 + 1)
+            else:
+                section_latent_frames = (latent_window_size * 2)
+            overlapped_frames = latent_window_size * 4 - 3
+            # Always decode only the *newest* section
+            start_idx = max(0, real_history_latents.shape[2] - section_latent_frames)
+            new_section_latents = real_history_latents[:, :, start_idx:, :, :]
+            
+            
+            current_pixels = vae_decode_chunked(new_section_latents, vae).cpu()
+            adjusted_overlap = min(current_pixels.shape[2], overlapped_frames)
+            debug(f"soft_append: current={current_pixels.shape[2]}, prev={'0' if history_pixels is None else history_pixels.shape[2]}, overlap={adjusted_overlap}")
+            
+            if history_pixels is None:
+                history_pixels = current_pixels
+            else:
+                history_pixels = soft_append_bcthw(current_pixels, history_pixels, adjusted_overlap)
+            debug(f"Successfully appended section, history now has {history_pixels.shape[2]} frames")
+            
+            # Always update preview with the full accumulated history_pixels
+            preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
+            try:
+                save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
+                debug(f"[FILE] Preview video saved: {preview_filename}")
+                stream.output_queue.push(('preview_video', preview_filename))
+            except Exception as e:
+                debug(f"[ERROR] Failed to save preview video: {e}")
+            
+            if is_last_section:
+                # Save the final output
+                output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
                 try:
-                    save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
-                    debug(f"[FILE] Preview video saved: {preview_filename}")
-                    stream.output_queue.push(('preview_video', preview_filename))
+                    save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
+                    debug(f"[FILE] Video successfully saved to {output_filename}: {os.path.exists(output_filename)}")
+                    stream.output_queue.push(('file', output_filename))
                 except Exception as e:
-                    debug(f"[ERROR] Failed to save preview video: {e}")
-                
-                if is_last_section:
-                    # Save the final output
-                    output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
-                    try:
-                        save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
-                        debug(f"[FILE] Video successfully saved to {output_filename}: {os.path.exists(output_filename)}")
-                        stream.output_queue.push(('file', output_filename))
-                    except Exception as e:
-                        debug(f"[ERROR] FAILED to save video {output_filename}: {e}")
-                        traceback.print_exc()
-                    break  # We're done!
+                    debug(f"[ERROR] FAILED to save video {output_filename}: {e}")
+                    traceback.print_exc()
+                break  # We're done!
 
         # After history_pixels is fully processed and before final video export
         if original_mode == "video_extension" and input_video is not None and 'history_pixels' in locals() and history_pixels is not None:
