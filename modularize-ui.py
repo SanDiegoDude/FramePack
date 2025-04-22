@@ -1,7 +1,6 @@
 from diffusers_helper.hf_login import login
 import os
 import time
-import gc
 os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 import gradio as gr
 import torch
@@ -358,10 +357,6 @@ def worker(
                 # Let processing continue with normal mode handling
                 mode = "image2video"  # Redirect to use image2video processing path
                 debug(f"Redirecting to image2video path with selected frame as input")
-
-                gc.collect()
-                torch.cuda.empty_cache()
-            
             
             if mode == "keyframes":
                 # Process end frame with CLIP
@@ -403,8 +398,6 @@ def worker(
                 input_image, prompt, n_prompt, cfg
             )
             start_latent = vae_encode(inp_tensor.float(), vae.float())
-            gc.collect()
-            torch.cuda.empty_cache()
 
         debug("worker: VAE encoded")
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
@@ -631,62 +624,37 @@ def worker(
                 # First section - decode all available frames
                 history_pixels = vae_decode(real_history_latents, vae).cpu() 
                 debug(f"First section decoded: {total_generated_latent_frames} latent frames → {history_pixels.shape[2]} pixel frames")
-                gc.collect() # Optional: Keep GC collect after decode
-                torch.cuda.empty_cache() # Optional: Keep cache empty after decode
-            else: # Subsequent sections
-                section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
-                overlapped_frames = latent_window_size * 4 - 3
-                
-                # Ensure section_latent_frames does not exceed the available history length
-                # (Crucial safety check if history is shorter than expected)
-                section_latent_frames = min(section_latent_frames, real_history_latents.shape[2])
-                
-                # **** CORRECTED SLICING ****
-                # Get the NEWEST latent frames slice (from the START of real_history_latents)
-                new_section_latents = real_history_latents[:, :, :section_latent_frames, :, :] # SLICING FROM START
-                debug(f"decoding latents : {section_latent_frames} (frames={new_section_latents.shape[2]})") # Adjusted debug msg
-                
-                # Decode the slice
-                current_pixels = vae_decode(new_section_latents, vae).cpu()
-                
-                # Explicitly delete the GPU tensor slice reference NOW
-                # (It's already copied to CPU in current_pixels)
-                del new_section_latents
-                gc.collect()
-                torch.cuda.empty_cache()
-                
-                # Get safe overlap count
-                safe_overlap = min(overlapped_frames, current_pixels.shape[2])
-                if safe_overlap < overlapped_frames:
-                    debug(f"WARNING: Adjusting overlap from {overlapped_frames} to {safe_overlap}")
-                
-                # Append to history, adjusting overlap if needed
-                history_pixels = soft_append_bcthw(current_pixels, history_pixels, safe_overlap)
-                debug(f"Added new section, history_pixels now has {history_pixels.shape[2]} frames")
 
-                # Explicitly delete the CPU tensor now merged into history
-                del current_pixels
-                gc.collect()
-                # No need for torch.cuda.empty_cache() here as current_pixels was on CPU
+            else:
+                # Subsequent sections - decode ONLY the newest slice
+                section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
+                overlapped_frames = latent_window_size * 4 - 3 
                 
-            # Always save and push a preview after each section
+                # NO explicit cleanup calls here
+                current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae).cpu()
+                
+                # Merge using soft_append (CPU op)
+                # NO explicit cleanup calls here
+                history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
+                debug("worker: vae decoded + soft_append_bcthw")
+
+            # --- VAE Decoding END ---
+
+            # --- Preview Saving (uses the fully accumulated history_pixels) ---
             preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
             try:
                 save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
-                debug(f"[FILE] Preview saved: {preview_filename}")
+                debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
                 stream.output_queue.push(('preview_video', preview_filename))
+                debug(f"[QUEUE] Queued preview_video event: {preview_filename}")
             except Exception as e:
-                debug(f"[ERROR] Failed to save preview: {e}")
-            
-            # Unload models after each section
+                debug(f"[ERROR] Failed to save preview video: {e}")
+
+
+            # --- Model Unloading (Only if needed based on high_vram flag) ---
             if not high_vram:
-                unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
+                unload_complete_models() # Let this handle VAE unload + potential cleanup
                 debug("worker: unloaded complete models (end section)")
-            
-            # Break if this was the last section
-            if is_last_section:
-                debug("worker: is_last_section - break")
-                break
 
         # After history_pixels is fully processed and before final video export
         if original_mode == "video_extension" and input_video is not None and 'history_pixels' in locals() and history_pixels is not None:
@@ -723,9 +691,6 @@ def worker(
                         combined_filename
                     ]
 
-
-                gc.collect()
-                torch.cuda.empty_cache()
                 
                 debug(f"[FFMPEG] Running command: {' '.join(cmd)}")
                 subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
