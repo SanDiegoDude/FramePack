@@ -1053,16 +1053,7 @@ with block:
         ]
     )
 
-    def switch_mode(mode):
-        return (
-            gr.update(visible=(mode=="image2video" or mode=="text2video")),  # input_image
-            gr.update(visible=(mode=="keyframes")),  # start_frame
-            gr.update(visible=(mode=="keyframes")),  # end_frame
-            gr.update(visible=(mode=="text2video")), # aspect_selector
-            gr.update(visible=(mode=="image2video")),# custom_w
-            gr.update(visible=False),                # custom_h  (or whatever fields you want to hide always unless manual aspect)
-        )
-    
+      
     start_button.click(
         fn=process,
         inputs=ips,
