@@ -658,22 +658,15 @@ def worker(
             
             # This is the KEY part that matches the original code
             if history_pixels is None:
-                # Use our chunked decoder as a direct replacement for vae_decode
-                history_pixels = vae_decode_chunked(real_history_latents, vae).cpu()
-                debug(f"First section decoded: {real_history_latents.shape[2]} latent frames -> {history_pixels.shape[2]} pixel frames")
-                
-                # Save preview
-                preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
-                try:
-                    save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
-                    debug(f"[FILE] Preview video saved: {preview_filename}")
-                    stream.output_queue.push(('preview_video', preview_filename))
-                except Exception as e:
-                    debug(f"[ERROR] Failed to save preview video: {e}")
+                # Only decoding everything once at the start
+                current_pixels = vae_decode_chunked(real_history_latents, vae).cpu()
+                history_pixels = current_pixels
+                last_decoded_latent_idx = total_generated_latent_frames
             else:
-                # Calculate section sizes as in original code
-                section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
-                overlapped_frames = latent_window_size * 4 - 3
+                # Decode only new latents produced in this section
+                new_section_latents = real_history_latents[:, :, last_decoded_latent_idx:total_generated_latent_frames]
+                current_pixels = vae_decode_chunked(new_section_latents, vae).cpu()
+                last_decoded_latent_idx = total_generated_latent_frames
                 
                 debug(f"Processing section: frames={section_latent_frames}, overlap={overlapped_frames}")
                 
@@ -690,13 +683,10 @@ def worker(
                 
                 # Check if we can satisfy the overlap requirement
                 if current_pixels.shape[2] < overlapped_frames:
-                    debug(f"WARNING: Current frames ({current_pixels.shape[2]}) < required overlap ({overlapped_frames})")
-                    # Auto-adjust the overlap to what we can handle
+                    # fallback
                     adjusted_overlap = current_pixels.shape[2]
-                    debug(f"Adjusting overlap to {adjusted_overlap}")
                     history_pixels = soft_append_bcthw(current_pixels, history_pixels, adjusted_overlap)
                 else:
-                    # Use standard overlap
                     history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
                     
                 debug(f"Successfully appended section, history now has {history_pixels.shape[2]} frames")
