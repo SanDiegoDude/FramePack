@@ -289,7 +289,7 @@ def worker(
         t_start = time.time()
 
         # ----------- Mode and input setup & prompts -------------
-         if mode == "keyframes":
+        if mode == "keyframes":
              if end_frame is None:
                  raise ValueError("Keyframes mode requires End Frame to be set!")
              end_H, end_W, end_C = end_frame.shape
