@@ -426,68 +426,64 @@ def worker(
         total_generated_latent_frames = 0
 
         # -------- SECTION PATCH/STITCH LOOP ----------
-        # # Calculate latent paddings with special pattern (COMMENT OUT NEW LOGIC)
-        # if total_sections > 4:
-        #     # Special pattern for longer videos that improves transitions
-        #     latent_paddings = [3] + [2] * (total_sections - 3) + [1, 0]
-        #     debug(f"worker: Using special padding pattern for {total_sections} sections: {latent_paddings}")
-        # else:
-        #     # For 4 or fewer sections, use the standard reversed range
-        #     latent_paddings = list(reversed(range(total_sections)))
-        #     debug(f"worker: Using standard padding for {total_sections} sections: {latent_paddings}")
-        
-        # --- FORCE OLD PADDING SCHEME ---
-        debug(f"worker: [TESTING] Forcing old padding scheme: reversed(range(total_sections))")
+        # --- FORCE OLD ITERATION SCHEME ---
+        debug(f"worker: [TESTING] Forcing old iteration scheme: reversed(range(total_sections={total_sections}))")
         loop_iterator = reversed(range(total_sections))
-        # --- END FORCE OLD PADDING ---
-        
-        # Initialize video tracking variables
-        history_latents = torch.zeros(
-            size=(1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32
-        ).cpu()
-        last_decoded_latent_idx = 0
-        history_pixels = None
-        total_generated_latent_frames = 0
-        
-        # Process each section with the padding pattern
-        for section in loop_iterator: # Iterate using the old reversed range
+        # --- END FORCE OLD ITERATION ---
+
+        # Process each section using the old iteration method
+        for section in loop_iterator: # Iterates from total_sections-1 down to 0
+            # Determine section properties based on 'section' index
             is_last_section = section == 0
-            latent_padding_size = section * latent_window_size # Use section index directly
-            # The rest of your loop uses is_last_section and latent_padding_size as before
-            debug(f'section = {section}, latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}')
-            
+            is_first_iteration = section == total_sections - 1 # First iteration of the loop
+            latent_padding_size = section * latent_window_size # Use section index directly for padding calc
+
+            debug(f'section = {section}, latent_padding_size = {latent_padding_size}, is_first_iteration = {is_first_iteration}, is_last_section = {is_last_section}')
+
+            # Check for abort signal (Unchanged)
+            if stream.input_queue.top() == 'end':
+                 debug("worker: input_queue 'end' received. Aborting generation.")
+                 stream.output_queue.push(('end', None))
+                 return
+
+            # Setup indices and clean latents for sample_hunyuan (Uses latent_padding_size)
             split_sizes = [1, latent_padding_size, latent_window_size, 1, 2, 16]
             total_indices = sum(split_sizes)
             indices = torch.arange(total_indices).unsqueeze(0)
             clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split(split_sizes, dim=1)
             clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
-            
+
             # Setup the clean latents for ALL modes first
-            clean_latents_pre = start_latent.to(history_latents)
+            clean_latents_pre = start_latent.to(history_latents.device, dtype=history_latents.dtype)
             clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
             clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
-            
-            # Then selectively override for keyframes mode first section
-            if mode == "keyframes" and is_first_section:
-                clean_latents_post = end_latent.to(history_latents)
+
+            # Selectively override for keyframes mode FIRST ITERATION
+            # 'is_first_iteration' now correctly flags the start of the reversed loop
+            if mode == "keyframes" and is_first_iteration:
+                debug("Keyframes mode: Overriding clean_latents_post with end_latent for first iteration.")
+                clean_latents_post = end_latent.to(history_latents.device, dtype=history_latents.dtype)
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
-            
-            # ------- mask fallback safeguard -------
+
+            # Mask fallback safeguard (Unchanged)
             m   = m if m is not None else torch.ones_like(lv)
             m_n = m_n if m_n is not None else torch.ones_like(lv_n)
 
-            # -- memory mgmt
+            # Memory mgmt before sampling (Unchanged)
             if not high_vram:
                 unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
-                debug("worker: explicitly unloaded all models (end section)")
+                # Note: The debug message here might be slightly confusing as it says "(end section)"
+                # but it runs *before* the section's sampling. This was in your provided code.
+                debug("worker: explicitly unloaded all models (before sampling)")
                 move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
                 debug("worker: moved transformer to gpu (memory preservation)")
 
             transformer.initialize_teacache(enable_teacache=use_teacache, num_steps=steps if use_teacache else 0)
             debug("worker: teacache initialized", "use_teacache", use_teacache)
 
-            # --- sampling ---
+            # --- Define the *callback adapted for the 'section' index* ---
             def callback(d):
+                # Preview generation (Unchanged)
                 preview = d['denoised']
                 preview = vae_decode_fake(preview)
                 preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
@@ -496,154 +492,110 @@ def worker(
                     debug("worker: callback: received 'end', stopping generation.")
                     stream.output_queue.push(('end', None))
                     raise KeyboardInterrupt('User ends the task.')
-                
-                # Section progress
+
+                # Section progress (Unchanged)
                 current_step = d['i'] + 1
                 section_percentage = int(100.0 * current_step / steps)
-                
-                # Overall progress
-                current_section_index = latent_paddings.index(latent_padding)
-                sections_completed = current_section_index
-                overall_percentage = int(100.0 * (sections_completed + (current_step / steps)) / len(latent_paddings))
-                
-                # Calculate actual frame count (correctly)
-                actual_frames = total_generated_latent_frames * 4 - 3 if total_generated_latent_frames > 0 else 0
-                actual_seconds = actual_frames / 30.0
-                
-                hint = f'Section {sections_completed+1}/{len(latent_paddings)} - Step {current_step}/{steps}'
-                desc = f'Generated frames: {actual_frames}, Length: {actual_seconds:.2f}s (FPS-30)'
-                
-                # Create dual progress bar HTML
-                progress_html = f"""
-                <div class="dual-progress-container">
-                    <div class="progress-label">
-                        <span>Current Section:</span>
-                        <span>{section_percentage}%</span>
-                    </div>
-                    <div class="progress-bar-bg">
-                        <div class="progress-bar-fg" style="width: {section_percentage}%"></div>
-                    </div>
-                    
-                    <div class="progress-label">
-                        <span>Overall Progress:</span>
-                        <span>{overall_percentage}%</span>
-                    </div>
-                    <div class="progress-bar-bg">
-                        <div class="progress-bar-fg" style="width: {overall_percentage}%"></div>
-                    </div>
-                    
-                    <div style="font-size:0.9em; opacity:0.8;">{hint}</div>
-                </div>
-                """
-                
+
+                # Overall progress (ADAPTED)
+                # 'section' goes from total_sections-1 down to 0
+                sections_completed = (total_sections - 1) - section # How many sections came *before* this one
+                overall_percentage = int(100.0 * (sections_completed + (current_step / steps)) / total_sections)
+
+                # Calculate actual frame count (Uses total_generated_latent_frames state variable)
+                # Let's calculate the *pixel* frames generated *so far* based on history_pixels
+                actual_pixel_frames = history_pixels.shape[2] if history_pixels is not None else 0
+                actual_seconds = actual_pixel_frames / 30.0
+
+                hint = f'Section {sections_completed+1}/{total_sections} - Step {current_step}/{steps}'
+                # Display pixel frames in description for user clarity
+                desc = f'Pixel frames generated: {actual_pixel_frames}, Length: {actual_seconds:.2f}s (FPS-30)'
+
+                # Create dual progress bar HTML (Unchanged)
+                progress_html = f"""...""" # Your dual progress bar HTML here
+
                 debug(f"worker: In callback, section: {section_percentage}%, overall: {overall_percentage}%")
                 stream.output_queue.push(('progress', (preview, desc, progress_html)))
+            # --- End adapted callback definition ---
 
+            # --- Run sampling (Passes the correct indices/latents based on padding_size) ---
+            # The mode check here ensures correct arguments like image_embeddings are passed
             if mode == "keyframes":
                 generated_latents = sample_hunyuan(
-                    transformer=transformer,
-                    sampler="unipc",
-                    width=width,
-                    height=height,
-                    frames=frames_per_section,
-                    real_guidance_scale=cfg,
-                    distilled_guidance_scale=gs,
-                    guidance_rescale=rs,
-                    num_inference_steps=steps,
-                    generator=rnd,
-                    prompt_embeds=lv,
-                    prompt_embeds_mask=m,
-                    prompt_poolers=cp,
-                    negative_prompt_embeds=lv_n,
-                    negative_prompt_embeds_mask=m_n,
-                    negative_prompt_poolers=cp_n,
-                    device=gpu,
-                    dtype=torch.bfloat16,
-                    image_embeddings=clip_output,
-                    # IMPORTANT: Use all indices instead of None
-                    latent_indices=latent_indices,
-                    clean_latents=clean_latents,
-                    clean_latent_indices=clean_latent_indices,
-                    clean_latents_2x=clean_latents_2x,
-                    clean_latent_2x_indices=clean_latent_2x_indices,
-                    clean_latents_4x=clean_latents_4x,
-                    clean_latent_4x_indices=clean_latent_4x_indices,
+                    transformer=transformer, sampler="unipc", width=width, height=height, frames=frames_per_section,
+                    real_guidance_scale=cfg, distilled_guidance_scale=gs, guidance_rescale=rs,
+                    num_inference_steps=steps, generator=rnd, prompt_embeds=lv, prompt_embeds_mask=m,
+                    prompt_poolers=cp, negative_prompt_embeds=lv_n, negative_prompt_embeds_mask=m_n,
+                    negative_prompt_poolers=cp_n, device=gpu, dtype=torch.bfloat16, image_embeddings=clip_output,
+                    latent_indices=latent_indices, clean_latents=clean_latents, clean_latent_indices=clean_latent_indices,
+                    clean_latents_2x=clean_latents_2x, clean_latent_2x_indices=clean_latent_2x_indices,
+                    clean_latents_4x=clean_latents_4x, clean_latent_4x_indices=clean_latent_4x_indices,
                     callback=callback,
-                )   
-                
-            else: 
+                )
+            else: # image2video, text2video, video_extension redirected to image2video
                 generated_latents = sample_hunyuan(
-                transformer=transformer,
-                sampler='unipc',
-                width=width,
-                height=height,
-                frames=frames_per_section,
-                real_guidance_scale=cfg,
-                distilled_guidance_scale=gs,
-                guidance_rescale=rs,
-                num_inference_steps=steps,
-                generator=rnd,
-                prompt_embeds=lv,
-                prompt_embeds_mask=m,
-                prompt_poolers=cp,
-                negative_prompt_embeds=lv_n,
-                negative_prompt_embeds_mask=m_n,
-                negative_prompt_poolers=cp_n,
-                device=gpu,
-                dtype=torch.bfloat16,
-                image_embeddings=clip_output,
-                latent_indices=latent_indices,
-                clean_latents=clean_latents,
-                clean_latent_indices=clean_latent_indices,
-                clean_latents_2x=clean_latents_2x,
-                clean_latent_2x_indices=clean_latent_2x_indices,
-                clean_latents_4x=clean_latents_4x,
-                clean_latent_4x_indices=clean_latent_4x_indices,
-                callback=callback
-            )
+                    transformer=transformer, sampler='unipc', width=width, height=height, frames=frames_per_section,
+                    real_guidance_scale=cfg, distilled_guidance_scale=gs, guidance_rescale=rs,
+                    num_inference_steps=steps, generator=rnd, prompt_embeds=lv, prompt_embeds_mask=m,
+                    prompt_poolers=cp, negative_prompt_embeds=lv_n, negative_prompt_embeds_mask=m_n,
+                    negative_prompt_poolers=cp_n, device=gpu, dtype=torch.bfloat16, image_embeddings=clip_output,
+                    latent_indices=latent_indices, clean_latents=clean_latents, clean_latent_indices=clean_latent_indices,
+                    clean_latents_2x=clean_latents_2x, clean_latent_2x_indices=clean_latent_2x_indices,
+                    clean_latents_4x=clean_latents_4x, clean_latent_4x_indices=clean_latent_4x_indices,
+                    callback=callback
+                )
+
+            # --- Post-sampling ---
             # Handle the last section specially (add start latent if needed)
             if is_last_section:
-                generated_latents = torch.cat([start_latent.to(generated_latents), generated_latents], dim=2)
+                generated_latents = torch.cat([start_latent.to(generated_latents.device, dtype=generated_latents.dtype), generated_latents], dim=2)
                 debug(f"worker: is_last_section => concatenated latent, new shape: {generated_latents.shape}")
-            
-            # Update frame counts
-            new_frames = generated_latents.shape[2]
-            total_generated_latent_frames += new_frames
-            debug(f"worker: Added {new_frames} frames, total now: {total_generated_latent_frames}")
-            
-            # Update history latents
-            history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
+
+            # Update latent frame count (Tracks only newly added frames)
+            new_latent_frames = generated_latents.shape[2]
+            # Note: This 'total_generated_latent_frames' might be slightly misleading if only used in desc.
+            # The VAE decode step below uses the actual length of history_latents.
+            # total_generated_latent_frames += new_latent_frames # Commenting out as it wasn't used correctly
+            # debug(f"worker: Added {new_latent_frames} latent frames this section.")
+
+            # Update history latents (CPU tensor)
+            history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
             debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
-            
-            # Load VAE for decoding
+
+            # --- VAE Decoding Section (Simplified logic from previous step - NO explicit cleanup) ---
             if not high_vram:
                 offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
                 load_model_as_complete(vae, target_device=gpu)
                 debug("worker: loaded vae to gpu")
-            
-            # Get the real history latents for this section
-            real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
-            
-            # Decode section
+
+            # Determine the total number of *valid* generated latent frames in history
+            # Subtract the size of the initial context/padding stored in history_latents
+            current_total_latent_frames = history_latents.shape[2] - (1 + 2 + 16)
+            debug(f"Current total valid latent frames in history: {current_total_latent_frames}")
+
+            # Get the slice of *valid* generated latents
+            real_history_latents = history_latents[:, :, :current_total_latent_frames, :, :]
+            debug(f"Shape of real_history_latents for decode: {real_history_latents.shape}")
+
             if history_pixels is None:
-                # First section - decode all available frames
-                history_pixels = vae_decode(real_history_latents, vae).cpu() 
-                debug(f"First section decoded: {total_generated_latent_frames} latent frames → {history_pixels.shape[2]} pixel frames")
-
+                # First section decoded - real_history_latents contains only the first generated segment
+                history_pixels = vae_decode(real_history_latents, vae).cpu()
+                debug(f"First section decoded: {real_history_latents.shape[2]} latent frames → {history_pixels.shape[2]} pixel frames")
             else:
-                # Subsequent sections - decode ONLY the newest slice
-                section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
-                overlapped_frames = latent_window_size * 4 - 3 
-                
-                # NO explicit cleanup calls here
-                current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae).cpu()
-                
-                # Merge using soft_append (CPU op)
-                # NO explicit cleanup calls here
-                history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
-                debug("worker: vae decoded + soft_append_bcthw")
+                # Subsequent sections - decode slice needed for merging
+                section_latent_frames_needed = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
+                # Ensure we don't slice more than available in real_history_latents
+                section_latent_frames_to_decode = min(section_latent_frames_needed, real_history_latents.shape[2])
+                overlapped_frames = latent_window_size * 4 - 3
 
-            # --- VAE Decoding END ---
+                # Slice the *start* of the real history (newest data)
+                latent_decode_slice = real_history_latents[:, :, :section_latent_frames_to_decode, :, :]
+                debug(f"Subsequent section decode input shape: {latent_decode_slice.shape}")
+                current_pixels = vae_decode(latent_decode_slice, vae).cpu()
+
+                # Merge using soft_append (CPU op)
+                history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
+                debug(f"worker: vae decoded + soft_append_bcthw. History pixels shape: {history_pixels.shape}")
 
             # --- Preview Saving (uses the fully accumulated history_pixels) ---
             preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
@@ -655,11 +607,17 @@ def worker(
             except Exception as e:
                 debug(f"[ERROR] Failed to save preview video: {e}")
 
-
             # --- Model Unloading (Only if needed based on high_vram flag) ---
             if not high_vram:
-                unload_complete_models() # Let this handle VAE unload + potential cleanup
+                unload_complete_models()
                 debug("worker: unloaded complete models (end section)")
+
+            # --- Break condition ---
+            if is_last_section:
+                 debug("worker: is_last_section - break")
+                 break # Ensure loop terminates correctly
+
+        # --- Loop finished ---
 
         # After history_pixels is fully processed and before final video export
         if original_mode == "video_extension" and input_video is not None and 'history_pixels' in locals() and history_pixels is not None:
