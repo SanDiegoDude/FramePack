@@ -508,16 +508,23 @@ def worker(
                 current_step = d['i'] + 1
                 section_percentage = int(100.0 * current_step / steps)
     
-                # Overall progress (ADAPTED)
+                # Overall progress (ADAPTED - FIX HERE)
                 # 'section' goes from total_sections-1 down to 0
-                sections_completed = (local_total_sections - 1) - section # How many sections came *before* this one
-                overall_percentage = int(100.0 * (sections_completed + (current_step / steps)) / local_total_sections)
-    
+                # Use total_sections instead of local_total_sections
+                sections_completed = (total_sections - 1) - section # How many sections came *before* this one
+
+                # FIX HERE: Guard against division by zero if total_sections could potentially be 0
+                if total_sections > 0:
+                    overall_percentage = int(100.0 * (sections_completed + (current_step / steps)) / total_sections)
+                else:
+                    overall_percentage = 0 # Or handle as appropriate if total_sections is 0
+                
                 # Calculate actual frame count (Based on history_pixels, as before)
                 actual_pixel_frames = history_pixels.shape[2] if history_pixels is not None else 0
                 actual_seconds = actual_pixel_frames / 30.0
-    
-                hint = f'Section {sections_completed+1}/{local_total_sections} - Step {current_step}/{steps}'
+
+                # FIX HERE: Use total_sections in the f-string
+                hint = f'Section {sections_completed+1}/{total_sections} - Step {current_step}/{steps}'
                 desc = f'Pixel frames generated: {actual_pixel_frames}, Length: {actual_seconds:.2f}s (FPS-30)'
     
                 # Create dual progress bar HTML (Unchanged - uses calculated percentages)
