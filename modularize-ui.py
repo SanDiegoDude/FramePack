@@ -102,18 +102,10 @@ stream = AsyncStream()
 outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
 
+# Step 1: Define the extract_frames_from_video function
 def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resolution=640):
     """
     Extract frames from a video file with bucket resizing for memory efficiency.
-    
-    Args:
-        video_path: Path to the video file
-        num_frames: Number of frames to extract
-        from_end: If True, extract from the end of the video, otherwise from the beginning
-        max_resolution: Maximum dimension for bucket sizing
-    
-    Returns:
-        numpy array of frames, the video fps, and the original dimensions
     """
     try:
         import cv2
@@ -251,13 +243,12 @@ def worker(
     use_adv, adv_window, adv_seconds, selected_frames,
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
     init_color, keyframe_weight,
-    # Add new parameters:
-    input_video=None, extension_direction="Forward", extension_length=3.0, extension_frames=8
+    input_video=None, extension_direction="Forward", extension_length=3.0, extension_frames=8,
+    original_mode=None 
 ):
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
-    original_mode = mode # video_extension mode hack variable
-
+    
     # -- section/frames logic
     if use_adv:
         latent_window_size = adv_window
@@ -656,7 +647,7 @@ def worker(
                 break
 
         # After history_pixels is fully processed and before final video export
-        if original_mode == "video_extension" and 'history_pixels' in locals() and history_pixels is not None:
+        if original_mode == "video_extension" and input_video is not None and 'history_pixels' in locals() and history_pixels is not None:
             # Save the generated extension
             extension_filename = os.path.join(outputs_folder, f'{job_id}_extension.mp4')
             save_bcthw_as_mp4(history_pixels, extension_filename, fps=30)
@@ -701,7 +692,6 @@ def worker(
                 output_filename = extension_filename
                 debug(f"[FILE] Using extension video as fallback: {output_filename}")
 
-        
         # ---- Final export logic (txt2video special handling) ----
         if mode == "text2video":
             N_actual = history_pixels.shape[2]
@@ -862,7 +852,6 @@ def process(
         <div class="progress-bar-bg">
             <div class="progress-bar-fg" style="width: 0%"></div>
         </div>
-        
         <div class="progress-label">
             <span>Overall Progress:</span>
             <span>0%</span>
@@ -870,10 +859,59 @@ def process(
         <div class="progress-bar-bg">
             <div class="progress-bar-fg" style="width: 0%"></div>
         </div>
-        
         <div style="font-size:0.9em; opacity:0.8;">Preparing...</div>
     </div>
     """
+    
+    # Special handling for video_extension mode: Extract frames and set input_image
+    original_mode = mode
+    original_video = input_video
+    
+    if mode == "video_extension":
+        if input_video is None:
+            debug("process: Aborting early -- no input video for video_extension")
+            yield (
+                None, None, None,
+                "Please upload a video to extend!", None,
+                gr.update(interactive=True),
+                gr.update(interactive=False),
+                gr.update()
+            )
+            return
+            
+        try:
+            debug(f"Extracting frames from video for {extension_direction} extension")
+            # Extract frames from the video
+            extracted_frames, video_fps, _ = extract_frames_from_video(
+                input_video,
+                num_frames=int(extension_frames),
+                from_end=(extension_direction == "Forward"),
+                max_resolution=640
+            )
+            
+            # Set input_image based on direction
+            if extension_direction == "Forward":
+                input_image = extracted_frames[-1]  # Use last frame
+                debug(f"Using last frame as input_image for forward extension")
+            else:
+                input_image = extracted_frames[0]  # Use first frame
+                debug(f"Using first frame as input_image for backward extension")
+                
+            # Change mode for worker but remember original
+            mode = "image2video"  # Use image2video processing path
+            debug(f"Mode changed to image2video for worker function")
+            
+        except Exception as e:
+            debug(f"Video frame extraction error: {str(e)}")
+            traceback.print_exc()
+            yield (
+                None, None, None,
+                f"Error processing video: {str(e)}", None,
+                gr.update(interactive=True),
+                gr.update(interactive=False),
+                gr.update()
+            )
+            return
     
     if mode == 'image2video' and input_image is None:
         debug("process: Aborting early -- no input image for image2video")
@@ -885,6 +923,7 @@ def process(
             gr.update()
         )
         return
+        
     if not lock_seed:
         seed = int(time.time()) % 2**32
     debug("process: entering main async_run yield cycle, seed:", seed)
@@ -920,7 +959,8 @@ def process(
         input_video,
         extension_direction,
         extension_length,
-        extension_frames
+        extension_frames,
+        original_mode 
     )
     output_filename = None
     last_desc = ""
