@@ -1171,18 +1171,6 @@ with block:
             input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)  # always present, sometimes hidden
             start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)", height=320, visible=False)
             end_frame = gr.Image(sources='upload', type="numpy", label="End Frame (Required)", height=320, visible=False)
-            aspect_selector = gr.Dropdown(
-                ["16:9", "9:16", "1:1", "4:5", "3:2", "2:3", "21:9", "4:3", "Custom..."],
-                label="Aspect Ratio",
-                value="1:1",
-                visible=False
-            )
-            custom_w = gr.Number(label="Width", value=768, visible=False)
-            custom_h = gr.Number(label="Height", value=768, visible=False)
-            prompt = gr.Textbox(label="Prompt", value='', lines=3)
-            with gr.Row():
-                start_button = gr.Button(value="Start Generation")
-                end_button = gr.Button(value="End Generation", interactive=False)
             with gr.Group(visible=False) as video_extension_options:
                 input_video = gr.Video(
                     label="Upload Video to Extend", 
@@ -1202,6 +1190,18 @@ with block:
                     step=1,
                     info="Number of frames to extract from video for continuity"
                 )
+            aspect_selector = gr.Dropdown(
+                ["16:9", "9:16", "1:1", "4:5", "3:2", "2:3", "21:9", "4:3", "Custom..."],
+                label="Aspect Ratio",
+                value="1:1",
+                visible=False
+            )
+            custom_w = gr.Number(label="Width", value=768, visible=False)
+            custom_h = gr.Number(label="Height", value=768, visible=False)
+            prompt = gr.Textbox(label="Prompt", value='', lines=3)
+            with gr.Row():
+                start_button = gr.Button(value="Start Generation")
+                end_button = gr.Button(value="End Generation", interactive=False)
             advanced_mode = gr.Checkbox(label="Advanced Mode", value=False)
             latent_window_size = gr.Slider(label="Latent Window Size", minimum=2, maximum=33, value=9, step=1, visible=False)
             adv_seconds = gr.Slider(label="Video Length (Seconds)", minimum=0.1, maximum=120.0, value=5.0, step=0.1, visible=False)
