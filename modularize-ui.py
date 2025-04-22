@@ -28,6 +28,12 @@ import random
 
 import subprocess
 
+def get_valid_frame_stops(latent_window_size, max_seconds=120, fps=30):
+    frames_per_section = latent_window_size * 4 - 3
+    max_sections = int((max_seconds * fps) // frames_per_section)
+    stops = [frames_per_section * i for i in range(1, max_sections + 1)]
+    return stops
+
 def make_mp4_faststart(mp4_path):
     tmpfile = mp4_path + ".tmp"
     cmd = [
@@ -46,12 +52,6 @@ def make_mp4_faststart(mp4_path):
         debug(f"[FFMPEG] Faststart failed for {mp4_path}: {e}")
         if os.path.exists(tmpfile):
             os.remove(tmpfile)
-
-def get_valid_frame_stops(latent_window_size, max_seconds=120, fps=30):
-    frames_per_section = latent_window_size * 4 - 3
-    max_sections = int((max_seconds * fps) // frames_per_section)
-    stops = [frames_per_section * i for i in range(1, max_sections + 1)]
-    return stops
 
 DEBUG = True
 def debug(*a, **k):
@@ -101,6 +101,76 @@ else:
 stream = AsyncStream()
 outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
+
+# Step 1: Define the extract_frames_from_video function
+def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resolution=640):
+    """
+    Extract frames from a video file with bucket resizing for memory efficiency.
+    """
+    try:
+        import cv2
+    except ImportError:
+        raise ImportError("OpenCV (cv2) is required for video extension. Please install it with 'pip install opencv-python'")
+        
+    debug(f"Extracting frames from video: {video_path}, num_frames={num_frames}, from_end={from_end}")
+    
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Could not open video file: {video_path}")
+    
+    # Get video properties
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    orig_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    debug(f"Video properties: total_frames={total_frames}, fps={fps}, dimensions={orig_width}x{orig_height}")
+    
+    # Calculate bucket dimensions
+    bucket_height, bucket_width = find_nearest_bucket(orig_height, orig_width, resolution=max_resolution)
+    debug(f"Using bucket dimensions: {bucket_width}x{bucket_height}")
+    
+    # Calculate frame indices to extract
+    if from_end:
+        start_idx = max(0, total_frames - num_frames)
+        frame_indices = list(range(start_idx, total_frames))
+    else:
+        frame_indices = list(range(min(num_frames, total_frames)))
+    
+    # Extract the frames
+    frames = []
+    current_frame = 0
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        if current_frame in frame_indices:
+            # Convert BGR to RGB
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Resize to bucket dimensions
+            frame = resize_and_center_crop(frame, target_width=bucket_width, target_height=bucket_height)
+            
+            frames.append(frame)
+            
+        current_frame += 1
+        
+        # Break if we've extracted all needed frames
+        if len(frames) == len(frame_indices):
+            break
+    
+    cap.release()
+    
+    if not frames:
+        raise ValueError(f"Failed to extract frames from video: {video_path}")
+    
+    # Convert to numpy array
+    frames = np.array(frames)
+    debug(f"Extracted {len(frames)} frames with shape {frames.shape}")
+    
+    return frames, fps, (orig_height, orig_width)
 
 # ---- Color Helper ----
 def parse_hex_color(hexcode):
@@ -172,11 +242,17 @@ def worker(
     prompt, n_prompt, seed,
     use_adv, adv_window, adv_seconds, selected_frames,
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
-    init_color, keyframe_weight
+    init_color, keyframe_weight,
+    input_video=None, extension_direction="Forward", extension_frames=8,
+    original_mode=None 
 ):
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
 
+    # --- DEFINE DEFAULT OUTPUT FILENAME ---
+    output_filename = os.path.join(outputs_folder, f'{job_id}_final.mp4')
+    debug(f"worker: Default output filename set to: {output_filename}")
+    
     # -- section/frames logic
     if use_adv:
         latent_window_size = adv_window
@@ -252,6 +328,40 @@ def worker(
             if not high_vram:
                 load_model_as_complete(image_encoder, target_device=gpu)
             
+            if mode == "video_extension":
+                if input_video is None:
+                    raise ValueError("Video extension mode requires a video to be uploaded!")
+                
+                debug(f"Processing video extension: direction={extension_direction}")
+                
+                # Extract frames from the video
+                extracted_frames, video_fps, original_dims = extract_frames_from_video(
+                    input_video,
+                    num_frames=int(extension_frames),
+                    from_end=(extension_direction == "Forward"),
+                    max_resolution=640
+                )
+                
+                if len(extracted_frames) == 0:
+                    raise ValueError("Failed to extract frames from the input video")
+                
+                # Set input_image based on direction 
+                if extension_direction == "Forward":
+                    # Use last frame as input for forward extension
+                    input_image = extracted_frames[-1]
+                    debug(f"Using last frame as input_image for forward extension")
+                else:
+                    # Use first frame as input for backward extension
+                    input_image = extracted_frames[0]
+                    debug(f"Using first frame as input_image for backward extension")
+                
+                # Store the extracted frames for later use in video stitching
+                all_extracted_frames = extracted_frames
+                
+                # Let processing continue with normal mode handling
+                mode = "image2video"  # Redirect to use image2video processing path
+                debug(f"Redirecting to image2video path with selected frame as input")
+            
             if mode == "keyframes":
                 # Process end frame with CLIP
                 end_clip_output = hf_clip_vision_encode(end_np, feature_extractor, image_encoder).last_hidden_state
@@ -267,7 +377,7 @@ def worker(
                     # No start frame provided - use 100% end frame embedding
                     clip_output = end_clip_output
                     debug("No start frame provided - using 100% end frame embedding")
-        
+                
         elif mode == "text2video":
             width, height = get_dims_from_aspect(aspect, custom_w, custom_h)
             if init_color is not None:
@@ -320,86 +430,109 @@ def worker(
         total_generated_latent_frames = 0
 
         # -------- SECTION PATCH/STITCH LOOP ----------
-        # Calculate latent paddings with special pattern
+        # Calculate latent paddings list - *ONLY FOR CALLBACK INFO*
+        # This calculation is optional if total_sections is reliably calculated above.
+        # If you keep it, ensure it uses 'total_sections'
         if total_sections > 4:
-            # Special pattern for longer videos that improves transitions
-            latent_paddings = [3] + [2] * (total_sections - 3) + [1, 0]
-            debug(f"worker: Using special padding pattern for {total_sections} sections: {latent_paddings}")
+            latent_paddings_list_for_info = [3] + [2] * (total_sections - 3) + [1, 0]
+            debug(f"worker: Calculated padding list {latent_paddings_list_for_info} for info (len={len(latent_paddings_list_for_info)})")
         else:
-            # For 4 or fewer sections, use the standard reversed range
-            latent_paddings = list(reversed(range(total_sections)))
-            debug(f"worker: Using standard padding for {total_sections} sections: {latent_paddings}")
-        
-        # Initialize video tracking variables
-        history_latents = torch.zeros(
-            size=(1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32
-        ).cpu()
-        history_pixels = None
-        total_generated_latent_frames = 0
-        
-        # Process each section with the padding pattern
-        for latent_padding in latent_paddings:
-            is_first_section = latent_padding == latent_paddings[0]
-            is_last_section = latent_padding == 0
-            latent_padding_size = latent_padding * latent_window_size
-            
-            debug(f'latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}, is_first_section = {is_first_section}')
-            
+            latent_paddings_list_for_info = list(reversed(range(total_sections)))
+            debug(f"worker: Calculated standard padding list {latent_paddings_list_for_info} for info (len={len(latent_paddings_list_for_info)})")
+        # Check length (optional)
+        if len(latent_paddings_list_for_info) != total_sections:
+             debug(f"WARNING: Mismatch between total_sections ({total_sections}) and latent_paddings_list_for_info length ({len(latent_paddings_list_for_info)})")
+
+        # --- FORCE OLD ITERATION SCHEME ---
+        debug(f"worker: [TESTING] Forcing old iteration scheme: reversed(range(total_sections={total_sections}))")
+        loop_iterator = reversed(range(total_sections))
+        # --- END FORCE OLD ITERATION ---
+
+        # Process each section using the old iteration method
+        for section in loop_iterator: # Iterates from total_sections-1 down to 0
+            # Determine section properties (Unchanged)
+            is_last_section = section == 0
+            latent_padding_size = section * latent_window_size
+            is_first_iteration = (section == total_sections - 1)
+            debug(f'section = {section}, latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}')
+
+            # Check for abort signal (Unchanged)
+            if stream.input_queue.top() == 'end':
+                 debug("worker: input_queue 'end' received. Aborting generation.")
+                 stream.output_queue.push(('end', None))
+                 return
+
+            # Setup indices and clean latents for sample_hunyuan (Uses latent_padding_size)
             split_sizes = [1, latent_padding_size, latent_window_size, 1, 2, 16]
             total_indices = sum(split_sizes)
             indices = torch.arange(total_indices).unsqueeze(0)
             clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split(split_sizes, dim=1)
             clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
-            
+
             # Setup the clean latents for ALL modes first
-            clean_latents_pre = start_latent.to(history_latents)
+            clean_latents_pre = start_latent.to(history_latents.device, dtype=history_latents.dtype)
             clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
             clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
-            
-            # Then selectively override for keyframes mode first section
-            if mode == "keyframes" and is_first_section:
-                clean_latents_post = end_latent.to(history_latents)
+
+            # Selectively override for keyframes mode FIRST ITERATION
+            # 'is_first_iteration' now correctly flags the start of the reversed loop
+            if mode == "keyframes" and is_first_iteration:
+                debug("Keyframes mode: Overriding clean_latents_post with end_latent for first iteration.")
+                clean_latents_post = end_latent.to(history_latents.device, dtype=history_latents.dtype)
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
-            
-            # ------- mask fallback safeguard -------
+
+            # Mask fallback safeguard (Unchanged)
             m   = m if m is not None else torch.ones_like(lv)
             m_n = m_n if m_n is not None else torch.ones_like(lv_n)
 
-            # -- memory mgmt
+            # Memory mgmt before sampling (Unchanged)
             if not high_vram:
-                unload_complete_models()
-                debug("worker: unloaded complete models")
+                unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
+                # Note: The debug message here might be slightly confusing as it says "(end section)"
+                # but it runs *before* the section's sampling. This was in your provided code.
+                debug("worker: explicitly unloaded all models (before sampling)")
                 move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
                 debug("worker: moved transformer to gpu (memory preservation)")
 
             transformer.initialize_teacache(enable_teacache=use_teacache, num_steps=steps if use_teacache else 0)
             debug("worker: teacache initialized", "use_teacache", use_teacache)
 
-            # --- sampling ---
+            # --- Define the *callback adapted for the 'section' index* ---
             def callback(d):
+                # Preview generation (Unchanged)
                 preview = d['denoised']
                 preview = vae_decode_fake(preview)
                 preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
                 preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
-                
                 if stream.input_queue.top() == 'end':
                     debug("worker: callback: received 'end', stopping generation.")
                     stream.output_queue.push(('end', None))
                     raise KeyboardInterrupt('User ends the task.')
-                
-                # Section progress
+    
+                # Section progress (Unchanged)
                 current_step = d['i'] + 1
                 section_percentage = int(100.0 * current_step / steps)
+    
+                # Overall progress (ADAPTED - FIX HERE)
+                # 'section' goes from total_sections-1 down to 0
+                # Use total_sections instead of local_total_sections
+                sections_completed = (total_sections - 1) - section # How many sections came *before* this one
+
+                # FIX HERE: Guard against division by zero if total_sections could potentially be 0
+                if total_sections > 0:
+                    overall_percentage = int(100.0 * (sections_completed + (current_step / steps)) / total_sections)
+                else:
+                    overall_percentage = 0 # Or handle as appropriate if total_sections is 0
                 
-                # Overall progress
-                current_section_index = latent_paddings.index(latent_padding)
-                sections_completed = current_section_index 
-                overall_percentage = int(100.0 * (sections_completed + (current_step / steps)) / len(latent_paddings))
-                
-                hint = f'Section {sections_completed+1}/{len(latent_paddings)} - Step {current_step}/{steps}'
-                desc = f'Generated frames: {total_generated_latent_frames}, Length: {total_generated_latent_frames/30.0:.2f}s (FPS-30)'
-                
-                # Create dual progress bar HTML
+                # Calculate actual frame count (Based on history_pixels, as before)
+                actual_pixel_frames = history_pixels.shape[2] if history_pixels is not None else 0
+                actual_seconds = actual_pixel_frames / 30.0
+
+                # FIX HERE: Use total_sections in the f-string
+                hint = f'Section {sections_completed+1}/{total_sections} - Step {current_step}/{steps}'
+                desc = f'Pixel frames generated: {actual_pixel_frames}, Length: {actual_seconds:.2f}s (FPS-30)'
+    
+                # Create dual progress bar HTML (Unchanged - uses calculated percentages)
                 progress_html = f"""
                 <div class="dual-progress-container">
                     <div class="progress-label">
@@ -409,7 +542,7 @@ def worker(
                     <div class="progress-bar-bg">
                         <div class="progress-bar-fg" style="width: {section_percentage}%"></div>
                     </div>
-                    
+    
                     <div class="progress-label">
                         <span>Overall Progress:</span>
                         <span>{overall_percentage}%</span>
@@ -417,127 +550,180 @@ def worker(
                     <div class="progress-bar-bg">
                         <div class="progress-bar-fg" style="width: {overall_percentage}%"></div>
                     </div>
-                    
+    
                     <div style="font-size:0.9em; opacity:0.8;">{hint}</div>
                 </div>
                 """
-                
+    
+                # Debug message and pushing to queue (Unchanged)
                 debug(f"worker: In callback, section: {section_percentage}%, overall: {overall_percentage}%")
                 stream.output_queue.push(('progress', (preview, desc, progress_html)))
+            # --- End adapted callback definition ---
 
+            # --- Run sampling (Passes the correct indices/latents based on padding_size) ---
+            # The mode check here ensures correct arguments like image_embeddings are passed
             if mode == "keyframes":
                 generated_latents = sample_hunyuan(
-                    transformer=transformer,
-                    sampler="unipc",
-                    width=width,
-                    height=height,
-                    frames=frames_per_section,
-                    real_guidance_scale=cfg,
-                    distilled_guidance_scale=gs,
-                    guidance_rescale=rs,
-                    num_inference_steps=steps,
-                    generator=rnd,
-                    prompt_embeds=lv,
-                    prompt_embeds_mask=m,
-                    prompt_poolers=cp,
-                    negative_prompt_embeds=lv_n,
-                    negative_prompt_embeds_mask=m_n,
-                    negative_prompt_poolers=cp_n,
-                    device=gpu,
-                    dtype=torch.bfloat16,
-                    image_embeddings=clip_output,
-                    # IMPORTANT: Use all indices instead of None
-                    latent_indices=latent_indices,
-                    clean_latents=clean_latents,
-                    clean_latent_indices=clean_latent_indices,
-                    clean_latents_2x=clean_latents_2x,
-                    clean_latent_2x_indices=clean_latent_2x_indices,
-                    clean_latents_4x=clean_latents_4x,
-                    clean_latent_4x_indices=clean_latent_4x_indices,
+                    transformer=transformer, sampler="unipc", width=width, height=height, frames=frames_per_section,
+                    real_guidance_scale=cfg, distilled_guidance_scale=gs, guidance_rescale=rs,
+                    num_inference_steps=steps, generator=rnd, prompt_embeds=lv, prompt_embeds_mask=m,
+                    prompt_poolers=cp, negative_prompt_embeds=lv_n, negative_prompt_embeds_mask=m_n,
+                    negative_prompt_poolers=cp_n, device=gpu, dtype=torch.bfloat16, image_embeddings=clip_output,
+                    latent_indices=latent_indices, clean_latents=clean_latents, clean_latent_indices=clean_latent_indices,
+                    clean_latents_2x=clean_latents_2x, clean_latent_2x_indices=clean_latent_2x_indices,
+                    clean_latents_4x=clean_latents_4x, clean_latent_4x_indices=clean_latent_4x_indices,
                     callback=callback,
-                )   
-                
-            else: 
+                )
+            else: # image2video, text2video, video_extension redirected to image2video
                 generated_latents = sample_hunyuan(
-                transformer=transformer,
-                sampler='unipc',
-                width=width,
-                height=height,
-                frames=frames_per_section,
-                real_guidance_scale=cfg,
-                distilled_guidance_scale=gs,
-                guidance_rescale=rs,
-                num_inference_steps=steps,
-                generator=rnd,
-                prompt_embeds=lv,
-                prompt_embeds_mask=m,
-                prompt_poolers=cp,
-                negative_prompt_embeds=lv_n,
-                negative_prompt_embeds_mask=m_n,
-                negative_prompt_poolers=cp_n,
-                device=gpu,
-                dtype=torch.bfloat16,
-                image_embeddings=clip_output,
-                latent_indices=latent_indices,
-                clean_latents=clean_latents,
-                clean_latent_indices=clean_latent_indices,
-                clean_latents_2x=clean_latents_2x,
-                clean_latent_2x_indices=clean_latent_2x_indices,
-                clean_latents_4x=clean_latents_4x,
-                clean_latent_4x_indices=clean_latent_4x_indices,
-                callback=callback
-            )
+                    transformer=transformer, sampler='unipc', width=width, height=height, frames=frames_per_section,
+                    real_guidance_scale=cfg, distilled_guidance_scale=gs, guidance_rescale=rs,
+                    num_inference_steps=steps, generator=rnd, prompt_embeds=lv, prompt_embeds_mask=m,
+                    prompt_poolers=cp, negative_prompt_embeds=lv_n, negative_prompt_embeds_mask=m_n,
+                    negative_prompt_poolers=cp_n, device=gpu, dtype=torch.bfloat16, image_embeddings=clip_output,
+                    latent_indices=latent_indices, clean_latents=clean_latents, clean_latent_indices=clean_latent_indices,
+                    clean_latents_2x=clean_latents_2x, clean_latent_2x_indices=clean_latent_2x_indices,
+                    clean_latents_4x=clean_latents_4x, clean_latent_4x_indices=clean_latent_4x_indices,
+                    callback=callback
+                )
+
+            # --- Post-sampling ---
+            # Handle the last section specially (add start latent if needed)
             if is_last_section:
-                generated_latents = torch.cat([start_latent.to(generated_latents), generated_latents], dim=2)
+                generated_latents = torch.cat([start_latent.to(generated_latents.device, dtype=generated_latents.dtype), generated_latents], dim=2)
                 debug(f"worker: is_last_section => concatenated latent, new shape: {generated_latents.shape}")
-            
-            total_generated_latent_frames += int(generated_latents.shape[2])
-            debug(f"worker: Added {generated_latents.shape[2]} frames, total now: {total_generated_latent_frames}")
-            
-            history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
+
+            # Update latent frame count (Tracks only newly added frames)
+            new_latent_frames = generated_latents.shape[2]
+            # Note: This 'total_generated_latent_frames' might be slightly misleading if only used in desc.
+            # The VAE decode step below uses the actual length of history_latents.
+            # total_generated_latent_frames += new_latent_frames # Commenting out as it wasn't used correctly
+            # debug(f"worker: Added {new_latent_frames} latent frames this section.")
+
+            # Update history latents (CPU tensor)
+            history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
             debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
 
-           # ------- decode & video preview -----
+            # --- VAE Decoding Section (COMBINED BEST VERSION) ---
             if not high_vram:
                 offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
-                debug("worker: offloaded transformer")
                 load_model_as_complete(vae, target_device=gpu)
-                debug("worker: loaded vae to gpu (again)")
+                debug("worker: loaded vae to gpu")
             
-            # ---- Guarantee the last N latent frames match encoded end_frame ----
-            real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
-            if history_pixels is None:
-                history_pixels = vae_decode(real_history_latents.float(), vae.float()).cpu()
-                debug("worker: vae decoded (first time)")
+            # Clear CUDA cache to reduce fragmentation
+            torch.cuda.empty_cache()
+            debug("Cleared CUDA cache before decoding")
+            
+            # Calculate theoretical max overlap frames (keep this for reference)
+            max_overlapped_frames = latent_window_size * 4 - 3
+            debug(f"Theoretical max overlapped_frames={max_overlapped_frames}")
+            
+            try:
+                # Decode the newly generated latents in chunks
+                debug(f"Decoding generated_latents with shape: {generated_latents.shape}")
+                chunk_size = 4  # Small enough to avoid OOM
+                current_pixels_chunks = []
+                
+                for i in range(0, generated_latents.shape[2], chunk_size):
+                    end_idx = min(i + chunk_size, generated_latents.shape[2])
+                    debug(f"Decoding chunk {i}:{end_idx} of {generated_latents.shape[2]}")
+                    
+                    # Move chunk to GPU, decode, then immediately move result to CPU
+                    chunk = generated_latents[:, :, i:end_idx].to(vae.device, dtype=vae.dtype)
+                    chunk_pixels = vae_decode(chunk, vae).cpu()
+                    current_pixels_chunks.append(chunk_pixels)
+                    
+                    # Force cleanup of chunk tensors
+                    del chunk, chunk_pixels
+                    torch.cuda.empty_cache()
+                
+                # Combine all chunks on CPU
+                current_pixels = torch.cat(current_pixels_chunks, dim=2)
+                debug(f"Successfully decoded in chunks: final shape {current_pixels.shape}")
+                del current_pixels_chunks
+                torch.cuda.empty_cache()
+                
+                debug(f"Decoded newly generated latents to pixels with shape: {current_pixels.shape}")
+                
+                # Initialize history_pixels if this is the first section
+                if history_pixels is None:
+                    history_pixels = current_pixels
+                    debug(f"First section: Set history_pixels directly with shape: {history_pixels.shape}")
+                else:
+                    # For sequential sections, simply prepend the new frames 
+                    # (since we're generating from end to beginning)
+                    # IMPORTANT: Use simple concatenation instead of soft_append_bcthw
+                    # This eliminates the double exposure effect
+                    history_pixels = torch.cat([current_pixels, history_pixels], dim=2)
+                    debug(f"Concatenated new frames without blending. New history shape: {history_pixels.shape}")
+                
+                # === RESTORE PREVIEW VIDEO FUNCTIONALITY ===
+                # Save preview for progress updates
                 preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
                 try:
                     save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
                     debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
                     stream.output_queue.push(('preview_video', preview_filename))
+                    debug(f"[QUEUE] Queued preview_video event: {preview_filename}")
                 except Exception as e:
                     debug(f"[ERROR] Failed to save preview video: {e}")
-            else:
-                section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
-                overlapped_frames = frames_per_section
-                current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames].float(), vae.float()).cpu()
-                history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
-                debug("worker: vae decoded + soft_append_bcthw")
-                preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
-                try:
-                    save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
-                    debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
-                    stream.output_queue.push(('preview_video', preview_filename))
-                except Exception as e:
-                    debug(f"[ERROR] Failed to save preview video: {e}")
+                
+                # Clean up memory
+                del current_pixels
+                torch.cuda.empty_cache()
+                
+            except Exception as e:
+                debug(f"Error during VAE decoding: {str(e)}")
+                import traceback
+                debug(traceback.format_exc())
+                raise
+        # --- Loop finished ---
+
+        # After history_pixels is fully processed and before final video export
+        if original_mode == "video_extension" and input_video is not None and 'history_pixels' in locals() and history_pixels is not None:
+            # Save the generated extension
+            extension_filename = os.path.join(outputs_folder, f'{job_id}_extension.mp4')
+            save_bcthw_as_mp4(history_pixels, extension_filename, fps=30)
+            debug(f"[FILE] Extension video saved as {extension_filename}")
             
-            if not high_vram:
-                unload_complete_models()
-                debug("worker: unloaded complete models (end section)")
-            
-            output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
-            if is_last_section:
-                debug("worker: is_last_section - break")
-                break
+            # Now combine with the original video
+            combined_filename = os.path.join(outputs_folder, f'{job_id}_combined.mp4')
+            try:
+                import subprocess
+                if extension_direction == "Forward":
+                    # Append the extension to the original video
+                    cmd = [
+                        "ffmpeg",
+                        "-y",
+                        "-i", input_video,
+                        "-i", extension_filename,
+                        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[outv]",
+                        "-map", "[outv]",
+                        combined_filename
+                    ]
+                else:  # Backward
+                    # Prepend the extension to the original video
+                    cmd = [
+                        "ffmpeg",
+                        "-y",
+                        "-i", extension_filename,
+                        "-i", input_video,
+                        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[outv]",
+                        "-map", "[outv]",
+                        combined_filename
+                    ]
+                debug(f"[FFMPEG] Running command: {' '.join(cmd)}")
+                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                make_mp4_faststart(combined_filename)
+                
+                # IMPORTANT: Update the output_filename to use the combined file
+                output_filename = combined_filename
+                debug(f"[FILE] Combined video saved as {output_filename} - using as final output")
+            except Exception as e:
+                debug(f"[ERROR] Failed to combine videos: {e}")
+                traceback.print_exc()
+                output_filename = extension_filename
+                debug(f"[FILE] Using extension video as fallback: {output_filename}")
 
         # ---- Final export logic (txt2video special handling) ----
         if mode == "text2video":
@@ -635,17 +821,34 @@ def worker(
                     return
         
         # --------- Final MP4 Export ---------
-        debug(f"[FILE] Attempting to save video to {output_filename}")
-        try:
-            save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
-            debug(f"[FILE] Video successfully saved to {output_filename}: {os.path.exists(output_filename)}")
-            make_mp4_faststart(output_filename)
-            debug(f"[FILE] Faststart patch applied to {output_filename}: {os.path.exists(output_filename)}")
-            stream.output_queue.push(('file', output_filename))
-            debug(f"[QUEUE] Queued event 'file' with data: {output_filename}")
-        except Exception as e:
-            debug(f"[ERROR] FAILED to save video {output_filename}: {e}")
-            traceback.print_exc()
+        if 'history_pixels' in locals() and history_pixels is not None and history_pixels.shape[2] > 0:
+            # A simple flag to check if image logic might have run.
+            image_likely_saved = False
+            if (mode == "text2video" or (mode == "keyframes" and start_frame is None)):
+                if history_pixels.shape[2] <= 1: # This condition was used in your image saving logic
+                    image_likely_saved = True
+                    
+            # Special handling for video_extension - use the combined file directly
+            if original_mode == "video_extension" and 'combined_filename' in locals() and os.path.exists(combined_filename):
+                debug(f"[FILE] Using pre-combined video file for video_extension mode: {combined_filename}")
+                stream.output_queue.push(('file', combined_filename))
+                debug(f"[QUEUE] Queued event 'file' with data: {combined_filename}")
+            elif not image_likely_saved:
+                debug(f"[FILE] Attempting to save final video to {output_filename}")
+                try:
+                    save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
+                    debug(f"[FILE] Video successfully saved to {output_filename}: {os.path.exists(output_filename)}")
+                    make_mp4_faststart(output_filename)
+                    debug(f"[FILE] Faststart patch applied to {output_filename}: {os.path.exists(output_filename)}")
+                    stream.output_queue.push(('file', output_filename))
+                    debug(f"[QUEUE] Queued event 'file' with data: {output_filename}")
+                except Exception as e:
+                    debug(f"[ERROR] FAILED to save final video {output_filename}: {e}")
+                    traceback.print_exc()
+            else:
+                debug(f"[FILE] Skipping final video save, likely handled by image export logic.")
+        else:
+            debug(f"[FILE] Skipping final video save: No valid history_pixels found.")
 
     except Exception as ex:
         debug("worker: EXCEPTION THROWN", ex)
@@ -659,7 +862,9 @@ def worker(
     finally:
         debug("worker: in finally block, writing final summary/progress/end")
         t_end = time.time()
+        # Use final state of history_pixels for summary
         if 'history_pixels' in locals() and history_pixels is not None:
+            # Account for trimming possibly reducing frames before final save
             trimmed_frames = history_pixels.shape[2]
             video_seconds = trimmed_frames / 30.0
         else:
@@ -681,11 +886,13 @@ def process(
     prompt, n_prompt, seed,
     use_adv, adv_window, adv_seconds, selected_frames,
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color,
-    keyframe_weight
+    keyframe_weight,
+    # Add new parameters here:
+    input_video=None, extension_direction="Forward", extension_frames=8
 ):
     global stream
     debug("process: called with mode", mode)
-    assert mode in ['image2video', 'text2video', 'keyframes'], "Invalid mode"
+    assert mode in ['image2video', 'text2video', 'keyframes', 'video_extension'], "Invalid mode"
     
     # Create initial empty progress bars HTML
     empty_progress = """
@@ -697,7 +904,6 @@ def process(
         <div class="progress-bar-bg">
             <div class="progress-bar-fg" style="width: 0%"></div>
         </div>
-        
         <div class="progress-label">
             <span>Overall Progress:</span>
             <span>0%</span>
@@ -705,10 +911,59 @@ def process(
         <div class="progress-bar-bg">
             <div class="progress-bar-fg" style="width: 0%"></div>
         </div>
-        
         <div style="font-size:0.9em; opacity:0.8;">Preparing...</div>
     </div>
     """
+    
+    # Special handling for video_extension mode: Extract frames and set input_image
+    original_mode = mode
+    original_video = input_video
+    
+    if mode == "video_extension":
+        if input_video is None:
+            debug("process: Aborting early -- no input video for video_extension")
+            yield (
+                None, None, None,
+                "Please upload a video to extend!", None,
+                gr.update(interactive=True),
+                gr.update(interactive=False),
+                gr.update()
+            )
+            return
+            
+        try:
+            debug(f"Extracting frames from video for {extension_direction} extension")
+            # Extract frames from the video
+            extracted_frames, video_fps, _ = extract_frames_from_video(
+                input_video,
+                num_frames=int(extension_frames),
+                from_end=(extension_direction == "Forward"),
+                max_resolution=640
+            )
+            
+            # Set input_image based on direction
+            if extension_direction == "Forward":
+                input_image = extracted_frames[-1]  # Use last frame
+                debug(f"Using last frame as input_image for forward extension")
+                mode = "image2video"  # Use image2video processing path
+            else:
+                # For backward extension, set up as keyframe generation
+                end_frame = extracted_frames[0]  # First frame becomes the target
+                start_frame = None  # No start frame needed (we're generating TO this frame)
+                mode = "keyframes"  # Use keyframes mode
+                debug(f"Setting up backward extension as keyframe targeting first frame of video")
+            
+        except Exception as e:
+            debug(f"Video frame extraction error: {str(e)}")
+            traceback.print_exc()
+            yield (
+                None, None, None,
+                f"Error processing video: {str(e)}", None,
+                gr.update(interactive=True),
+                gr.update(interactive=False),
+                gr.update()
+            )
+            return
     
     if mode == 'image2video' and input_image is None:
         debug("process: Aborting early -- no input image for image2video")
@@ -720,6 +975,7 @@ def process(
             gr.update()
         )
         return
+        
     if not lock_seed:
         seed = int(time.time()) % 2**32
     debug("process: entering main async_run yield cycle, seed:", seed)
@@ -751,7 +1007,11 @@ def process(
         gpu_memory_preservation,
         use_teacache,
         init_color,
-        keyframe_weight
+        keyframe_weight,
+        input_video,
+        extension_direction,
+        extension_frames,
+        original_mode 
     )
     output_filename = None
     last_desc = ""
@@ -777,17 +1037,23 @@ def process(
             last_img_path = None
         elif flag == 'preview_video':
             preview_filename = data
-            debug(f"[UI] Got preview_video event: {preview_filename}")
-            yield (
-                gr.update(value=preview_filename, visible=True), # result_video keep VISIBLE and update with preview
-                gr.update(visible=False),                        # result_image_html
-                gr.update(visible=False),                        # preview_image
-                "Generating preview...",                         # progress_desc
-                gr.update(value="", visible=False),              # progress_bar
-                gr.update(interactive=False),
-                gr.update(interactive=True),
-                gr.update()
-            )
+            debug(f"[UI] Handling preview_video event for: {preview_filename}")
+            
+            # Verify file exists before setting in UI
+            if os.path.exists(preview_filename):
+                debug(f"[UI] Preview file exists, updating video display")
+                yield (
+                    gr.update(value=preview_filename, visible=True), # result_video
+                    gr.update(visible=False),                      # result_image_html
+                    gr.update(visible=False),                      # preview_image
+                    "Generating video...",                         # progress_desc
+                    gr.update(visible=True),                       # progress_bar 
+                    gr.update(interactive=False),
+                    gr.update(interactive=True),
+                    gr.update()
+                )
+            else:
+                debug(f"[UI] Warning: Preview file not found: {preview_filename}")
         elif flag == 'progress':
             preview, desc, html = data
             if desc:
@@ -898,11 +1164,32 @@ with block:
     with gr.Row():
         with gr.Column(scale=2):
             mode_selector = gr.Radio(
-                ["image2video", "text2video", "keyframes"], value="image2video", label="Mode"
+                ["image2video", "text2video", "keyframes", "video_extension"],
+                value="image2video", 
+                label="Mode"
             )
             input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)  # always present, sometimes hidden
             start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)", height=320, visible=False)
             end_frame = gr.Image(sources='upload', type="numpy", label="End Frame (Required)", height=320, visible=False)
+            with gr.Group(visible=False) as video_extension_options:
+                input_video = gr.Video(
+                    label="Upload Video to Extend", 
+                    format="mp4"
+                )
+                extension_direction = gr.Radio(
+                    ["Forward", "Backward"], 
+                    label="Extension Direction",
+                    value="Forward",
+                    info="Forward extends the end, Backward extends the beginning"
+                )
+                extension_frames = gr.Slider(
+                    label="Context Frames", 
+                    minimum=1, 
+                    maximum=16, 
+                    value=8, 
+                    step=1,
+                    info="Number of frames to extract from video for continuity"
+                )
             aspect_selector = gr.Dropdown(
                 ["16:9", "9:16", "1:1", "4:5", "3:2", "2:3", "21:9", "4:3", "Custom..."],
                 label="Aspect Ratio",
@@ -954,6 +1241,8 @@ with block:
                     info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)"
                 )
 
+            
+
     # --- calllbacks ---
     def update_frame_dropdown(window):
         stops = get_valid_frame_stops(window)
@@ -981,6 +1270,7 @@ with block:
             gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_w
             gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_h
             gr.update(visible=(mode == "keyframes")),  # keyframes_options
+            gr.update(visible=(mode == "video_extension"))  # video_extension_options
         )
     def show_custom(aspect):
         show = aspect == "Custom..."
@@ -998,7 +1288,16 @@ with block:
     mode_selector.change(
         switch_mode,
         inputs=[mode_selector],
-        outputs=[input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h,  keyframes_options]
+        outputs=[
+            input_image, 
+            start_frame, 
+            end_frame, 
+            aspect_selector, 
+            custom_w, 
+            custom_h, 
+            keyframes_options,
+            video_extension_options  # Add this new output component
+        ]
     )
     def show_init_color(mode):
         return gr.update(visible=(mode == "text2video"))
@@ -1037,6 +1336,9 @@ with block:
         lock_seed,
         init_color,
         keyframe_weight,
+        input_video,
+        extension_direction,
+        extension_frames,
     ]
     prompt.submit(
         fn=process,
@@ -1053,16 +1355,7 @@ with block:
         ]
     )
 
-    def switch_mode(mode):
-        return (
-            gr.update(visible=(mode=="image2video" or mode=="text2video")),  # input_image
-            gr.update(visible=(mode=="keyframes")),  # start_frame
-            gr.update(visible=(mode=="keyframes")),  # end_frame
-            gr.update(visible=(mode=="text2video")), # aspect_selector
-            gr.update(visible=(mode=="image2video")),# custom_w
-            gr.update(visible=False),                # custom_h  (or whatever fields you want to hide always unless manual aspect)
-        )
-    
+      
     start_button.click(
         fn=process,
         inputs=ips,
