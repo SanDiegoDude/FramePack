@@ -690,7 +690,6 @@ def worker(
             combined_filename = os.path.join(outputs_folder, f'{job_id}_combined.mp4')
             try:
                 import subprocess
-                
                 if extension_direction == "Forward":
                     # Append the extension to the original video
                     cmd = [
@@ -713,13 +712,13 @@ def worker(
                         "-map", "[outv]",
                         combined_filename
                     ]
-
-                
                 debug(f"[FFMPEG] Running command: {' '.join(cmd)}")
                 subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 make_mp4_faststart(combined_filename)
+                
+                # IMPORTANT: Update the output_filename to use the combined file
                 output_filename = combined_filename
-                debug(f"[FILE] Combined video saved as {output_filename}")
+                debug(f"[FILE] Combined video saved as {output_filename} - using as final output")
             except Exception as e:
                 debug(f"[ERROR] Failed to combine videos: {e}")
                 traceback.print_exc()
@@ -824,11 +823,20 @@ def worker(
         # --------- Final MP4 Export ---------
         if 'history_pixels' in locals() and history_pixels is not None and history_pixels.shape[2] > 0:
             # A simple flag to check if image logic might have run.
-            # You might need a more robust way to track if file_img was pushed.
             image_likely_saved = False
             if (mode == "text2video" or (mode == "keyframes" and start_frame is None)):
-                 if history_pixels.shape[2] <= 1: # This condition was used in your image saving logic
-                     image_likely_saved = True
+                if history_pixels.shape[2] <= 1: # This condition was used in your image saving logic
+                    image_likely_saved = True
+                    
+            # Special handling for video_extension - use the combined file directly
+            if original_mode == "video_extension" and 'combined_filename' in locals() and os.path.exists(combined_filename):
+                debug(f"[FILE] Using pre-combined video file for video_extension mode: {combined_filename}")
+                stream.output_queue.push(('file', combined_filename))
+                debug(f"[QUEUE] Queued event 'file' with data: {combined_filename}")
+            elif not image_likely_saved:
+                debug(f"[FILE] Attempting to save final video to {output_filename}")
+                try:
+                    save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
     
             if not image_likely_saved:
                 debug(f"[FILE] Attempting to save final video to {output_filename}")
@@ -942,13 +950,13 @@ def process(
             if extension_direction == "Forward":
                 input_image = extracted_frames[-1]  # Use last frame
                 debug(f"Using last frame as input_image for forward extension")
+                mode = "image2video"  # Use image2video processing path
             else:
-                input_image = extracted_frames[0]  # Use first frame
-                debug(f"Using first frame as input_image for backward extension")
-                
-            # Change mode for worker but remember original
-            mode = "image2video"  # Use image2video processing path
-            debug(f"Mode changed to image2video for worker function")
+                # For backward extension, set up as keyframe generation
+                end_frame = extracted_frames[0]  # First frame becomes the target
+                start_frame = None  # No start frame needed (we're generating TO this frame)
+                mode = "keyframes"  # Use keyframes mode
+                debug(f"Setting up backward extension as keyframe targeting first frame of video")
             
         except Exception as e:
             debug(f"Video frame extraction error: {str(e)}")
