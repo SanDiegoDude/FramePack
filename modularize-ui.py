@@ -633,32 +633,41 @@ def worker(
                 debug(f"First section decoded: {total_generated_latent_frames} latent frames → {history_pixels.shape[2]} pixel frames")
                 gc.collect() # Optional: Keep GC collect after decode
                 torch.cuda.empty_cache() # Optional: Keep cache empty after decode
-            else:
-                # For later sections, we only need to decode the latest segment
+            else: # Subsequent sections
                 section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
                 overlapped_frames = latent_window_size * 4 - 3
                 
-                # Get just the new latent frames
-                start_idx = max(0, real_history_latents.shape[2] - section_latent_frames)
-                new_section_latents = real_history_latents[:, :, start_idx:, :, :]
-                debug(f"decoding latents {start_idx}:{real_history_latents.shape[2]} (frames={new_section_latents.shape[2]})")
+                # Ensure section_latent_frames does not exceed the available history length
+                # (Crucial safety check if history is shorter than expected)
+                section_latent_frames = min(section_latent_frames, real_history_latents.shape[2])
                 
-                # Decode the new frames
+                # **** CORRECTED SLICING ****
+                # Get the NEWEST latent frames slice (from the START of real_history_latents)
+                new_section_latents = real_history_latents[:, :, :section_latent_frames, :, :] # SLICING FROM START
+                debug(f"decoding latents : {section_latent_frames} (frames={new_section_latents.shape[2]})") # Adjusted debug msg
+                
+                # Decode the slice
                 current_pixels = vae_decode(new_section_latents, vae).cpu()
-                debug(f"Section decoded: {new_section_latents.shape[2]} latent frames → {current_pixels.shape[2]} pixel frames")
-                # Clean up intermediate tensor explicitly
-                del new_section_latents 
-                gc.collect() # Optional: Keep GC collect after decode
-                torch.cuda.empty_cache() # Optional: Keep cache empty after decode
+                
+                # Explicitly delete the GPU tensor slice reference NOW
+                # (It's already copied to CPU in current_pixels)
+                del new_section_latents
+                gc.collect()
+                torch.cuda.empty_cache()
                 
                 # Get safe overlap count
                 safe_overlap = min(overlapped_frames, current_pixels.shape[2])
                 if safe_overlap < overlapped_frames:
-                    debug(f"WARNING: Adjusting overlap from {overlapped_frames} to {safe_overlap}")
-                    
+                debug(f"WARNING: Adjusting overlap from {overlapped_frames} to {safe_overlap}")
+                
                 # Append to history, adjusting overlap if needed
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, safe_overlap)
                 debug(f"Added new section, history_pixels now has {history_pixels.shape[2]} frames")
+
+            # Explicitly delete the CPU tensor now merged into history
+            del current_pixels
+            gc.collect()
+            # No need for torch.cuda.empty_cache() here as current_pixels was on CPU
             
             # Always save and push a preview after each section
             preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
