@@ -481,6 +481,7 @@ def worker(
         history_latents = torch.zeros(
             size=(1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32
         ).cpu()
+        last_decoded_latent_idx = 0
         history_pixels = None
         total_generated_latent_frames = 0
         
@@ -641,54 +642,37 @@ def worker(
                 generated_latents = torch.cat([start_latent.to(generated_latents), generated_latents], dim=2)
                 debug(f"worker: is_last_section => concatenated latent, new shape: {generated_latents.shape}")
             
-            total_generated_latent_frames += int(generated_latents.shape[2])
-            debug(f"worker: Added {generated_latents.shape[2]} frames, total now: {total_generated_latent_frames}")
-            
+            num_new_latents = generated_latents.shape[2]
+            prev_total = total_generated_latent_frames
+            total_generated_latent_frames += num_new_latents
             history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
+            debug(f"worker: Added {num_new_latents} frames, total now: {total_generated_latent_frames}")
             debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
-
-           # ------- decode & video preview -----
+            
             if not high_vram:
                 offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
                 load_model_as_complete(vae, target_device=gpu)
                 debug("worker: loaded vae to gpu (again)")
             
-            # Use real_history_latents exactly as in the original code
             real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
             
-            # This is the KEY part that matches the original code
+            # ------- FIXED decode logic -------
             if history_pixels is None:
-                # Only decoding everything once at the start
+                # First section: decode everything
                 current_pixels = vae_decode_chunked(real_history_latents, vae).cpu()
                 history_pixels = current_pixels
-                last_decoded_latent_idx = total_generated_latent_frames
             else:
-                # Decode only new latents produced in this section
-                new_section_latents = real_history_latents[:, :, last_decoded_latent_idx:total_generated_latent_frames]
+                # Only decode new latent frames generated in this section
+                new_section_latents = real_history_latents[:, :, prev_total:total_generated_latent_frames, :, :]
                 current_pixels = vae_decode_chunked(new_section_latents, vae).cpu()
-                last_decoded_latent_idx = total_generated_latent_frames
-                
-                debug(f"Processing section: frames={section_latent_frames}, overlap={overlapped_frames}")
-                
-                # CRITICAL FIX: Only decode the NEW frames from this section
-                # Instead of taking first N frames, take the last N frames which are the new ones
-                new_frames_start = max(0, real_history_latents.shape[2] - section_latent_frames)
-                new_section_latents = real_history_latents[:, :, new_frames_start:]
-                
-                debug(f"Extracting newest frames {new_frames_start}:{real_history_latents.shape[2]} ({new_section_latents.shape[2]} frames)")
-                
-                # Decode just these new frames
-                current_pixels = vae_decode_chunked(new_section_latents, vae).cpu()
-                debug(f"Section decoded: {new_section_latents.shape[2]} latent frames -> {current_pixels.shape[2]} pixel frames")
-                
-                # Check if we can satisfy the overlap requirement
+                overlapped_frames = latent_window_size * 4 - 3
+                debug(f"Processing section: frames={num_new_latents}, overlap={overlapped_frames}")
+            
                 if current_pixels.shape[2] < overlapped_frames:
-                    # fallback
                     adjusted_overlap = current_pixels.shape[2]
                     history_pixels = soft_append_bcthw(current_pixels, history_pixels, adjusted_overlap)
                 else:
                     history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
-                    
                 debug(f"Successfully appended section, history now has {history_pixels.shape[2]} frames")
                 
                 # Save and push preview
