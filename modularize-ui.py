@@ -102,6 +102,75 @@ stream = AsyncStream()
 outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
 
+def extract_frames_from_video(video_path, num_frames=8, from_end=True):
+    """
+    Extract frames from a video file.
+    
+    Args:
+        video_path: Path to the video file
+        num_frames: Number of frames to extract
+        from_end: If True, extract from the end of the video, otherwise from the beginning
+    
+    Returns:
+        numpy array of frames and the video fps
+    """
+    try:
+        import cv2
+    except ImportError:
+        raise ImportError("OpenCV (cv2) is required for video extension. Please install it with 'pip install opencv-python'")
+        
+    debug(f"Extracting frames from video: {video_path}, num_frames={num_frames}, from_end={from_end}")
+    
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Could not open video file: {video_path}")
+    
+    # Get video properties
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    debug(f"Video properties: total_frames={total_frames}, fps={fps}, dimensions={width}x{height}")
+    
+    # Calculate frame indices to extract
+    if from_end:
+        start_idx = max(0, total_frames - num_frames)
+        frame_indices = list(range(start_idx, total_frames))
+    else:
+        frame_indices = list(range(min(num_frames, total_frames)))
+    
+    # Extract the frames
+    frames = []
+    current_frame = 0
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        if current_frame in frame_indices:
+            # Convert BGR to RGB
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frames.append(frame)
+            
+        current_frame += 1
+        
+        # Break if we've extracted all needed frames
+        if len(frames) == len(frame_indices):
+            break
+    
+    cap.release()
+    
+    if not frames:
+        raise ValueError(f"Failed to extract frames from video: {video_path}")
+    
+    # Convert to numpy array
+    frames = np.array(frames)
+    debug(f"Extracted {len(frames)} frames with shape {frames.shape}")
+    
+    return frames, fps
+
 # ---- Color Helper ----
 def parse_hex_color(hexcode):
     hexcode = hexcode.lstrip('#')
@@ -267,6 +336,68 @@ def worker(
                     # No start frame provided - use 100% end frame embedding
                     clip_output = end_clip_output
                     debug("No start frame provided - using 100% end frame embedding")
+
+        
+        elif mode == "video_extension":
+            if input_video is None:
+                raise ValueError("Video extension mode requires a video to be uploaded!")
+            
+            debug(f"Processing video extension: direction={extension_direction}, length={extension_length}s")
+            
+            # Extract frames from the video
+            extracted_frames, video_fps = extract_frames_from_video(
+                input_video, 
+                num_frames=int(extension_frames),
+                from_end=(extension_direction == "Forward")
+            )
+            
+            # Determine dimensions based on extracted frames
+            frame_h, frame_w, _ = extracted_frames[0].shape
+            height, width = find_nearest_bucket(frame_h, frame_w, resolution=640)
+            debug(f"Using bucket dimensions for video extension: {width}x{height}")
+            
+            if extension_direction == "Forward":
+                # For forward extension, use the last frame as start frame
+                input_anchor_np = resize_and_center_crop(extracted_frames[-1], target_width=width, target_height=height)
+                # Create a blank end frame
+                end_np = np.ones((height, width, 3), dtype=np.uint8) * 128  # Gray
+            else:  # Backward
+                # For backward extension, use the first frame as end frame
+                end_np = resize_and_center_crop(extracted_frames[0], target_width=width, target_height=height)
+                # Create a blank start frame
+                input_anchor_np = np.ones((height, width, 3), dtype=np.uint8) * 128  # Gray
+            
+            # Convert to tensors and encode with VAE (similar to keyframes mode)
+            input_anchor_tensor = torch.from_numpy(input_anchor_np).float() / 127.5 - 1
+            input_anchor_tensor = input_anchor_tensor.permute(2, 0, 1)[None, :, None].float()
+            start_latent = vae_encode(input_anchor_tensor, vae.float())
+            
+            end_tensor = torch.from_numpy(end_np).float() / 127.5 - 1
+            end_tensor = end_tensor.permute(2, 0, 1)[None, :, None].float()
+            end_latent = vae_encode(end_tensor, vae.float())
+            
+            # Text prompt encoding & mask logic (same as keyframes mode)
+            if not high_vram:
+                unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
+            fake_diffusers_current_device(text_encoder, gpu)
+            load_model_as_complete(text_encoder_2, target_device=gpu)
+            lv, cp = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
+            lv, mask = crop_or_pad_yield_mask(lv, 512)
+            lv_n, cp_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
+            lv_n, mask_n = crop_or_pad_yield_mask(lv_n, 512)
+            m = mask
+            m_n = mask_n
+            
+            # CLIP Vision feature extraction
+            if not high_vram:
+                load_model_as_complete(image_encoder, target_device=gpu)
+            
+            # Extract CLIP features (focuses on the main conditioning frame)
+            if extension_direction == "Forward":
+                clip_output = hf_clip_vision_encode(input_anchor_np, feature_extractor, image_encoder).last_hidden_state
+            else:  # Backward
+                clip_output = hf_clip_vision_encode(end_np, feature_extractor, image_encoder).last_hidden_state
+
         
         elif mode == "text2video":
             width, height = get_dims_from_aspect(aspect, custom_w, custom_h)
@@ -539,6 +670,61 @@ def worker(
                 debug("worker: is_last_section - break")
                 break
 
+        # After history_pixels is fully processed and before final video export
+        if mode == "video_extension" and 'history_pixels' in locals() and history_pixels is not None:
+            # Save the generated extension
+            extension_filename = os.path.join(outputs_folder, f'{job_id}_extension.mp4')
+            save_bcthw_as_mp4(history_pixels, extension_filename, fps=30)
+            debug(f"[FILE] Extension video saved as {extension_filename}")
+            
+            # Calculate extension length for ffmpeg trimming
+            if extension_direction == "Forward":
+                # For forward extension, keep all generated frames
+                extension_keep_frames = history_pixels.shape[2]
+            else:  # Backward
+                # For backward extension, trim a bit from end to avoid overlap
+                extension_keep_frames = max(1, history_pixels.shape[2] - 2)  # Avoid duplicating first frame
+            
+            # Now combine with the original video
+            combined_filename = os.path.join(outputs_folder, f'{job_id}_combined.mp4')
+            try:
+                import subprocess
+                
+                if extension_direction == "Forward":
+                    # Append the extension to the original video
+                    cmd = [
+                        "ffmpeg",
+                        "-y",
+                        "-i", input_video,
+                        "-i", extension_filename,
+                        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[outv]",
+                        "-map", "[outv]",
+                        combined_filename
+                    ]
+                else:  # Backward
+                    # Prepend the extension to the original video
+                    cmd = [
+                        "ffmpeg",
+                        "-y",
+                        "-i", extension_filename,
+                        "-i", input_video,
+                        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[outv]",
+                        "-map", "[outv]",
+                        combined_filename
+                    ]
+                    
+                debug(f"[FFMPEG] Running command: {' '.join(cmd)}")
+                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                make_mp4_faststart(combined_filename)
+                output_filename = combined_filename
+                debug(f"[FILE] Combined video saved as {output_filename}")
+            except Exception as e:
+                debug(f"[ERROR] Failed to combine videos: {e}")
+                traceback.print_exc()
+                output_filename = extension_filename
+                debug(f"[FILE] Using extension video as fallback: {output_filename}")
+
+        
         # ---- Final export logic (txt2video special handling) ----
         if mode == "text2video":
             N_actual = history_pixels.shape[2]
@@ -898,7 +1084,9 @@ with block:
     with gr.Row():
         with gr.Column(scale=2):
             mode_selector = gr.Radio(
-                ["image2video", "text2video", "keyframes"], value="image2video", label="Mode"
+                ["image2video", "text2video", "keyframes", "video_extension"],
+                value="image2video", 
+                label="Mode"
             )
             input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)  # always present, sometimes hidden
             start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)", height=320, visible=False)
@@ -954,6 +1142,33 @@ with block:
                     info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)"
                 )
 
+            with gr.Group(visible=False) as video_extension_options:
+                input_video = gr.Video(
+                    label="Upload Video to Extend", 
+                    format="mp4"
+                )
+                extension_direction = gr.Radio(
+                    ["Forward", "Backward"], 
+                    label="Extension Direction",
+                    value="Forward",
+                    info="Forward extends the end, Backward extends the beginning"
+                )
+                extension_length = gr.Slider(
+                    label="Extension Length (seconds)", 
+                    minimum=1.0, 
+                    maximum=10.0, 
+                    value=3.0, 
+                    step=0.1
+                )
+                extension_frames = gr.Slider(
+                    label="Context Frames", 
+                    minimum=1, 
+                    maximum=16, 
+                    value=8, 
+                    step=1,
+                    info="Number of frames to extract from video for continuity"
+                )
+
     # --- calllbacks ---
     def update_frame_dropdown(window):
         stops = get_valid_frame_stops(window)
@@ -981,6 +1196,7 @@ with block:
             gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_w
             gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_h
             gr.update(visible=(mode == "keyframes")),  # keyframes_options
+            gr.update(visible=(mode == "video_extension"))  # video_extension_options
         )
     def show_custom(aspect):
         show = aspect == "Custom..."
@@ -1037,6 +1253,10 @@ with block:
         lock_seed,
         init_color,
         keyframe_weight,
+        input_video,
+        extension_direction,
+        extension_length,
+        extension_frames,
     ]
     prompt.submit(
         fn=process,
