@@ -282,7 +282,7 @@ def worker(
     use_adv, adv_window, adv_seconds, selected_frames,
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
     init_color, keyframe_weight,
-    input_video=None, extension_direction="Forward", extension_length=3.0, extension_frames=8,
+    input_video=None, extension_direction="Forward", extension_frames=8,
     original_mode=None 
 ):
     job_id = generate_timestamp()
@@ -367,7 +367,7 @@ def worker(
                 if input_video is None:
                     raise ValueError("Video extension mode requires a video to be uploaded!")
                 
-                debug(f"Processing video extension: direction={extension_direction}, length={extension_length}s")
+                debug(f"Processing video extension: direction={extension_direction}")
                 
                 # Extract frames from the video
                 extracted_frames, video_fps, original_dims = extract_frames_from_video(
@@ -922,7 +922,7 @@ def process(
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color,
     keyframe_weight,
     # Add new parameters here:
-    input_video=None, extension_direction="Forward", extension_length=3.0, extension_frames=8
+    input_video=None, extension_direction="Forward", extension_frames=8
 ):
     global stream
     debug("process: called with mode", mode)
@@ -1044,7 +1044,6 @@ def process(
         keyframe_weight,
         input_video,
         extension_direction,
-        extension_length,
         extension_frames,
         original_mode 
     )
@@ -1373,7 +1372,6 @@ with block:
         keyframe_weight,
         input_video,
         extension_direction,
-        extension_length,
         extension_frames,
     ]
     prompt.submit(
