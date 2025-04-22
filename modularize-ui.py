@@ -603,7 +603,7 @@ def worker(
             history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
             debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
 
-            # --- VAE Decoding Section (IMPROVED VERSION) ---
+            # --- VAE Decoding Section (FIXED VERSION) ---
             if not high_vram:
                 offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
                 load_model_as_complete(vae, target_device=gpu)
@@ -613,41 +613,36 @@ def worker(
             torch.cuda.empty_cache()
             debug("Cleared CUDA cache before decoding")
             
-            # Calculate overlap frames correctly for proper stitching
-            overlapped_frames = latent_window_size * 4 - 3
-            debug(f"Using overlapped_frames={overlapped_frames} for stitching")
+            # Calculate theoretical overlap frames
+            max_overlapped_frames = latent_window_size * 4 - 3
+            debug(f"Theoretical max overlapped_frames={max_overlapped_frames}")
             
             # Handle large tensors with chunked decoding to avoid OOM
             try:
-                # For last section or large tensors, use chunked decoding
-                if generated_latents.shape[2] > 8 and (not high_vram or is_last_section):
-                    debug(f"Using chunked decoding for tensor with {generated_latents.shape[2]} frames")
-                    chunk_size = 4  # Small enough to avoid OOM
-                    current_pixels_chunks = []
+                # Decode the newly generated latents in chunks
+                debug(f"Decoding generated_latents with shape: {generated_latents.shape}")
+                chunk_size = 4  # Small enough to avoid OOM
+                current_pixels_chunks = []
+                
+                for i in range(0, generated_latents.shape[2], chunk_size):
+                    end_idx = min(i + chunk_size, generated_latents.shape[2])
+                    debug(f"Decoding chunk {i}:{end_idx} of {generated_latents.shape[2]}")
                     
-                    for i in range(0, generated_latents.shape[2], chunk_size):
-                        end_idx = min(i + chunk_size, generated_latents.shape[2])
-                        debug(f"Decoding chunk {i}:{end_idx} of {generated_latents.shape[2]}")
-                        
-                        # Move chunk to GPU, decode, then immediately move result to CPU
-                        chunk = generated_latents[:, :, i:end_idx].to(vae.device, dtype=vae.dtype)
-                        chunk_pixels = vae_decode(chunk, vae).cpu()
-                        current_pixels_chunks.append(chunk_pixels)
-                        
-                        # Force cleanup of chunk tensors
-                        del chunk, chunk_pixels
-                        torch.cuda.empty_cache()
+                    # Move chunk to GPU, decode, then immediately move result to CPU
+                    chunk = generated_latents[:, :, i:end_idx].to(vae.device, dtype=vae.dtype)
+                    chunk_pixels = vae_decode(chunk, vae).cpu()
+                    current_pixels_chunks.append(chunk_pixels)
                     
-                    # Combine all chunks on CPU
-                    current_pixels = torch.cat(current_pixels_chunks, dim=2)
-                    debug(f"Successfully decoded in chunks: final shape {current_pixels.shape}")
-                    del current_pixels_chunks
-                else:
-                    # Regular decoding for smaller tensors
-                    generated_latents_for_decode = generated_latents.to(vae.device, dtype=vae.dtype)
-                    current_pixels = vae_decode(generated_latents_for_decode, vae).cpu()
-                    del generated_latents_for_decode
-                    
+                    # Force cleanup of chunk tensors
+                    del chunk, chunk_pixels
+                    torch.cuda.empty_cache()
+                
+                # Combine all chunks on CPU
+                current_pixels = torch.cat(current_pixels_chunks, dim=2)
+                debug(f"Successfully decoded in chunks: final shape {current_pixels.shape}")
+                del current_pixels_chunks
+                torch.cuda.empty_cache()
+                
                 debug(f"Decoded newly generated latents to pixels with shape: {current_pixels.shape}")
                 
                 # Initialize history_pixels if this is the first section
@@ -655,20 +650,32 @@ def worker(
                     history_pixels = current_pixels
                     debug(f"First section: Set history_pixels directly with shape: {history_pixels.shape}")
                 else:
-                    # IMPORTANT FIX: Check the order of arguments in soft_append_bcthw
-                    # The correct order is (new_frames, old_frames, overlap)
-                    # But we need to understand the historical ordering in the video generation
+                    # DYNAMIC OVERLAP: Calculate actual overlap based on available frames
+                    actual_overlap = min(max_overlapped_frames, current_pixels.shape[2], history_pixels.shape[2])
+                    debug(f"Using actual overlap of {actual_overlap} frames (adjusted from max {max_overlapped_frames})")
                     
-                    # Since we're decoding in reverse order (from end to beginning)
-                    # and need to prepend new frames to the beginning of our video:
-                    prev_history_shape = history_pixels.shape
-                    history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
-                    
-                    # Verify we're actually growing the history
-                    if history_pixels.shape[2] <= prev_history_shape[2]:
-                        debug(f"WARNING: History didn't grow as expected! Before: {prev_history_shape}, After: {history_pixels.shape}")
+                    # Check if we can actually perform the append
+                    if actual_overlap <= 0:
+                        debug("WARNING: Cannot perform soft append - no overlap available")
+                        # Just concatenate without overlap blending
+                        history_pixels = torch.cat([current_pixels, history_pixels], dim=2)
+                        debug(f"Performed direct concatenation. New history shape: {history_pixels.shape}")
                     else:
-                        debug(f"Successful append: History grew from {prev_history_shape[2]} frames to {history_pixels.shape[2]} frames")
+                        # Use soft append with the adjusted overlap
+                        prev_history_shape = history_pixels.shape
+                        history_pixels = soft_append_bcthw(current_pixels, history_pixels, actual_overlap)
+                        debug(f"Soft append: History grew from {prev_history_shape[2]} frames to {history_pixels.shape[2]} frames")
+                
+                # === RESTORE PREVIEW VIDEO FUNCTIONALITY ===
+                # Save preview for progress updates
+                preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
+                try:
+                    save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
+                    debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
+                    stream.output_queue.push(('preview_video', preview_filename))
+                    debug(f"[QUEUE] Queued preview_video event: {preview_filename}")
+                except Exception as e:
+                    debug(f"[ERROR] Failed to save preview video: {e}")
                 
                 # Clean up memory
                 del current_pixels
@@ -676,7 +683,9 @@ def worker(
                 
             except Exception as e:
                 debug(f"Error during VAE decoding: {str(e)}")
-                # Additional error handling if needed
+                # Print full traceback for debugging
+                import traceback
+                debug(traceback.format_exc())
                 raise
         # --- Loop finished ---
 
