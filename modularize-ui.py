@@ -671,25 +671,35 @@ def worker(
                 except Exception as e:
                     debug(f"[ERROR] Failed to save preview video: {e}")
             else:
-                # Calculate section size exactly as in original code
+                # Calculate section sizes as in original code
                 section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
                 overlapped_frames = latent_window_size * 4 - 3
                 
                 debug(f"Processing section: frames={section_latent_frames}, overlap={overlapped_frames}")
                 
-                # Decode exactly as in original code
-                current_pixels = vae_decode_chunked(real_history_latents[:, :, :section_latent_frames], vae).cpu()
-                debug(f"Section decoded: {section_latent_frames} latent frames -> {current_pixels.shape[2]} pixel frames")
+                # CRITICAL FIX: Only decode the NEW frames from this section
+                # Instead of taking first N frames, take the last N frames which are the new ones
+                new_frames_start = max(0, real_history_latents.shape[2] - section_latent_frames)
+                new_section_latents = real_history_latents[:, :, new_frames_start:]
+                
+                debug(f"Extracting newest frames {new_frames_start}:{real_history_latents.shape[2]} ({new_section_latents.shape[2]} frames)")
+                
+                # Decode just these new frames
+                current_pixels = vae_decode_chunked(new_section_latents, vae).cpu()
+                debug(f"Section decoded: {new_section_latents.shape[2]} latent frames -> {current_pixels.shape[2]} pixel frames")
                 
                 # Check if we can satisfy the overlap requirement
                 if current_pixels.shape[2] < overlapped_frames:
-                    debug(f"WARNING: Current frames ({current_pixels.shape[2]}) < overlap ({overlapped_frames})")
-                    debug(f"This section will be skipped to prevent errors.")
-                    # Skip this section but don't crash
+                    debug(f"WARNING: Current frames ({current_pixels.shape[2]}) < required overlap ({overlapped_frames})")
+                    # Auto-adjust the overlap to what we can handle
+                    adjusted_overlap = current_pixels.shape[2]
+                    debug(f"Adjusting overlap to {adjusted_overlap}")
+                    history_pixels = soft_append_bcthw(current_pixels, history_pixels, adjusted_overlap)
                 else:
-                    # Use the exact overlap from original code
+                    # Use standard overlap
                     history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
-                    debug(f"Successfully appended section, history now has {history_pixels.shape[2]} frames")
+                    
+                debug(f"Successfully appended section, history now has {history_pixels.shape[2]} frames")
                 
                 # Save and push preview
                 preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
