@@ -1,6 +1,7 @@
 from diffusers_helper.hf_login import login
 import os
 import time
+import gc
 os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 import gradio as gr
 import torch
@@ -357,6 +358,9 @@ def worker(
                 # Let processing continue with normal mode handling
                 mode = "image2video"  # Redirect to use image2video processing path
                 debug(f"Redirecting to image2video path with selected frame as input")
+
+                gc.collect()
+                torch.cuda.empty_cache()
             
             
             if mode == "keyframes":
@@ -399,6 +403,8 @@ def worker(
                 input_image, prompt, n_prompt, cfg
             )
             start_latent = vae_encode(inp_tensor.float(), vae.float())
+            gc.collect()
+            torch.cuda.empty_cache()
 
         debug("worker: VAE encoded")
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
@@ -615,6 +621,8 @@ def worker(
             real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
             if history_pixels is None:
                 history_pixels = vae_decode(real_history_latents.float(), vae.float()).cpu()
+                gc.collect()
+                torch.cuda.empty_cache()
                 debug("worker: vae decoded (first time)")
                 preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
                 try:
@@ -627,6 +635,8 @@ def worker(
                 section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
                 overlapped_frames = frames_per_section
                 current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames].float(), vae.float()).cpu()
+                gc.collect()
+                torch.cuda.empty_cache()
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
                 debug("worker: vae decoded + soft_append_bcthw")
                 preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
@@ -680,7 +690,11 @@ def worker(
                         "-map", "[outv]",
                         combined_filename
                     ]
-                    
+
+
+                gc.collect()
+                torch.cuda.empty_cache()
+                
                 debug(f"[FFMPEG] Running command: {' '.join(cmd)}")
                 subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 make_mp4_faststart(combined_filename)
