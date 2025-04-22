@@ -739,8 +739,32 @@ def worker(
                         gc.collect()
                         torch.cuda.empty_cache()
                     current_pixels = torch.cat(frames, dim=2)
+
+                # Save and push a preview of the current section
+                preview_filename = os.path.join(outputs_folder, f'{job_id}_section_preview_{uuid.uuid4().hex}.mp4')
+                try:
+                    # Save just the current section (without appending to history yet)
+                    save_bcthw_as_mp4(current_pixels, preview_filename, fps=30)
+                    debug(f"[FILE] Section preview saved: {preview_filename}, exists={os.path.exists(preview_filename)}")
+                    
+                    # Push to UI as a preview - this is important for seeing progress
+                    stream.output_queue.push(('preview_video', preview_filename))
+                    debug(f"[QUEUE] Pushed preview_video event for file: {preview_filename}")
+                except Exception as e:
+                    debug(f"[ERROR] Failed to save section preview: {e}")
+                    traceback.print_exc()
+
                 
+                # When preparing for soft_append, add this check:
                 overlapped_frames = frames_per_section
+                
+                # Add this important safety check before soft_append_bcthw
+                if history_pixels.shape[2] < overlapped_frames:
+                    debug(f"WARNING: History pixels ({history_pixels.shape[2]} frames) smaller than overlap ({overlapped_frames}), adjusting")
+                    overlapped_frames = min(history_pixels.shape[2], current_pixels.shape[2])
+                    debug(f"Adjusted overlap to {overlapped_frames} frames")
+                
+                # Now use the adjusted value
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
                 debug(f"vae decoded + soft_append_bcthw, result shape: {history_pixels.shape}")
                 
@@ -1113,17 +1137,23 @@ def process(
             last_img_path = None
         elif flag == 'preview_video':
             preview_filename = data
-            debug(f"[UI] Got preview_video event: {preview_filename}")
-            yield (
-                gr.update(value=preview_filename, visible=True), # result_video keep VISIBLE and update with preview
-                gr.update(visible=False),                        # result_image_html
-                gr.update(visible=False),                        # preview_image
-                "Generating preview...",                         # progress_desc
-                gr.update(value="", visible=False),              # progress_bar
-                gr.update(interactive=False),
-                gr.update(interactive=True),
-                gr.update()
-            )
+            debug(f"[UI] Handling preview_video event for: {preview_filename}")
+            
+            # Verify file exists before setting in UI
+            if os.path.exists(preview_filename):
+                debug(f"[UI] Preview file exists, updating video display")
+                yield (
+                    gr.update(value=preview_filename, visible=True), # result_video
+                    gr.update(visible=False),                      # result_image_html
+                    gr.update(visible=False),                      # preview_image
+                    "Generating video...",                         # progress_desc
+                    gr.update(visible=True),                       # progress_bar 
+                    gr.update(interactive=False),
+                    gr.update(interactive=True),
+                    gr.update()
+                )
+            else:
+                debug(f"[UI] Warning: Preview file not found: {preview_filename}")
         elif flag == 'progress':
             preview, desc, html = data
             if desc:
