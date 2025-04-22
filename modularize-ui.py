@@ -54,68 +54,42 @@ def make_mp4_faststart(mp4_path):
         if os.path.exists(tmpfile):
             os.remove(tmpfile)
 
-# Reimplement with much smaller chunks and more aggressive memory management
-def vae_decode_chunked(latents, vae, chunk_size=2):
+def vae_decode_chunked(latents, vae, chunk_size=4):
     """
-    Decode VAE latents in very small chunks to avoid OOM errors
+    Drop-in replacement for vae_decode that works on chunks to avoid OOM errors
     """
-    debug(f"Chunked VAE decoding for tensor of shape {latents.shape}")
+    debug(f"VAE decoding tensor of shape {latents.shape} in chunks")
     
-    # Force slice mode to be enabled
+    # Enable slicing and tiling for memory efficiency
     vae.enable_slicing()
     vae.enable_tiling()
     
-    # If very small, decode directly
+    # For very small latents, decode directly
     if latents.shape[2] <= 2:
-        debug(f"  Small tensor, decoding directly")
-        pixels = vae_decode(latents.float(), vae.float()).cpu()
-        return pixels
+        return vae_decode(latents, vae).cpu()
     
-    # Process in chunks
+    # For larger latents, chunk along temporal dimension
     chunks = []
     for i in range(0, latents.shape[2], chunk_size):
         end_idx = min(i + chunk_size, latents.shape[2])
-        debug(f"  Decoding chunk {i}:{end_idx} ({end_idx-i} frames)")
+        debug(f"  Decoding frames {i}:{end_idx}")
         
-        # Extract chunk and make sure it's on CPU before decoding
-        chunk = latents[:, :, i:end_idx, :, :].contiguous()
+        # Extract chunk
+        chunk = latents[:, :, i:end_idx, :, :]
         
-        # Clear cache before each chunk
-        gc.collect()
+        # Clear cache
         torch.cuda.empty_cache()
         
-        # Decode with error handling
-        try:
-            pixels_chunk = vae_decode(chunk.float(), vae.float()).cpu()
-            chunks.append(pixels_chunk)
-            debug(f"  Successfully decoded chunk {i}:{end_idx}")
-        except RuntimeError as e:
-            debug(f"  Error on chunk {i}:{end_idx}: {str(e)}")
-            # Try decoding single frames
-            for j in range(i, end_idx):
-                single_frame = latents[:, :, j:j+1, :, :].contiguous()
-                debug(f"    Decoding single frame {j}")
-                gc.collect()
-                torch.cuda.empty_cache()
-                try:
-                    single_pixels = vae_decode(single_frame.float(), vae.float()).cpu()
-                    chunks.append(single_pixels)
-                except Exception as sub_e:
-                    debug(f"    Failed on single frame {j}: {str(sub_e)}")
-                
-        # Force cleanup after each chunk
+        # Decode chunk
+        pixels_chunk = vae_decode(chunk, vae).cpu()
+        chunks.append(pixels_chunk)
+        
+        # Clear chunk from memory
         del chunk
-        gc.collect()
         torch.cuda.empty_cache()
     
-    # Concatenate results
-    if len(chunks) == 0:
-        raise RuntimeError("Failed to decode any chunks")
-        
-    debug(f"  Concatenating {len(chunks)} decoded chunks")
+    # Concatenate chunks
     result = torch.cat(chunks, dim=2)
-    debug(f"  Completed chunked decoding, result shape: {result.shape}")
-    
     return result
 
 DEBUG = True
@@ -677,108 +651,50 @@ def worker(
            # ------- decode & video preview -----
             if not high_vram:
                 offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
-                debug("worker: offloaded transformer")
                 load_model_as_complete(vae, target_device=gpu)
                 debug("worker: loaded vae to gpu (again)")
             
-            # ---- Guarantee the last N latent frames match encoded end_frame ----
+            # Use real_history_latents exactly as in the original code
             real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
+            
+            # This is the KEY part that matches the original code
             if history_pixels is None:
-                history_pixels = vae_decode_chunked(real_history_latents, vae, chunk_size=8)
-                debug("worker: vae decoded (first time) using chunked approach")
+                # Use our chunked decoder as a direct replacement for vae_decode
+                history_pixels = vae_decode_chunked(real_history_latents, vae, chunk_size=4)
+                debug("worker: vae decoded (first time)")
                 
-                # Save section outputs after each section like the demo code
-                section_preview = os.path.join(outputs_folder, f'{job_id}_section_{latent_padding}.mp4')
+                # Save preview
+                preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
                 try:
-                    save_bcthw_as_mp4(history_pixels, section_preview, fps=30)
-                    debug(f"[FILE] Section preview saved: {section_preview}")
-                except Exception as e:
-                    debug(f"[ERROR] Failed to save section preview: {e}")
-                
-                # Clean up after saving
-                gc.collect()
-                torch.cuda.empty_cache()
-            else:
-                # For subsequent sections, use much smaller section size
-                if is_last_section:
-                    section_latent_frames = min(latent_window_size + 1, real_history_latents.shape[2])
-                else:
-                    section_latent_frames = min(latent_window_size, real_history_latents.shape[2])
-                    
-                debug(f"Using section_latent_frames={section_latent_frames} for VAE decoding (limited)")
-                
-                # Decode in very small chunks
-                section_latents = real_history_latents[:, :, :section_latent_frames].contiguous()
-                
-                # Save memory by using CPU
-                section_latents = section_latents.cpu()
-                gc.collect()
-                torch.cuda.empty_cache()
-                
-                # Move back to GPU for decoding
-                section_latents = section_latents.to(vae.device)
-                
-                # Decode with more aggressive chunking
-                try:
-                    current_pixels = vae_decode_chunked(section_latents, vae, chunk_size=2)
-                    gc.collect()
-                    torch.cuda.empty_cache()
-                except Exception as e:
-                    debug(f"ERROR in chunked VAE decoding: {str(e)}")
-                    # Try frame-by-frame as a fallback
-                    debug("Attempting frame-by-frame fallback decoding")
-                    frames = []
-                    for i in range(section_latents.shape[2]):
-                        debug(f"  Decoding frame {i} individually")
-                        single_frame = section_latents[:, :, i:i+1, :, :].contiguous()
-                        gc.collect()
-                        torch.cuda.empty_cache()
-                        single_pixels = vae_decode(single_frame.float(), vae.float()).cpu()
-                        frames.append(single_pixels)
-                        del single_frame
-                        gc.collect()
-                        torch.cuda.empty_cache()
-                    current_pixels = torch.cat(frames, dim=2)
-
-                # Save and push a preview of the current section
-                preview_filename = os.path.join(outputs_folder, f'{job_id}_section_preview_{uuid.uuid4().hex}.mp4')
-                try:
-                    # Save just the current section (without appending to history yet)
-                    save_bcthw_as_mp4(current_pixels, preview_filename, fps=30)
-                    debug(f"[FILE] Section preview saved: {preview_filename}, exists={os.path.exists(preview_filename)}")
-                    
-                    # Push to UI as a preview - this is important for seeing progress
+                    save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
+                    debug(f"[FILE] Preview video saved: {preview_filename}")
                     stream.output_queue.push(('preview_video', preview_filename))
-                    debug(f"[QUEUE] Pushed preview_video event for file: {preview_filename}")
                 except Exception as e:
-                    debug(f"[ERROR] Failed to save section preview: {e}")
-                    traceback.print_exc()
-
+                    debug(f"[ERROR] Failed to save preview video: {e}")
+            else:
+                # Use EXACTLY the same section logic as original code
+                section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
+                overlapped_frames = latent_window_size * 4 - 3
                 
-                # When preparing for soft_append, add this check:
-                overlapped_frames = frames_per_section
+                # Use our chunked decoder for the current section
+                current_pixels = vae_decode_chunked(
+                    real_history_latents[:, :, :section_latent_frames], 
+                    vae, 
+                    chunk_size=4
+                )
                 
-                # Add this important safety check before soft_append_bcthw
-                if history_pixels.shape[2] < overlapped_frames:
-                    debug(f"WARNING: History pixels ({history_pixels.shape[2]} frames) smaller than overlap ({overlapped_frames}), adjusting")
-                    overlapped_frames = min(history_pixels.shape[2], current_pixels.shape[2])
-                    debug(f"Adjusted overlap to {overlapped_frames} frames")
-                
-                # Now use the adjusted value
+                # Use soft_append exactly as in original code
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
-                debug(f"vae decoded + soft_append_bcthw, result shape: {history_pixels.shape}")
+                debug("worker: vae decoded + soft_append_bcthw")
                 
-                # Save section outputs after each section like the demo code
-                section_preview = os.path.join(outputs_folder, f'{job_id}_section_{latent_padding}.mp4')
+                # Save and push preview
+                preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
                 try:
-                    save_bcthw_as_mp4(history_pixels, section_preview, fps=30)
-                    debug(f"[FILE] Section preview saved: {section_preview}")
-                    
-                    # Push to UI for preview
-                    stream.output_queue.push(('preview_video', section_preview))
-                    debug(f"[PREVIEW] Pushed section preview to UI: {section_preview}")
+                    save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
+                    debug(f"[FILE] Preview video saved: {preview_filename}")
+                    stream.output_queue.push(('preview_video', preview_filename))
                 except Exception as e:
-                    debug(f"[ERROR] Failed to save section preview: {e}")
+                    debug(f"[ERROR] Failed to save preview video: {e}")
                 
                 # Clean up after saving
                 gc.collect()
