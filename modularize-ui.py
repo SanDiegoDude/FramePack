@@ -426,15 +426,20 @@ def worker(
         total_generated_latent_frames = 0
 
         # -------- SECTION PATCH/STITCH LOOP ----------
-        # Calculate latent paddings with special pattern
-        if total_sections > 4:
-            # Special pattern for longer videos that improves transitions
-            latent_paddings = [3] + [2] * (total_sections - 3) + [1, 0]
-            debug(f"worker: Using special padding pattern for {total_sections} sections: {latent_paddings}")
-        else:
-            # For 4 or fewer sections, use the standard reversed range
-            latent_paddings = list(reversed(range(total_sections)))
-            debug(f"worker: Using standard padding for {total_sections} sections: {latent_paddings}")
+        # # Calculate latent paddings with special pattern (COMMENT OUT NEW LOGIC)
+        # if total_sections > 4:
+        #     # Special pattern for longer videos that improves transitions
+        #     latent_paddings = [3] + [2] * (total_sections - 3) + [1, 0]
+        #     debug(f"worker: Using special padding pattern for {total_sections} sections: {latent_paddings}")
+        # else:
+        #     # For 4 or fewer sections, use the standard reversed range
+        #     latent_paddings = list(reversed(range(total_sections)))
+        #     debug(f"worker: Using standard padding for {total_sections} sections: {latent_paddings}")
+        
+        # --- FORCE OLD PADDING SCHEME ---
+        debug(f"worker: [TESTING] Forcing old padding scheme: reversed(range(total_sections))")
+        latent_paddings = reversed(range(total_sections))
+        # --- END FORCE OLD PADDING ---
         
         # Initialize video tracking variables
         history_latents = torch.zeros(
