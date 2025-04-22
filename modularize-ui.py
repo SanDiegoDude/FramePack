@@ -248,6 +248,10 @@ def worker(
 ):
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
+
+    # --- DEFINE DEFAULT OUTPUT FILENAME ---
+    output_filename = os.path.join(outputs_folder, f'{job_id}_final.mp4')
+    debug(f"worker: Default output filename set to: {output_filename}")
     
     # -- section/frames logic
     if use_adv:
