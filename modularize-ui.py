@@ -250,7 +250,9 @@ def worker(
     prompt, n_prompt, seed,
     use_adv, adv_window, adv_seconds, selected_frames,
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
-    init_color, keyframe_weight
+    init_color, keyframe_weight,
+    # Add new parameters:
+    input_video=None, extension_direction="Forward", extension_length=3.0, extension_frames=8
 ):
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
@@ -877,11 +879,13 @@ def process(
     prompt, n_prompt, seed,
     use_adv, adv_window, adv_seconds, selected_frames,
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color,
-    keyframe_weight
+    keyframe_weight,
+    # Add new parameters here:
+    input_video=None, extension_direction="Forward", extension_length=3.0, extension_frames=8
 ):
     global stream
     debug("process: called with mode", mode)
-    assert mode in ['image2video', 'text2video', 'keyframes'], "Invalid mode"
+    assert mode in ['image2video', 'text2video', 'keyframes', 'video_extension'], "Invalid mode"
     
     # Create initial empty progress bars HTML
     empty_progress = """
@@ -947,7 +951,11 @@ def process(
         gpu_memory_preservation,
         use_teacache,
         init_color,
-        keyframe_weight
+        keyframe_weight,
+        input_video,
+        extension_direction,
+        extension_length,
+        extension_frames
     )
     output_filename = None
     last_desc = ""
