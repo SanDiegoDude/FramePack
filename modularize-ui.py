@@ -603,7 +603,7 @@ def worker(
             history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
             debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
 
-            # --- VAE Decoding Section (FIXED VERSION) ---
+            # --- VAE Decoding Section (COMBINED BEST VERSION) ---
             if not high_vram:
                 offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
                 load_model_as_complete(vae, target_device=gpu)
@@ -613,11 +613,10 @@ def worker(
             torch.cuda.empty_cache()
             debug("Cleared CUDA cache before decoding")
             
-            # Calculate theoretical overlap frames
+            # Calculate theoretical max overlap frames (keep this for reference)
             max_overlapped_frames = latent_window_size * 4 - 3
             debug(f"Theoretical max overlapped_frames={max_overlapped_frames}")
             
-            # Handle large tensors with chunked decoding to avoid OOM
             try:
                 # Decode the newly generated latents in chunks
                 debug(f"Decoding generated_latents with shape: {generated_latents.shape}")
@@ -650,21 +649,12 @@ def worker(
                     history_pixels = current_pixels
                     debug(f"First section: Set history_pixels directly with shape: {history_pixels.shape}")
                 else:
-                    # DYNAMIC OVERLAP: Calculate actual overlap based on available frames
-                    actual_overlap = min(max_overlapped_frames, current_pixels.shape[2], history_pixels.shape[2])
-                    debug(f"Using actual overlap of {actual_overlap} frames (adjusted from max {max_overlapped_frames})")
-                    
-                    # Check if we can actually perform the append
-                    if actual_overlap <= 0:
-                        debug("WARNING: Cannot perform soft append - no overlap available")
-                        # Just concatenate without overlap blending
-                        history_pixels = torch.cat([current_pixels, history_pixels], dim=2)
-                        debug(f"Performed direct concatenation. New history shape: {history_pixels.shape}")
-                    else:
-                        # Use soft append with the adjusted overlap
-                        prev_history_shape = history_pixels.shape
-                        history_pixels = soft_append_bcthw(current_pixels, history_pixels, actual_overlap)
-                        debug(f"Soft append: History grew from {prev_history_shape[2]} frames to {history_pixels.shape[2]} frames")
+                    # For sequential sections, simply prepend the new frames 
+                    # (since we're generating from end to beginning)
+                    # IMPORTANT: Use simple concatenation instead of soft_append_bcthw
+                    # This eliminates the double exposure effect
+                    history_pixels = torch.cat([current_pixels, history_pixels], dim=2)
+                    debug(f"Concatenated new frames without blending. New history shape: {history_pixels.shape}")
                 
                 # === RESTORE PREVIEW VIDEO FUNCTIONALITY ===
                 # Save preview for progress updates
@@ -683,7 +673,6 @@ def worker(
                 
             except Exception as e:
                 debug(f"Error during VAE decoding: {str(e)}")
-                # Print full traceback for debugging
                 import traceback
                 debug(traceback.format_exc())
                 raise
