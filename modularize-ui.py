@@ -102,17 +102,18 @@ stream = AsyncStream()
 outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
 
-def extract_frames_from_video(video_path, num_frames=8, from_end=True):
+def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resolution=640):
     """
-    Extract frames from a video file.
+    Extract frames from a video file with bucket resizing for memory efficiency.
     
     Args:
         video_path: Path to the video file
         num_frames: Number of frames to extract
         from_end: If True, extract from the end of the video, otherwise from the beginning
+        max_resolution: Maximum dimension for bucket sizing
     
     Returns:
-        numpy array of frames and the video fps
+        numpy array of frames, the video fps, and the original dimensions
     """
     try:
         import cv2
@@ -128,10 +129,14 @@ def extract_frames_from_video(video_path, num_frames=8, from_end=True):
     # Get video properties
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    orig_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    debug(f"Video properties: total_frames={total_frames}, fps={fps}, dimensions={width}x{height}")
+    debug(f"Video properties: total_frames={total_frames}, fps={fps}, dimensions={orig_width}x{orig_height}")
+    
+    # Calculate bucket dimensions
+    bucket_height, bucket_width = find_nearest_bucket(orig_height, orig_width, resolution=max_resolution)
+    debug(f"Using bucket dimensions: {bucket_width}x{bucket_height}")
     
     # Calculate frame indices to extract
     if from_end:
@@ -152,6 +157,10 @@ def extract_frames_from_video(video_path, num_frames=8, from_end=True):
         if current_frame in frame_indices:
             # Convert BGR to RGB
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Resize to bucket dimensions
+            frame = resize_and_center_crop(frame, target_width=bucket_width, target_height=bucket_height)
+            
             frames.append(frame)
             
         current_frame += 1
@@ -169,7 +178,7 @@ def extract_frames_from_video(video_path, num_frames=8, from_end=True):
     frames = np.array(frames)
     debug(f"Extracted {len(frames)} frames with shape {frames.shape}")
     
-    return frames, fps
+    return frames, fps, (orig_height, orig_width)
 
 # ---- Color Helper ----
 def parse_hex_color(hexcode):
@@ -345,16 +354,17 @@ def worker(
             debug(f"Processing video extension: direction={extension_direction}, length={extension_length}s")
             
             # Extract frames from the video
-            extracted_frames, video_fps = extract_frames_from_video(
+            extracted_frames, video_fps, original_dims = extract_frames_from_video(
                 input_video, 
                 num_frames=int(extension_frames),
-                from_end=(extension_direction == "Forward")
+                from_end=(extension_direction == "Forward"),
+                max_resolution=640  # Same bucket resolution as other modes
             )
             
             # Determine dimensions based on extracted frames
             frame_h, frame_w, _ = extracted_frames[0].shape
             height, width = find_nearest_bucket(frame_h, frame_w, resolution=640)
-            debug(f"Using bucket dimensions for video extension: {width}x{height}")
+            debug(f"Frame dimensions after bucket sizing: {frame_w}x{frame_h}")
             
             if extension_direction == "Forward":
                 # For forward extension, use the last frame as start frame
