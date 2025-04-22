@@ -492,28 +492,47 @@ def worker(
                     debug("worker: callback: received 'end', stopping generation.")
                     stream.output_queue.push(('end', None))
                     raise KeyboardInterrupt('User ends the task.')
-
+    
                 # Section progress (Unchanged)
                 current_step = d['i'] + 1
                 section_percentage = int(100.0 * current_step / steps)
-
+    
                 # Overall progress (ADAPTED)
                 # 'section' goes from total_sections-1 down to 0
-                sections_completed = (total_sections - 1) - section # How many sections came *before* this one
-                overall_percentage = int(100.0 * (sections_completed + (current_step / steps)) / total_sections)
-
-                # Calculate actual frame count (Uses total_generated_latent_frames state variable)
-                # Let's calculate the *pixel* frames generated *so far* based on history_pixels
+                sections_completed = (local_total_sections - 1) - section # How many sections came *before* this one
+                overall_percentage = int(100.0 * (sections_completed + (current_step / steps)) / local_total_sections)
+    
+                # Calculate actual frame count (Based on history_pixels, as before)
                 actual_pixel_frames = history_pixels.shape[2] if history_pixels is not None else 0
                 actual_seconds = actual_pixel_frames / 30.0
-
-                hint = f'Section {sections_completed+1}/{total_sections} - Step {current_step}/{steps}'
-                # Display pixel frames in description for user clarity
+    
+                hint = f'Section {sections_completed+1}/{local_total_sections} - Step {current_step}/{steps}'
                 desc = f'Pixel frames generated: {actual_pixel_frames}, Length: {actual_seconds:.2f}s (FPS-30)'
-
-                # Create dual progress bar HTML (Unchanged)
-                progress_html = f"""...""" # Your dual progress bar HTML here
-
+    
+                # Create dual progress bar HTML (Unchanged - uses calculated percentages)
+                progress_html = f"""
+                <div class="dual-progress-container">
+                    <div class="progress-label">
+                        <span>Current Section:</span>
+                        <span>{section_percentage}%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fg" style="width: {section_percentage}%"></div>
+                    </div>
+    
+                    <div class="progress-label">
+                        <span>Overall Progress:</span>
+                        <span>{overall_percentage}%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fg" style="width: {overall_percentage}%"></div>
+                    </div>
+    
+                    <div style="font-size:0.9em; opacity:0.8;">{hint}</div>
+                </div>
+                """
+    
+                # Debug message and pushing to queue (Unchanged)
                 debug(f"worker: In callback, section: {section_percentage}%, overall: {overall_percentage}%")
                 stream.output_queue.push(('progress', (preview, desc, progress_html)))
             # --- End adapted callback definition ---
@@ -578,22 +597,19 @@ def worker(
             debug(f"Shape of real_history_latents for decode: {real_history_latents.shape}")
 
             if history_pixels is None:
-                # First section decoded - real_history_latents contains only the first generated segment
+                # First section decoded
                 history_pixels = vae_decode(real_history_latents, vae).cpu()
                 debug(f"First section decoded: {real_history_latents.shape[2]} latent frames → {history_pixels.shape[2]} pixel frames")
             else:
                 # Subsequent sections - decode slice needed for merging
                 section_latent_frames_needed = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
-                # Ensure we don't slice more than available in real_history_latents
                 section_latent_frames_to_decode = min(section_latent_frames_needed, real_history_latents.shape[2])
                 overlapped_frames = latent_window_size * 4 - 3
-
-                # Slice the *start* of the real history (newest data)
+    
                 latent_decode_slice = real_history_latents[:, :, :section_latent_frames_to_decode, :, :]
                 debug(f"Subsequent section decode input shape: {latent_decode_slice.shape}")
                 current_pixels = vae_decode(latent_decode_slice, vae).cpu()
-
-                # Merge using soft_append (CPU op)
+    
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
                 debug(f"worker: vae decoded + soft_append_bcthw. History pixels shape: {history_pixels.shape}")
 
@@ -762,17 +778,30 @@ def worker(
                     return
         
         # --------- Final MP4 Export ---------
-        debug(f"[FILE] Attempting to save video to {output_filename}")
-        try:
-            save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
-            debug(f"[FILE] Video successfully saved to {output_filename}: {os.path.exists(output_filename)}")
-            make_mp4_faststart(output_filename)
-            debug(f"[FILE] Faststart patch applied to {output_filename}: {os.path.exists(output_filename)}")
-            stream.output_queue.push(('file', output_filename))
-            debug(f"[QUEUE] Queued event 'file' with data: {output_filename}")
-        except Exception as e:
-            debug(f"[ERROR] FAILED to save video {output_filename}: {e}")
-            traceback.print_exc()
+        if 'history_pixels' in locals() and history_pixels is not None and history_pixels.shape[2] > 0:
+            # A simple flag to check if image logic might have run.
+            # You might need a more robust way to track if file_img was pushed.
+            image_likely_saved = False
+            if (mode == "text2video" or (mode == "keyframes" and start_frame is None)):
+                 if history_pixels.shape[2] <= 1: # This condition was used in your image saving logic
+                     image_likely_saved = True
+    
+            if not image_likely_saved:
+                debug(f"[FILE] Attempting to save final video to {output_filename}")
+                try:
+                    save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
+                    debug(f"[FILE] Video successfully saved to {output_filename}: {os.path.exists(output_filename)}")
+                    make_mp4_faststart(output_filename)
+                    debug(f"[FILE] Faststart patch applied to {output_filename}: {os.path.exists(output_filename)}")
+                    stream.output_queue.push(('file', output_filename))
+                    debug(f"[QUEUE] Queued event 'file' with data: {output_filename}")
+                except Exception as e:
+                    debug(f"[ERROR] FAILED to save final video {output_filename}: {e}")
+                    traceback.print_exc()
+            else:
+                 debug(f"[FILE] Skipping final video save, likely handled by image export logic.")
+        else:
+             debug(f"[FILE] Skipping final video save: No valid history_pixels found.")
 
     except Exception as ex:
         debug("worker: EXCEPTION THROWN", ex)
@@ -786,7 +815,9 @@ def worker(
     finally:
         debug("worker: in finally block, writing final summary/progress/end")
         t_end = time.time()
+        # Use final state of history_pixels for summary
         if 'history_pixels' in locals() and history_pixels is not None:
+            # Account for trimming possibly reducing frames before final save
             trimmed_frames = history_pixels.shape[2]
             video_seconds = trimmed_frames / 30.0
         else:
