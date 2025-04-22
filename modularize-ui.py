@@ -664,11 +664,11 @@ def worker(
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, safe_overlap)
                 debug(f"Added new section, history_pixels now has {history_pixels.shape[2]} frames")
 
-            # Explicitly delete the CPU tensor now merged into history
-            del current_pixels
-            gc.collect()
-            # No need for torch.cuda.empty_cache() here as current_pixels was on CPU
-            
+                # Explicitly delete the CPU tensor now merged into history
+                del current_pixels
+                gc.collect()
+                # No need for torch.cuda.empty_cache() here as current_pixels was on CPU
+                
             # Always save and push a preview after each section
             preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
             try:
