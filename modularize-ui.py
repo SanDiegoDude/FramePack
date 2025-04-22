@@ -658,7 +658,7 @@ def worker(
                 # Get safe overlap count
                 safe_overlap = min(overlapped_frames, current_pixels.shape[2])
                 if safe_overlap < overlapped_frames:
-                debug(f"WARNING: Adjusting overlap from {overlapped_frames} to {safe_overlap}")
+                    debug(f"WARNING: Adjusting overlap from {overlapped_frames} to {safe_overlap}")
                 
                 # Append to history, adjusting overlap if needed
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, safe_overlap)
