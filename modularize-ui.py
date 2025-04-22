@@ -426,6 +426,19 @@ def worker(
         total_generated_latent_frames = 0
 
         # -------- SECTION PATCH/STITCH LOOP ----------
+        # Calculate latent paddings list - *ONLY FOR CALLBACK INFO*
+        # This calculation is optional if total_sections is reliably calculated above.
+        # If you keep it, ensure it uses 'total_sections'
+        if total_sections > 4:
+            latent_paddings_list_for_info = [3] + [2] * (total_sections - 3) + [1, 0]
+            debug(f"worker: Calculated padding list {latent_paddings_list_for_info} for info (len={len(latent_paddings_list_for_info)})")
+        else:
+            latent_paddings_list_for_info = list(reversed(range(total_sections)))
+            debug(f"worker: Calculated standard padding list {latent_paddings_list_for_info} for info (len={len(latent_paddings_list_for_info)})")
+        # Check length (optional)
+        if len(latent_paddings_list_for_info) != total_sections:
+             debug(f"WARNING: Mismatch between total_sections ({total_sections}) and latent_paddings_list_for_info length ({len(latent_paddings_list_for_info)})")
+
         # --- FORCE OLD ITERATION SCHEME ---
         debug(f"worker: [TESTING] Forcing old iteration scheme: reversed(range(total_sections={total_sections}))")
         loop_iterator = reversed(range(total_sections))
@@ -433,12 +446,10 @@ def worker(
 
         # Process each section using the old iteration method
         for section in loop_iterator: # Iterates from total_sections-1 down to 0
-            # Determine section properties based on 'section' index
+            # Determine section properties (Unchanged)
             is_last_section = section == 0
-            is_first_iteration = section == total_sections - 1 # First iteration of the loop
-            latent_padding_size = section * latent_window_size # Use section index directly for padding calc
-
-            debug(f'section = {section}, latent_padding_size = {latent_padding_size}, is_first_iteration = {is_first_iteration}, is_last_section = {is_last_section}')
+            latent_padding_size = section * latent_window_size
+            debug(f'section = {section}, latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}')
 
             # Check for abort signal (Unchanged)
             if stream.input_queue.top() == 'end':
