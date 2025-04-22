@@ -172,7 +172,7 @@ def worker(
     prompt, n_prompt, seed,
     use_adv, adv_window, adv_seconds, selected_frames,
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
-    init_color
+    init_color, keyframe_weight
 ):
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
@@ -204,20 +204,26 @@ def worker(
             if end_frame is None:
                 raise ValueError("Keyframes mode requires End Frame to be set!")
             
-            # Use end_frame dimensions as the reference for everything
-            width, height = end_frame.shape[1], end_frame.shape[0]
-            debug(f"Using end frame dimensions for keyframe mode: {width}x{height}")
+            # Get original dimensions
+            end_H, end_W, end_C = end_frame.shape
+            
+            # Find nearest bucket size for the end frame
+            height, width = find_nearest_bucket(end_H, end_W, resolution=640)
+            debug(f"Using bucket dimensions for keyframe mode: {width}x{height} (from original {end_W}x{end_H})")
             
             # --- Build start-frame numpy image ---
             if start_frame is not None:
-                # Always resize start_frame to match end_frame dimensions
-                debug(f"Resizing start frame from {start_frame.shape[1]}x{start_frame.shape[0]} to {width}x{height}")
+                # Resize start_frame to match bucket dimensions
+                debug(f"Resizing start frame from {start_frame.shape[1]}x{start_frame.shape[0]} to bucket size {width}x{height}")
                 s_np = resize_and_center_crop(start_frame, target_width=width, target_height=height)
                 input_anchor_np = s_np
             else:
-                # Use gray color if no start frame, using end frame dimensions
+                # Use gray color with bucket dimensions
                 input_anchor_np = np.ones((height, width, 3), dtype=np.uint8) * 128
-                debug(f"Created gray start frame with dimensions {width}x{height}")
+                debug(f"Created gray start frame with bucket dimensions {width}x{height}")
+            
+            # --- End frame processing with bucket dimensions ---
+            end_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
             
             # --- VAE encode ---
             input_anchor_tensor = torch.from_numpy(input_anchor_np).float() / 127.5 - 1
@@ -246,14 +252,21 @@ def worker(
             if not high_vram:
                 load_model_as_complete(image_encoder, target_device=gpu)
             
-            # Process start frame with CLIP Vision
-            start_clip_output = hf_clip_vision_encode(input_anchor_np, feature_extractor, image_encoder).last_hidden_state
-            
-            # Process end frame with CLIP Vision
-            end_clip_output = hf_clip_vision_encode(end_np, feature_extractor, image_encoder).last_hidden_state
-            
-            # Combine both image embeddings (similar to reference code)
-            clip_output = (start_clip_output + end_clip_output) / 2
+            if mode == "keyframes":
+                # Process end frame with CLIP
+                end_clip_output = hf_clip_vision_encode(end_np, feature_extractor, image_encoder).last_hidden_state
+                
+                if start_frame is not None:
+                    # Process start frame with CLIP
+                    start_clip_output = hf_clip_vision_encode(input_anchor_np, feature_extractor, image_encoder).last_hidden_state
+                    
+                    # Use weighted combination based on slider value
+                    clip_output = (keyframe_weight * start_clip_output + (1.0 - keyframe_weight) * end_clip_output)
+                    debug(f"Using weighted combination: {keyframe_weight:.1f} start frame, {1.0-keyframe_weight:.1f} end frame")
+                else:
+                    # No start frame provided - use 100% end frame embedding
+                    clip_output = end_clip_output
+                    debug("No start frame provided - using 100% end frame embedding")
         
         elif mode == "text2video":
             width, height = get_dims_from_aspect(aspect, custom_w, custom_h)
@@ -368,16 +381,49 @@ def worker(
                 preview = vae_decode_fake(preview)
                 preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
                 preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
+                
                 if stream.input_queue.top() == 'end':
                     debug("worker: callback: received 'end', stopping generation.")
                     stream.output_queue.push(('end', None))
                     raise KeyboardInterrupt('User ends the task.')
+                
+                # Section progress
                 current_step = d['i'] + 1
-                percentage = int(100.0 * current_step / steps)
-                hint = f'Sampling {current_step}/{steps}'
-                desc = f'Total generated frames: {total_generated_latent_frames}, Video length: {total_generated_latent_frames/30.0:.2f} seconds (FPS-30).'
-                debug("worker: In callback, push progress preview at step", current_step, "/", steps)
-                stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
+                section_percentage = int(100.0 * current_step / steps)
+                
+                # Overall progress
+                current_section_index = latent_paddings.index(latent_padding)
+                sections_completed = current_section_index 
+                overall_percentage = int(100.0 * (sections_completed + (current_step / steps)) / len(latent_paddings))
+                
+                hint = f'Section {sections_completed+1}/{len(latent_paddings)} - Step {current_step}/{steps}'
+                desc = f'Generated frames: {total_generated_latent_frames}, Length: {total_generated_latent_frames/30.0:.2f}s (FPS-30)'
+                
+                # Create dual progress bar HTML
+                progress_html = f"""
+                <div class="dual-progress-container">
+                    <div class="progress-label">
+                        <span>Current Section:</span>
+                        <span>{section_percentage}%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fg" style="width: {section_percentage}%"></div>
+                    </div>
+                    
+                    <div class="progress-label">
+                        <span>Overall Progress:</span>
+                        <span>{overall_percentage}%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fg" style="width: {overall_percentage}%"></div>
+                    </div>
+                    
+                    <div style="font-size:0.9em; opacity:0.8;">{hint}</div>
+                </div>
+                """
+                
+                debug(f"worker: In callback, section: {section_percentage}%, overall: {overall_percentage}%")
+                stream.output_queue.push(('progress', (preview, desc, progress_html)))
 
             if mode == "keyframes":
                 generated_latents = sample_hunyuan(
@@ -634,11 +680,36 @@ def process(
     mode, input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h,
     prompt, n_prompt, seed,
     use_adv, adv_window, adv_seconds, selected_frames,
-    steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color
+    steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color,
+    keyframe_weight
 ):
     global stream
     debug("process: called with mode", mode)
     assert mode in ['image2video', 'text2video', 'keyframes'], "Invalid mode"
+    
+    # Create initial empty progress bars HTML
+    empty_progress = """
+    <div class="dual-progress-container">
+        <div class="progress-label">
+            <span>Current Section:</span>
+            <span>0%</span>
+        </div>
+        <div class="progress-bar-bg">
+            <div class="progress-bar-fg" style="width: 0%"></div>
+        </div>
+        
+        <div class="progress-label">
+            <span>Overall Progress:</span>
+            <span>0%</span>
+        </div>
+        <div class="progress-bar-bg">
+            <div class="progress-bar-fg" style="width: 0%"></div>
+        </div>
+        
+        <div style="font-size:0.9em; opacity:0.8;">Preparing...</div>
+    </div>
+    """
+    
     if mode == 'image2video' and input_image is None:
         debug("process: Aborting early -- no input image for image2video")
         yield (
@@ -652,8 +723,9 @@ def process(
     if not lock_seed:
         seed = int(time.time()) % 2**32
     debug("process: entering main async_run yield cycle, seed:", seed)
+    
     yield (
-        None, None, None, '', '',
+        None, None, None, '', gr.update(visible=False),  # Progress bar hidden at start
         gr.update(interactive=False),
         gr.update(interactive=True),
         gr.update(value=seed)
@@ -678,7 +750,8 @@ def process(
         rs,
         gpu_memory_preservation,
         use_teacache,
-        init_color
+        init_color,
+        keyframe_weight
     )
     output_filename = None
     last_desc = ""
@@ -720,13 +793,13 @@ def process(
             if desc:
                 last_desc = desc
             debug(f"process: yielding progress output: desc={desc}")
-            # Don't touch result_video or result_image_html here!
+            # Make sure to set visible=True for progress bar
             yield (
-                gr.update(),                  # NO update to result_video; keep visible
-                gr.update(),                  # NO update to result_image_html; keep as-is
-                gr.update(visible=True, value=preview), # preview_image (show as needed)
-                desc,
-                html,
+                gr.update(),                           # result_video
+                gr.update(),                           # result_image_html
+                gr.update(visible=True, value=preview), # preview_image
+                desc,                                  # progress_desc
+                gr.update(value=html, visible=True),   # Make progress bar visible with EACH update
                 gr.update(interactive=False),
                 gr.update(interactive=True),
                 gr.update()
@@ -786,6 +859,37 @@ css = """
     margin-bottom: 16px;
     background: #222 !important;
 }
+
+/* Progress Bar Styling */
+.dual-progress-container {
+    background: #222;
+    border: 2px solid orange;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 16px;
+}
+
+.progress-label {
+    font-weight: bold;
+    margin-bottom: 4px;
+    display: flex;
+    justify-content: space-between;
+}
+
+.progress-bar-bg {
+    background: #333;
+    border-radius: 4px;
+    height: 20px;
+    overflow: hidden;
+    margin-bottom: 12px;
+}
+
+.progress-bar-fg {
+    height: 100%;
+    background: linear-gradient(90deg, #ff8800, #ff2200);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
 """
 
 block = gr.Blocks(css=css).queue()
@@ -832,12 +936,23 @@ with block:
                 rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False)
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
         with gr.Column(scale=2):
+            progress_bar = gr.HTML(visible=False)  # Start hidden
+            progress_desc = gr.Markdown(visible=False)
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
             result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
             result_image_html = gr.Image(label='Single Frame Image', visible=False)
             gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
+            with gr.Group(visible=False) as keyframes_options:
+                keyframe_weight = gr.Slider(
+                    label="Start Frame Influence", 
+                    minimum=0.0, 
+                    maximum=1.0, 
+                    value=0.7, 
+                    step=0.1,
+                    info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)"
+                )
 
     # --- calllbacks ---
     def update_frame_dropdown(window):
@@ -865,6 +980,7 @@ with block:
             gr.update(visible=(mode == "text2video")),  # aspect_selector
             gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_w
             gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_h
+            gr.update(visible=(mode == "keyframes")),  # keyframes_options
         )
     def show_custom(aspect):
         show = aspect == "Custom..."
@@ -882,7 +998,7 @@ with block:
     mode_selector.change(
         switch_mode,
         inputs=[mode_selector],
-        outputs=[input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h]
+        outputs=[input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h,  keyframes_options]
     )
     def show_init_color(mode):
         return gr.update(visible=(mode == "text2video"))
@@ -920,6 +1036,7 @@ with block:
         use_teacache,
         lock_seed,
         init_color,
+        keyframe_weight,
     ]
     prompt.submit(
         fn=process,
