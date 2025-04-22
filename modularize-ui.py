@@ -837,11 +837,6 @@ def worker(
                 debug(f"[FILE] Attempting to save final video to {output_filename}")
                 try:
                     save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
-    
-            if not image_likely_saved:
-                debug(f"[FILE] Attempting to save final video to {output_filename}")
-                try:
-                    save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
                     debug(f"[FILE] Video successfully saved to {output_filename}: {os.path.exists(output_filename)}")
                     make_mp4_faststart(output_filename)
                     debug(f"[FILE] Faststart patch applied to {output_filename}: {os.path.exists(output_filename)}")
@@ -851,9 +846,9 @@ def worker(
                     debug(f"[ERROR] FAILED to save final video {output_filename}: {e}")
                     traceback.print_exc()
             else:
-                 debug(f"[FILE] Skipping final video save, likely handled by image export logic.")
+                debug(f"[FILE] Skipping final video save, likely handled by image export logic.")
         else:
-             debug(f"[FILE] Skipping final video save: No valid history_pixels found.")
+            debug(f"[FILE] Skipping final video save: No valid history_pixels found.")
 
     except Exception as ex:
         debug("worker: EXCEPTION THROWN", ex)
