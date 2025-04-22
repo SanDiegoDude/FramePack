@@ -438,7 +438,7 @@ def worker(
         
         # --- FORCE OLD PADDING SCHEME ---
         debug(f"worker: [TESTING] Forcing old padding scheme: reversed(range(total_sections))")
-        latent_paddings = reversed(range(total_sections))
+        loop_iterator = reversed(range(total_sections))
         # --- END FORCE OLD PADDING ---
         
         # Initialize video tracking variables
@@ -450,11 +450,11 @@ def worker(
         total_generated_latent_frames = 0
         
         # Process each section with the padding pattern
-        for latent_padding in latent_paddings:
-            is_first_section = latent_padding == latent_paddings[0]
-            is_last_section = latent_padding == 0
-            latent_padding_size = latent_padding * latent_window_size
-            debug(f'latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}, is_first_section = {is_first_section}')
+        for section in loop_iterator: # Iterate using the old reversed range
+            is_last_section = section == 0
+            latent_padding_size = section * latent_window_size # Use section index directly
+            # The rest of your loop uses is_last_section and latent_padding_size as before
+            debug(f'section = {section}, latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}')
             
             split_sizes = [1, latent_padding_size, latent_window_size, 1, 2, 16]
             total_indices = sum(split_sizes)
