@@ -603,52 +603,81 @@ def worker(
             history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
             debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
 
-            # --- VAE Decoding Section (REFACTORED for memory efficiency) ---
+            # --- VAE Decoding Section (IMPROVED VERSION) ---
             if not high_vram:
                 offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
                 load_model_as_complete(vae, target_device=gpu)
                 debug("worker: loaded vae to gpu")
             
-            # Decode ONLY the newly generated latents instead of all history
-            debug(f"Decoding only newly generated latents with shape: {generated_latents.shape}")
+            # Clear CUDA cache to reduce fragmentation
+            torch.cuda.empty_cache()
+            debug("Cleared CUDA cache before decoding")
             
-            # Move to appropriate device for decoding
-            generated_latents_for_decode = generated_latents.to(vae.device, dtype=vae.dtype)
+            # Calculate overlap frames correctly for proper stitching
+            overlapped_frames = latent_window_size * 4 - 3
+            debug(f"Using overlapped_frames={overlapped_frames} for stitching")
             
-            # Decode the newly generated latents
-            current_pixels = vae_decode(generated_latents_for_decode, vae).cpu()
-            debug(f"Decoded newly generated latents to pixels with shape: {current_pixels.shape}")
-            
-            # Initialize history_pixels if this is the first section
-            if history_pixels is None:
-                history_pixels = current_pixels
-                debug(f"First section: Set history_pixels directly with shape: {history_pixels.shape}")
-            else:
-                # For subsequent sections, append with overlap handling
-                overlapped_frames = latent_window_size * 4 - 3
-                history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
-                debug(f"Subsequent section: Appended to history_pixels, new shape: {history_pixels.shape}")
-
-            # --- Preview Saving (uses the fully accumulated history_pixels) ---
-            preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
+            # Handle large tensors with chunked decoding to avoid OOM
             try:
-                save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
-                debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
-                stream.output_queue.push(('preview_video', preview_filename))
-                debug(f"[QUEUE] Queued preview_video event: {preview_filename}")
+                # For last section or large tensors, use chunked decoding
+                if generated_latents.shape[2] > 8 and (not high_vram or is_last_section):
+                    debug(f"Using chunked decoding for tensor with {generated_latents.shape[2]} frames")
+                    chunk_size = 4  # Small enough to avoid OOM
+                    current_pixels_chunks = []
+                    
+                    for i in range(0, generated_latents.shape[2], chunk_size):
+                        end_idx = min(i + chunk_size, generated_latents.shape[2])
+                        debug(f"Decoding chunk {i}:{end_idx} of {generated_latents.shape[2]}")
+                        
+                        # Move chunk to GPU, decode, then immediately move result to CPU
+                        chunk = generated_latents[:, :, i:end_idx].to(vae.device, dtype=vae.dtype)
+                        chunk_pixels = vae_decode(chunk, vae).cpu()
+                        current_pixels_chunks.append(chunk_pixels)
+                        
+                        # Force cleanup of chunk tensors
+                        del chunk, chunk_pixels
+                        torch.cuda.empty_cache()
+                    
+                    # Combine all chunks on CPU
+                    current_pixels = torch.cat(current_pixels_chunks, dim=2)
+                    debug(f"Successfully decoded in chunks: final shape {current_pixels.shape}")
+                    del current_pixels_chunks
+                else:
+                    # Regular decoding for smaller tensors
+                    generated_latents_for_decode = generated_latents.to(vae.device, dtype=vae.dtype)
+                    current_pixels = vae_decode(generated_latents_for_decode, vae).cpu()
+                    del generated_latents_for_decode
+                    
+                debug(f"Decoded newly generated latents to pixels with shape: {current_pixels.shape}")
+                
+                # Initialize history_pixels if this is the first section
+                if history_pixels is None:
+                    history_pixels = current_pixels
+                    debug(f"First section: Set history_pixels directly with shape: {history_pixels.shape}")
+                else:
+                    # IMPORTANT FIX: Check the order of arguments in soft_append_bcthw
+                    # The correct order is (new_frames, old_frames, overlap)
+                    # But we need to understand the historical ordering in the video generation
+                    
+                    # Since we're decoding in reverse order (from end to beginning)
+                    # and need to prepend new frames to the beginning of our video:
+                    prev_history_shape = history_pixels.shape
+                    history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
+                    
+                    # Verify we're actually growing the history
+                    if history_pixels.shape[2] <= prev_history_shape[2]:
+                        debug(f"WARNING: History didn't grow as expected! Before: {prev_history_shape}, After: {history_pixels.shape}")
+                    else:
+                        debug(f"Successful append: History grew from {prev_history_shape[2]} frames to {history_pixels.shape[2]} frames")
+                
+                # Clean up memory
+                del current_pixels
+                torch.cuda.empty_cache()
+                
             except Exception as e:
-                debug(f"[ERROR] Failed to save preview video: {e}")
-
-            # --- Model Unloading (Only if needed based on high_vram flag) ---
-            if not high_vram:
-                unload_complete_models()
-                debug("worker: unloaded complete models (end section)")
-
-            # --- Break condition ---
-            if is_last_section:
-                 debug("worker: is_last_section - break")
-                 break # Ensure loop terminates correctly
-
+                debug(f"Error during VAE decoding: {str(e)}")
+                # Additional error handling if needed
+                raise
         # --- Loop finished ---
 
         # After history_pixels is fully processed and before final video export
