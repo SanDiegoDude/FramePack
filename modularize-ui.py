@@ -603,37 +603,31 @@ def worker(
             history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
             debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
 
-            # --- VAE Decoding Section (Simplified logic from previous step - NO explicit cleanup) ---
+            # --- VAE Decoding Section (REFACTORED for memory efficiency) ---
             if not high_vram:
                 offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
                 load_model_as_complete(vae, target_device=gpu)
                 debug("worker: loaded vae to gpu")
-
-            # Determine the total number of *valid* generated latent frames in history
-            # Subtract the size of the initial context/padding stored in history_latents
-            current_total_latent_frames = history_latents.shape[2] - (1 + 2 + 16)
-            debug(f"Current total valid latent frames in history: {current_total_latent_frames}")
-
-            # Get the slice of *valid* generated latents
-            real_history_latents = history_latents[:, :, :current_total_latent_frames, :, :]
-            debug(f"Shape of real_history_latents for decode: {real_history_latents.shape}")
-
+            
+            # Decode ONLY the newly generated latents instead of all history
+            debug(f"Decoding only newly generated latents with shape: {generated_latents.shape}")
+            
+            # Move to appropriate device for decoding
+            generated_latents_for_decode = generated_latents.to(vae.device, dtype=vae.dtype)
+            
+            # Decode the newly generated latents
+            current_pixels = vae_decode(generated_latents_for_decode, vae).cpu()
+            debug(f"Decoded newly generated latents to pixels with shape: {current_pixels.shape}")
+            
+            # Initialize history_pixels if this is the first section
             if history_pixels is None:
-                # First section decoded
-                history_pixels = vae_decode(real_history_latents, vae).cpu()
-                debug(f"First section decoded: {real_history_latents.shape[2]} latent frames → {history_pixels.shape[2]} pixel frames")
+                history_pixels = current_pixels
+                debug(f"First section: Set history_pixels directly with shape: {history_pixels.shape}")
             else:
-                # Subsequent sections - decode slice needed for merging
-                section_latent_frames_needed = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
-                section_latent_frames_to_decode = min(section_latent_frames_needed, real_history_latents.shape[2])
+                # For subsequent sections, append with overlap handling
                 overlapped_frames = latent_window_size * 4 - 3
-    
-                latent_decode_slice = real_history_latents[:, :, :section_latent_frames_to_decode, :, :]
-                debug(f"Subsequent section decode input shape: {latent_decode_slice.shape}")
-                current_pixels = vae_decode(latent_decode_slice, vae).cpu()
-    
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
-                debug(f"worker: vae decoded + soft_append_bcthw. History pixels shape: {history_pixels.shape}")
+                debug(f"Subsequent section: Appended to history_pixels, new shape: {history_pixels.shape}")
 
             # --- Preview Saving (uses the fully accumulated history_pixels) ---
             preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
