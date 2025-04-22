@@ -1232,7 +1232,16 @@ with block:
     mode_selector.change(
         switch_mode,
         inputs=[mode_selector],
-        outputs=[input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h,  keyframes_options]
+        outputs=[
+            input_image, 
+            start_frame, 
+            end_frame, 
+            aspect_selector, 
+            custom_w, 
+            custom_h, 
+            keyframes_options,
+            video_extension_options  # Add this new output component
+        ]
     )
     def show_init_color(mode):
         return gr.update(visible=(mode == "text2video"))
