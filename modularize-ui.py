@@ -532,7 +532,6 @@ def worker(
                 preview = vae_decode_fake(preview)
                 preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
                 preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
-                
                 if stream.input_queue.top() == 'end':
                     debug("worker: callback: received 'end', stopping generation.")
                     stream.output_queue.push(('end', None))
@@ -544,11 +543,15 @@ def worker(
                 
                 # Overall progress
                 current_section_index = latent_paddings.index(latent_padding)
-                sections_completed = current_section_index 
+                sections_completed = current_section_index
                 overall_percentage = int(100.0 * (sections_completed + (current_step / steps)) / len(latent_paddings))
                 
+                # Calculate actual frame count (correctly)
+                actual_frames = total_generated_latent_frames * 4 - 3 if total_generated_latent_frames > 0 else 0
+                actual_seconds = actual_frames / 30.0
+                
                 hint = f'Section {sections_completed+1}/{len(latent_paddings)} - Step {current_step}/{steps}'
-                desc = f'Generated frames: {total_generated_latent_frames}, Length: {total_generated_latent_frames/30.0:.2f}s (FPS-30)'
+                desc = f'Generated frames: {actual_frames}, Length: {actual_seconds:.2f}s (FPS-30)'
                 
                 # Create dual progress bar HTML
                 progress_html = f"""
@@ -672,20 +675,29 @@ def worker(
                 except Exception as e:
                     debug(f"[ERROR] Failed to save preview video: {e}")
             else:
-                # Use EXACTLY the same section logic as original code
+                # Calculate section size - use original formula
                 section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
                 overlapped_frames = latent_window_size * 4 - 3
                 
-                # Use our chunked decoder for the current section
-                current_pixels = vae_decode_chunked(
-                    real_history_latents[:, :, :section_latent_frames], 
-                    vae, 
-                    chunk_size=4
-                )
+                # Ensure we have enough frames for the overlap
+                needed_frames = max(section_latent_frames, overlapped_frames)
+                available_frames = min(needed_frames, real_history_latents.shape[2])
                 
-                # Use soft_append exactly as in original code
+                debug(f"Needed frames for section: {needed_frames}, available in history: {real_history_latents.shape[2]}")
+                
+                # Use chunked decoder with the correct frame count
+                section_latents = real_history_latents[:, :, :available_frames]
+                current_pixels = vae_decode_chunked(section_latents, vae, chunk_size=4)
+                
+                # If we still don't have enough frames for overlap, adjust the overlap
+                if current_pixels.shape[2] < overlapped_frames:
+                    debug(f"WARNING: Decoded frames ({current_pixels.shape[2]}) < required overlap ({overlapped_frames})")
+                    debug(f"Adjusting overlap from {overlapped_frames} to {current_pixels.shape[2]}")
+                    overlapped_frames = current_pixels.shape[2]
+                    
+                # Use soft_append with possibly adjusted overlap
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
-                debug("worker: vae decoded + soft_append_bcthw")
+                debug(f"Completed soft_append with overlap={overlapped_frames}, result shape: {history_pixels.shape}")
                 
                 # Save and push preview
                 preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
