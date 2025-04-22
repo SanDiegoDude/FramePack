@@ -48,6 +48,33 @@ def make_mp4_faststart(mp4_path):
         if os.path.exists(tmpfile):
             os.remove(tmpfile)
 
+def vae_decode_chunked(latents, vae, chunk_size=8):
+    """
+    Decode VAE latents in chunks to avoid OOM errors
+    """
+    debug(f"Chunked VAE decoding for tensor of shape {latents.shape}")
+    if latents.shape[2] <= chunk_size:
+        # If small enough, decode directly
+        pixels = vae_decode(latents.float(), vae.float()).cpu()
+        return pixels
+    
+    # Process in chunks
+    chunks = []
+    for i in range(0, latents.shape[2], chunk_size):
+        end_idx = min(i + chunk_size, latents.shape[2])
+        debug(f"  Decoding chunk {i}:{end_idx}")
+        chunk = latents[:, :, i:end_idx, :, :]
+        pixels_chunk = vae_decode(chunk.float(), vae.float()).cpu()
+        chunks.append(pixels_chunk)
+        # Force cleanup after each chunk
+        gc.collect()
+        torch.cuda.empty_cache()
+    
+    # Concatenate results
+    result = torch.cat(chunks, dim=2)
+    debug(f"  Completed chunked decoding, result shape: {result.shape}")
+    return result
+
 def get_valid_frame_stops(latent_window_size, max_seconds=120, fps=30):
     frames_per_section = latent_window_size * 4 - 3
     max_sections = int((max_seconds * fps) // frames_per_section)
@@ -480,8 +507,8 @@ def worker(
 
             # -- memory mgmt
             if not high_vram:
-                unload_complete_models()
-                debug("worker: unloaded complete models")
+                unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
+                debug("worker: explicitly unloaded all models (end section)")
                 move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
                 debug("worker: moved transformer to gpu (memory preservation)")
 
@@ -620,36 +647,54 @@ def worker(
             # ---- Guarantee the last N latent frames match encoded end_frame ----
             real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
             if history_pixels is None:
-                history_pixels = vae_decode(real_history_latents.float(), vae.float()).cpu()
+                history_pixels = vae_decode_chunked(real_history_latents, vae, chunk_size=8)
+                debug("worker: vae decoded (first time) using chunked approach")
+                
+                # Save section outputs after each section like the demo code
+                section_preview = os.path.join(outputs_folder, f'{job_id}_section_{latent_padding}.mp4')
+                try:
+                    save_bcthw_as_mp4(history_pixels, section_preview, fps=30)
+                    debug(f"[FILE] Section preview saved: {section_preview}")
+                except Exception as e:
+                    debug(f"[ERROR] Failed to save section preview: {e}")
+                
+                # Clean up after saving
                 gc.collect()
                 torch.cuda.empty_cache()
-                debug("worker: vae decoded (first time)")
-                preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
-                try:
-                    save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
-                    debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
-                    stream.output_queue.push(('preview_video', preview_filename))
-                except Exception as e:
-                    debug(f"[ERROR] Failed to save preview video: {e}")
             else:
                 section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
-                overlapped_frames = frames_per_section
-                current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames].float(), vae.float()).cpu()
+                debug(f"Using section_latent_frames={section_latent_frames} for VAE decoding")
+                
+                # Decode in chunks
+                current_pixels = vae_decode_chunked(
+                    real_history_latents[:, :, :section_latent_frames].float(), 
+                    vae, 
+                    chunk_size=8
+                )
+                
+                # Force cleanup after decoding
                 gc.collect()
                 torch.cuda.empty_cache()
+                
+                overlapped_frames = frames_per_section
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
-                debug("worker: vae decoded + soft_append_bcthw")
-                preview_filename = os.path.join(outputs_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
+                debug("worker: vae decoded + soft_append_bcthw using chunked approach")
+                
+                # Save section outputs after each section like the demo code
+                section_preview = os.path.join(outputs_folder, f'{job_id}_section_{latent_padding}.mp4')
                 try:
-                    save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
-                    debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
-                    stream.output_queue.push(('preview_video', preview_filename))
+                    save_bcthw_as_mp4(history_pixels, section_preview, fps=30)
+                    debug(f"[FILE] Section preview saved: {section_preview}")
                 except Exception as e:
-                    debug(f"[ERROR] Failed to save preview video: {e}")
+                    debug(f"[ERROR] Failed to save section preview: {e}")
+                
+                # Clean up after saving
+                gc.collect()
+                torch.cuda.empty_cache()
             
             if not high_vram:
-                unload_complete_models()
-                debug("worker: unloaded complete models (end section)")
+                unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
+                debug("worker: explicitly unloaded all models (end section)")
             
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
             if is_last_section:
