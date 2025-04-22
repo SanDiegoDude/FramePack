@@ -29,6 +29,12 @@ import random
 
 import subprocess
 
+def get_valid_frame_stops(latent_window_size, max_seconds=120, fps=30):
+    frames_per_section = latent_window_size * 4 - 3
+    max_sections = int((max_seconds * fps) // frames_per_section)
+    stops = [frames_per_section * i for i in range(1, max_sections + 1)]
+    return stops
+
 def make_mp4_faststart(mp4_path):
     tmpfile = mp4_path + ".tmp"
     cmd = [
@@ -49,24 +55,21 @@ def make_mp4_faststart(mp4_path):
             os.remove(tmpfile)
 
 # Reimplement with much smaller chunks and more aggressive memory management
-def vae_decode_chunked(latents, vae, chunk_size=4):
+def vae_decode_chunked(latents, vae, chunk_size=2):
     """
-    Decode VAE latents in chunks to avoid OOM errors
+    Decode VAE latents in very small chunks to avoid OOM errors
     """
     debug(f"Chunked VAE decoding for tensor of shape {latents.shape}")
+    
     # Force slice mode to be enabled
     vae.enable_slicing()
     vae.enable_tiling()
     
     # If very small, decode directly
-    if latents.shape[2] <= 4:
+    if latents.shape[2] <= 2:
         debug(f"  Small tensor, decoding directly")
         pixels = vae_decode(latents.float(), vae.float()).cpu()
         return pixels
-    
-    # For temporal dimension, use even smaller chunks
-    chunk_size = min(4, chunk_size)  # Maximum 4 frames per chunk
-    debug(f"  Using chunk_size={chunk_size}")
     
     # Process in chunks
     chunks = []
@@ -85,25 +88,21 @@ def vae_decode_chunked(latents, vae, chunk_size=4):
         try:
             pixels_chunk = vae_decode(chunk.float(), vae.float()).cpu()
             chunks.append(pixels_chunk)
-            debug(f"  Successfully decoded chunk {i}:{end_idx}, result shape: {pixels_chunk.shape}")
+            debug(f"  Successfully decoded chunk {i}:{end_idx}")
         except RuntimeError as e:
-            if "CUDA out of memory" in str(e):
-                debug(f"  OOM error on chunk {i}:{end_idx}, trying with smaller size")
-                if end_idx - i > 1:
-                    # Try decoding single frames
-                    for j in range(i, end_idx):
-                        single_frame = latents[:, :, j:j+1, :, :].contiguous()
-                        debug(f"    Decoding single frame {j}")
-                        gc.collect()
-                        torch.cuda.empty_cache()
-                        single_pixels = vae_decode(single_frame.float(), vae.float()).cpu()
-                        chunks.append(single_pixels)
-                else:
-                    # Can't go smaller than 1 frame, error out
-                    raise
-            else:
-                raise
-            
+            debug(f"  Error on chunk {i}:{end_idx}: {str(e)}")
+            # Try decoding single frames
+            for j in range(i, end_idx):
+                single_frame = latents[:, :, j:j+1, :, :].contiguous()
+                debug(f"    Decoding single frame {j}")
+                gc.collect()
+                torch.cuda.empty_cache()
+                try:
+                    single_pixels = vae_decode(single_frame.float(), vae.float()).cpu()
+                    chunks.append(single_pixels)
+                except Exception as sub_e:
+                    debug(f"    Failed on single frame {j}: {str(sub_e)}")
+                
         # Force cleanup after each chunk
         del chunk
         gc.collect()
