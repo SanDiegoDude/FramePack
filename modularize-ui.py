@@ -204,20 +204,26 @@ def worker(
             if end_frame is None:
                 raise ValueError("Keyframes mode requires End Frame to be set!")
             
-            # Use end_frame dimensions as the reference for everything
-            width, height = end_frame.shape[1], end_frame.shape[0]
-            debug(f"Using end frame dimensions for keyframe mode: {width}x{height}")
+            # Get original dimensions
+            end_H, end_W, end_C = end_frame.shape
+            
+            # Find nearest bucket size for the end frame
+            height, width = find_nearest_bucket(end_H, end_W, resolution=640)
+            debug(f"Using bucket dimensions for keyframe mode: {width}x{height} (from original {end_W}x{end_H})")
             
             # --- Build start-frame numpy image ---
             if start_frame is not None:
-                # Always resize start_frame to match end_frame dimensions
-                debug(f"Resizing start frame from {start_frame.shape[1]}x{start_frame.shape[0]} to {width}x{height}")
+                # Resize start_frame to match bucket dimensions
+                debug(f"Resizing start frame from {start_frame.shape[1]}x{start_frame.shape[0]} to bucket size {width}x{height}")
                 s_np = resize_and_center_crop(start_frame, target_width=width, target_height=height)
                 input_anchor_np = s_np
             else:
-                # Use gray color if no start frame, using end frame dimensions
+                # Use gray color with bucket dimensions
                 input_anchor_np = np.ones((height, width, 3), dtype=np.uint8) * 128
-                debug(f"Created gray start frame with dimensions {width}x{height}")
+                debug(f"Created gray start frame with bucket dimensions {width}x{height}")
+            
+            # --- End frame processing with bucket dimensions ---
+            end_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
             
             # --- VAE encode ---
             input_anchor_tensor = torch.from_numpy(input_anchor_np).float() / 127.5 - 1
