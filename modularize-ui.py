@@ -54,40 +54,6 @@ def make_mp4_faststart(mp4_path):
         if os.path.exists(tmpfile):
             os.remove(tmpfile)
 
-def vae_decode_chunked(latents, vae, chunk_size=4):
-    """
-    Chunked VAE decoding that preserves exact behavior of original vae_decode
-    """
-    debug(f"VAE decoding tensor of shape {latents.shape} with chunking")
-    
-    # For small tensors, just use the original decoder
-    if latents.shape[2] <= chunk_size:
-        return vae_decode(latents, vae).cpu()
-    
-    # Enable slicing but follow original behavior
-    vae.enable_slicing()
-    vae.enable_tiling()
-    
-    # Process in chunks
-    chunks = []
-    for i in range(0, latents.shape[2], chunk_size):
-        end_idx = min(i + chunk_size, latents.shape[2])
-        debug(f"  Decoding chunk {i}:{end_idx}")
-        
-        chunk = latents[:, :, i:end_idx, :, :]
-        torch.cuda.empty_cache()
-        
-        chunk_pixels = vae_decode(chunk, vae).cpu()
-        chunks.append(chunk_pixels)
-        
-        del chunk
-        torch.cuda.empty_cache()
-    
-    # Concatenate chunks
-    result = torch.cat(chunks, dim=2)
-    debug(f"  Decoded {latents.shape[2]} latent frames into {result.shape[2]} pixel frames")
-    return result
-
 DEBUG = True
 def debug(*a, **k):
     if DEBUG:
@@ -663,8 +629,10 @@ def worker(
             # Decode section
             if history_pixels is None:
                 # First section - decode all available frames
-                history_pixels = vae_decode_chunked(real_history_latents, vae).cpu()
+                history_pixels = vae_decode(real_history_latents, vae).cpu() 
                 debug(f"First section decoded: {total_generated_latent_frames} latent frames → {history_pixels.shape[2]} pixel frames")
+                gc.collect() # Optional: Keep GC collect after decode
+                torch.cuda.empty_cache() # Optional: Keep cache empty after decode
             else:
                 # For later sections, we only need to decode the latest segment
                 section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
@@ -676,8 +644,12 @@ def worker(
                 debug(f"decoding latents {start_idx}:{real_history_latents.shape[2]} (frames={new_section_latents.shape[2]})")
                 
                 # Decode the new frames
-                current_pixels = vae_decode_chunked(new_section_latents, vae).cpu()
+                current_pixels = vae_decode(new_section_latents, vae).cpu()
                 debug(f"Section decoded: {new_section_latents.shape[2]} latent frames → {current_pixels.shape[2]} pixel frames")
+                # Clean up intermediate tensor explicitly
+                del new_section_latents 
+                gc.collect() # Optional: Keep GC collect after decode
+                torch.cuda.empty_cache() # Optional: Keep cache empty after decode
                 
                 # Get safe overlap count
                 safe_overlap = min(overlapped_frames, current_pixels.shape[2])
