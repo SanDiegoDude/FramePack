@@ -453,6 +453,7 @@ def worker(
             # Determine section properties (Unchanged)
             is_last_section = section == 0
             latent_padding_size = section * latent_window_size
+            is_first_iteration = (section == total_sections - 1)
             debug(f'section = {section}, latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}')
 
             # Check for abort signal (Unchanged)
