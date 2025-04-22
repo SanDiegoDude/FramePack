@@ -639,7 +639,7 @@ def worker(
                     debug(f"[FILE] Using extension as fallback: {output_filename}")
             else:
                 debug(f"Not video extension mode or no pixels, final output target: {output_filename}")
-
+    
             # ---- Final export logic (Trimming & Single Image - Verified OK) ----
             # Operates on the final 'history_pixels'.
             # Sets 'final_image_saved' flag correctly.
