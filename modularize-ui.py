@@ -675,27 +675,34 @@ def worker(
                 except Exception as e:
                     debug(f"[ERROR] Failed to save preview video: {e}")
             else:
-                # Calculate section size - use original formula
+                # First, calculate the section size exactly as in the original working code
                 section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
                 overlapped_frames = latent_window_size * 4 - 3
                 
-                # Ensure we have enough frames for the overlap
-                needed_frames = max(section_latent_frames, overlapped_frames)
-                available_frames = min(needed_frames, real_history_latents.shape[2])
+                # Debug the actual frame expansion
+                debug(f"Calculated section_latent_frames={section_latent_frames}, should yield {section_latent_frames*4-3} actual frames")
+                debug(f"Required overlap={overlapped_frames} actual frames")
                 
-                debug(f"Needed frames for section: {needed_frames}, available in history: {real_history_latents.shape[2]}")
+                # Check if we have enough latent frames
+                available_latent_frames = min(section_latent_frames, real_history_latents.shape[2])
                 
                 # Use chunked decoder with the correct frame count
-                section_latents = real_history_latents[:, :, :available_frames]
-                current_pixels = vae_decode_chunked(section_latents, vae, chunk_size=4)
+                current_pixels = vae_decode_chunked(
+                    real_history_latents[:, :, :available_latent_frames], 
+                    vae, 
+                    chunk_size=4
+                )
                 
-                # If we still don't have enough frames for overlap, adjust the overlap
+                # Calculate how many actual frames we should have (to verify expansion worked)
+                expected_actual_frames = available_latent_frames * 4 - 3
+                debug(f"Decoded {current_pixels.shape[2]} actual frames (expected {expected_actual_frames})")
+                
+                # If we don't have enough for overlap, adjust it
                 if current_pixels.shape[2] < overlapped_frames:
-                    debug(f"WARNING: Decoded frames ({current_pixels.shape[2]}) < required overlap ({overlapped_frames})")
-                    debug(f"Adjusting overlap from {overlapped_frames} to {current_pixels.shape[2]}")
+                    debug(f"WARNING: Not enough frames for standard overlap, adjusting from {overlapped_frames} to {current_pixels.shape[2]}")
                     overlapped_frames = current_pixels.shape[2]
-                    
-                # Use soft_append with possibly adjusted overlap
+                
+                # Now use soft_append with the final overlap value
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
                 debug(f"Completed soft_append with overlap={overlapped_frames}, result shape: {history_pixels.shape}")
                 
@@ -1211,7 +1218,6 @@ with block:
             with gr.Row():
                 start_button = gr.Button(value="Start Generation")
                 end_button = gr.Button(value="End Generation", interactive=False)
-            advanced_mode = gr.Checkbox(label="Advanced Mode", value=False)
             with gr.Group(visible=False) as video_extension_options:
                 input_video = gr.Video(
                     label="Upload Video to Extend", 
@@ -1223,13 +1229,6 @@ with block:
                     value="Forward",
                     info="Forward extends the end, Backward extends the beginning"
                 )
-                extension_length = gr.Slider(
-                    label="Extension Length (seconds)", 
-                    minimum=1.0, 
-                    maximum=10.0, 
-                    value=3.0, 
-                    step=0.1
-                )
                 extension_frames = gr.Slider(
                     label="Context Frames", 
                     minimum=1, 
@@ -1238,6 +1237,7 @@ with block:
                     step=1,
                     info="Number of frames to extract from video for continuity"
                 )
+            advanced_mode = gr.Checkbox(label="Advanced Mode", value=False)
             latent_window_size = gr.Slider(label="Latent Window Size", minimum=2, maximum=33, value=9, step=1, visible=False)
             adv_seconds = gr.Slider(label="Video Length (Seconds)", minimum=0.1, maximum=120.0, value=5.0, step=0.1, visible=False)
             total_frames_dropdown = gr.Dropdown(
