@@ -764,16 +764,19 @@ def worker(
                 generated_latents = torch.cat([start_latent.to(generated_latents.device, dtype=generated_latents.dtype), generated_latents], dim=2)
                 debug(f"worker: is_last_section => concatenated latent, new shape: {generated_latents.shape}")
 
-            # Update latent frame count (Tracks only newly added frames)
-            new_latent_frames = generated_latents.shape[2]
-            # After generation, but before concatenation with history:
+            # Apply overlap trimming only if:
+            # 1. We have overlap
+            # 2. This isn't the first iteration (nothing to overlap with yet)
+            # 3. We have enough frames to trim
             if actual_overlap > 0 and not is_first_iteration and generated_latents.shape[2] > actual_overlap:
-                # Only trim if we have enough frames to trim and this isn't the first section
-                debug(f"Applying overlap: skipping first {actual_overlap} frames of {generated_latents.shape[2]} generated_latents")
-                trim_end = generated_latents.shape[2]  # Keep all frames except overlap
-                generated_latents = generated_latents[:, :, actual_overlap:trim_end, :, :]
+                debug(f"Applying overlap: trimming first {actual_overlap} frames of {generated_latents.shape[2]} generated_latents")
+                generated_latents = generated_latents[:, :, actual_overlap:, :, :]
             else:
-                debug(f"Not applying overlap - first section or not enough frames ({generated_latents.shape[2]})")
+                debug(f"Not applying overlap (first section or not enough frames)")
+            
+            # Update history latents (CPU tensor)
+            history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
+            debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
             
             # Then concatenate
             history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
@@ -825,9 +828,9 @@ def worker(
                     history_pixels = current_pixels
                     debug(f"First section: Set history_pixels directly with shape: {history_pixels.shape}")
                 else:
-                    # Just concatenate - we already handled overlap at the latent level
+                    # No need to apply overlap trimming here - we already did it at the latent level
                     history_pixels = torch.cat([current_pixels, history_pixels], dim=2)
-                    debug(f"Concatenated frames. New history shape: {history_pixels.shape}")
+                    debug(f"Concatenated new frames. New history shape: {history_pixels.shape}")
                 
                 # === RESTORE PREVIEW VIDEO FUNCTIONALITY ===
                 # Save preview for progress updates
@@ -1480,7 +1483,7 @@ with block:
             segment_count = gr.Slider(
                 label="Number of Segments", 
                 minimum=1, 
-                maximum=20, 
+                maximum=50, 
                 value=5, 
                 step=1,
                 info="More segments = longer video"
@@ -1490,7 +1493,7 @@ with block:
                 label="Frame Overlap",
                 minimum=0,
                 maximum=33,
-                value=0,
+                value=8,
                 step=1,
                 info="Controls how many frames overlap between sections"
             )
@@ -1511,7 +1514,7 @@ with block:
                     minimum=0.0, 
                     maximum=5.0, 
                     value=1.0, 
-                    step=0.01,
+                    step=0.1,
                     info="0.0 to disable LLM encoder"
                 )
                 
@@ -1520,7 +1523,7 @@ with block:
                     minimum=0.0, 
                     maximum=5.0, 
                     value=1.0, 
-                    step=0.01,
+                    step=0.1,
                     info="0.0 to disable CLIP encoder"
                 )
                 
@@ -1591,12 +1594,17 @@ with block:
     # Add function to calculate and display video stats
     def update_video_stats(window_size, segments, overlap):
         """Calculate and display video statistics"""
-        # Calculate frames
-        frames_per_section = window_size * 4 - 3
+        # Calculate core parameters
+        frames_per_section = latent_window_size * 4 - 3
+        
+        # Handle overlap
         max_overlap = max(0, frames_per_section - 1)
-        actual_overlap = min(overlap, max_overlap)
-        effective_frames = frames_per_section - actual_overlap
-        total_frames = segments * effective_frames
+        actual_overlap = min(frame_overlap, max_overlap)
+        
+        # Calculate frames 
+        effective_frames = frames_per_section - actual_overlap  
+        total_sections = segment_count
+        total_frames = effective_frames * total_sections
         
         # Calculate time (at 30fps)
         seconds = total_frames / 30.0
