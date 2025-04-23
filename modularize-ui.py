@@ -1612,11 +1612,7 @@ with block:
     def show_custom(aspect):
         show = aspect == "Custom..."
         return gr.update(visible=show), gr.update(visible=show)
-    advanced_mode.change(
-        show_hide_advanced,
-        inputs=[advanced_mode, latent_window_size],
-        outputs=[latent_window_size, adv_seconds, total_frames_dropdown, overlap_slider, trim_percentage],
-    )
+    
     latent_window_size.change(
         lambda window, adv: update_frame_dropdown(window) if not adv else gr.update(),
         inputs=[latent_window_size, advanced_mode],
