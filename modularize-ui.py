@@ -1673,10 +1673,29 @@ with block:
         show = aspect == "Custom..."
         return gr.update(visible=show), gr.update(visible=show)
     
+    
     latent_window_size.change(
-        lambda window, adv: update_frame_dropdown(window) if not adv else gr.update(),
-        inputs=[latent_window_size, segment_count],
-        outputs=[total_frames_dropdown],
+        update_overlap_slider,
+        inputs=[latent_window_size],
+        outputs=[overlap_slider]
+    )
+    
+    latent_window_size.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
+    )
+    
+    segment_count.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
+    )
+    
+    overlap_slider.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
     )
     mode_selector.change(
         switch_mode,
