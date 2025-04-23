@@ -370,6 +370,14 @@ def worker(
             lv, mask = crop_or_pad_yield_mask(lv, 512)
             lv_n, cp_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
             lv_n, mask_n = crop_or_pad_yield_mask(lv_n, 512)
+            # Add after the encoding code above
+            if llm_weight != 1.0:
+                lv = lv * llm_weight
+                lv_n = lv_n * llm_weight
+            
+            if clip_weight != 1.0:
+                cp = cp * clip_weight
+                cp_n = cp_n * clip_weight
             m = mask
             m_n = mask_n
             
@@ -448,7 +456,10 @@ def worker(
         if mode != "keyframes":
             # --- Image2Video/Text2Video (legacy/unchanged)
             inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = prepare_inputs(
-                input_image, prompt, n_prompt, cfg
+                input_image, prompt, n_prompt, cfg, 
+                gaussian_blur_amount=gaussian_blur_amount,
+                llm_weight=llm_weight,
+                clip_weight=clip_weight
             )
             start_latent = vae_encode(inp_tensor.float(), vae.float())
 
@@ -1074,7 +1085,13 @@ def process(
         input_video,
         extension_direction,
         extension_frames,
-        original_mode 
+        original_mode,
+        frame_overlap,
+        trim_pct,
+        gaussian_blur_amount,
+        llm_weight,
+        clip_weight,
+        clean_latent_weight
     )
     output_filename = None
     last_desc = ""
@@ -1327,7 +1344,8 @@ with block:
                     step=0.01,
                     info="Controls influence of anchor/initial frame"
                 )
-                
+                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, info="Must be >1.0 for negative prompts to work")
+                gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01)
                 rs = gr.Slider(
                     label="CFG Re-Scale", 
                     minimum=0.0, 
@@ -1348,13 +1366,19 @@ with block:
             )
             init_color = gr.ColorPicker(label="Initial Frame Color", value="#808080", visible=False)
             with gr.Group():
+                 with gr.Group(visible=False) as keyframes_options:
+                    keyframe_weight = gr.Slider(
+                        label="Start Frame Influence", 
+                        minimum=0.0, 
+                        maximum=1.0, 
+                        value=0.7, 
+                        step=0.1,
+                        info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)"
+                    )
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
                 seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
                 lock_seed = gr.Checkbox(label="Lock Seed", value=False)
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
-                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, info="Must be >1.0 for negative prompts to work")
-                gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01)
-                rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False)
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
         with gr.Column(scale=2):
             progress_bar = gr.HTML(visible=False)  # Start hidden
@@ -1365,15 +1389,7 @@ with block:
             gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
-            with gr.Group(visible=False) as keyframes_options:
-                keyframe_weight = gr.Slider(
-                    label="Start Frame Influence", 
-                    minimum=0.0, 
-                    maximum=1.0, 
-                    value=0.7, 
-                    step=0.1,
-                    info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)"
-                )
+           
 
             
 
