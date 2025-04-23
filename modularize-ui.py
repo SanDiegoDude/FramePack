@@ -1342,21 +1342,21 @@ with block:
             # -- Add encoder weight controls --
             with gr.Accordion("Advanced Model Parameters", open=False):
                 llm_encoder_weight = gr.Slider(
-                    label="VLM Encoder Weight", 
+                    label="LLM Encoder Weight", 
                     minimum=0.0, 
                     maximum=5.0, 
                     value=1.0, 
                     step=0.1,
-                    info="0.0 to disable VLM encoder"
+                    info="0.0 to disable LLM encoder"
                 )
                 
                 clip_encoder_weight = gr.Slider(
-                    label="CLIP-L Encoder Weight", 
+                    label="CLIP Encoder Weight", 
                     minimum=0.0, 
                     maximum=5.0, 
                     value=1.0, 
                     step=0.1,
-                    info="0.0 to disable CLIP-L encoder"
+                    info="0.0 to disable CLIP encoder"
                 )
                 
                 clean_latent_weight = gr.Slider(
@@ -1367,8 +1367,8 @@ with block:
                     step=0.01,
                     info="Controls influence of anchor/initial frame"
                 )
-                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.1, info="Must be >1.0 for negative prompts to work")
-                gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.1)
+                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, info="Must be >1.0 for negative prompts to work")
+                gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01)
                 rs = gr.Slider(
                     label="CFG Re-Scale", 
                     minimum=0.0, 
@@ -1387,7 +1387,7 @@ with block:
                 visible=False,
                 info="Apply blur to input images before processing"
             )
-            init_color = gr.ColorPicker(label="First Frame Dummy-Inject Color", value="#808080", visible=False)
+            init_color = gr.ColorPicker(label="Initial Frame Color", value="#808080", visible=False)
             with gr.Group():
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
                 seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
@@ -1400,9 +1400,10 @@ with block:
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
             result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, elem_classes="result-container", loop=True)
             result_image_html = gr.Image(label='Single Frame Image', elem_classes="result-container", visible=False)
+            gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
-            gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
+           
 
             
 
