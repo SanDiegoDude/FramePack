@@ -58,25 +58,76 @@ def apply_gaussian_blur(image_tensor, blur_amount):
     if blur_amount <= 0.0:
         return image_tensor
     
-    import torch.nn.functional as F
-    
-    # Scale blur_amount to reasonable kernel size (1-21) and sigma value
-    # Maximum blur at 1.0 should be noticeable but not extreme
-    kernel_size = int(blur_amount * 20) + 1
-    kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1  # Must be odd
-    sigma = blur_amount * 3.0
-    
-    # Apply blur
-    # Note: F.gaussian_blur expects 4D tensor [B,C,H,W]
-    if len(image_tensor.shape) == 5:  # [B,C,T,H,W]
-        b, c, t, h, w = image_tensor.shape
-        # Reshape to [B*T,C,H,W]
-        reshaped = image_tensor.view(b*t, c, h, w)
-        blurred = F.gaussian_blur(reshaped, kernel_size=[kernel_size, kernel_size], sigma=[sigma, sigma])
-        # Reshape back to [B,C,T,H,W]
-        return blurred.view(b, c, t, h, w)
-    else:
-        return F.gaussian_blur(image_tensor, kernel_size=[kernel_size, kernel_size], sigma=[sigma, sigma])
+    # Try multiple methods to apply blur
+    try:
+        # Method 1: Try torchvision (most reliable)
+        import torchvision.transforms.functional as TF
+        
+        kernel_size = int(blur_amount * 20) + 1
+        kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
+        sigma = [blur_amount * 3.0]
+        
+        if len(image_tensor.shape) == 5:  # [B,C,T,H,W]
+            b, c, t, h, w = image_tensor.shape
+            result = torch.zeros_like(image_tensor)
+            
+            for bi in range(b):
+                for ti in range(t):
+                    frame = image_tensor[bi, :, ti]
+                    result[bi, :, ti] = TF.gaussian_blur(frame, kernel_size, sigma)
+            
+            return result
+        else:
+            return TF.gaussian_blur(image_tensor, kernel_size, sigma)
+            
+    except (ImportError, AttributeError, ModuleNotFoundError):
+        # Method 2: Use OpenCV as fallback
+        try:
+            import cv2
+            import numpy as np
+            
+            kernel_size = int(blur_amount * 20) + 1
+            kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
+            sigma = blur_amount * 3.0
+            
+            # We need to handle the numpy conversion
+            if len(image_tensor.shape) == 5:  # [B,C,T,H,W]
+                b, c, t, h, w = image_tensor.shape
+                result = torch.zeros_like(image_tensor)
+                
+                for bi in range(b):
+                    for ti in range(t):
+                        # Get frame, convert to numpy, apply blur, convert back
+                        frame = image_tensor[bi, :, ti].cpu().numpy()  # C,H,W
+                        
+                        # OpenCV expects HWC format
+                        frame = np.transpose(frame, (1, 2, 0))  # H,W,C
+                        
+                        # Apply blur (make sure kernel size is odd)
+                        blurred = cv2.GaussianBlur(frame, (kernel_size, kernel_size), sigma)
+                        
+                        # Convert back to tensor format CHW
+                        blurred = np.transpose(blurred, (2, 0, 1))  # C,H,W
+                        result[bi, :, ti] = torch.from_numpy(blurred).to(image_tensor.device)
+                
+                return result
+            else:
+                # Assume BCHW
+                b, c, h, w = image_tensor.shape
+                result = torch.zeros_like(image_tensor)
+                
+                for bi in range(b):
+                    frame = image_tensor[bi].cpu().numpy()  # C,H,W
+                    frame = np.transpose(frame, (1, 2, 0))  # H,W,C
+                    blurred = cv2.GaussianBlur(frame, (kernel_size, kernel_size), sigma)
+                    blurred = np.transpose(blurred, (2, 0, 1))  # C,H,W
+                    result[bi] = torch.from_numpy(blurred).to(image_tensor.device)
+                
+                return result
+        
+        except (ImportError, AttributeError, ModuleNotFoundError):
+            debug("WARNING: Could not apply blur - no suitable method found. Returning original image.")
+            return image_tensor
 
 # ---- CLI Debug Output ----
 DEBUG = True
@@ -299,42 +350,29 @@ def worker(
     # -- section/frames logic
     if use_adv:
         latent_window_size = adv_window
-        theoretical_frames_per_section = latent_window_size * 4 - 3
+        # IMPORTANT: Keep the original relationship that the model expects
+        frames_per_section = latent_window_size * 4 - 3
         total_frames = int(round(adv_seconds * 30))
-        
-        # Check if this will be a single segment or image generation
-        estimated_sections = math.ceil(total_frames / theoretical_frames_per_section)
-        
-        if estimated_sections <= 1 or latent_window_size <= 2:
-            debug(f"Single section or small window detected, forcing overlap to 0")
-            actual_overlap = 0
-        else:
-            actual_overlap = min(frame_overlap, theoretical_frames_per_section - 1)
-            
-        frames_per_section = theoretical_frames_per_section - actual_overlap
         total_sections = math.ceil(total_frames / frames_per_section)
-        debug(f"worker: Advanced mode | latent_window_size={latent_window_size} " 
-              f"| overlap={actual_overlap} | frames_per_section={frames_per_section} "
+        
+        # Store overlap for post-processing, but don't modify frames_per_section
+        actual_overlap = min(frame_overlap, frames_per_section - 1) if not (total_sections <= 1 or latent_window_size <= 2) else 0
+        
+        debug(f"worker: Advanced mode | latent_window_size={latent_window_size} "
+              f"| frames_per_section={frames_per_section} | overlap={actual_overlap} "
               f"| total_frames={total_frames} | total_sections={total_sections}")
     else:
         latent_window_size = 9
-        theoretical_frames_per_section = latent_window_size * 4 - 3
+        # IMPORTANT: Keep the original relationship
+        frames_per_section = latent_window_size * 4 - 3
         total_frames = int(selected_frames)
+        total_sections = total_frames // frames_per_section
         
-        # Check if this will be a single section
-        estimated_sections = math.ceil(total_frames / theoretical_frames_per_section)
+        # Store overlap for post-processing
+        actual_overlap = min(frame_overlap, frames_per_section - 1) if total_sections > 1 else 0
         
-        if estimated_sections <= 1:
-            debug(f"Single section detected, forcing overlap to 0")
-            actual_overlap = 0
-        else:
-            actual_overlap = min(frame_overlap, theoretical_frames_per_section - 1)
-            
-        frames_per_section = theoretical_frames_per_section - actual_overlap
-        total_sections = math.ceil(total_frames / frames_per_section)
-        debug(f"worker: Simple mode | latent_window_size={latent_window_size} "
-              f"| overlap={actual_overlap} | frames_per_section={frames_per_section} "
-              f"| total_frames={total_frames} | total_sections={total_sections}")
+        debug(f"worker: Simple mode | latent_window_size=9 | frames_per_section=33 | "
+              f"overlap={actual_overlap} | total_frames={total_frames} | total_sections={total_sections}")
 
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
     debug("worker: pushed progress event 'Starting ...'")
@@ -679,12 +717,14 @@ def worker(
 
             # Update latent frame count (Tracks only newly added frames)
             new_latent_frames = generated_latents.shape[2]
-            # Note: This 'total_generated_latent_frames' might be slightly misleading if only used in desc.
-            # The VAE decode step below uses the actual length of history_latents.
-            # total_generated_latent_frames += new_latent_frames # Commenting out as it wasn't used correctly
-            # debug(f"worker: Added {new_latent_frames} latent frames this section.")
-
-            # Update history latents (CPU tensor)
+            # Update history latents (CPU tensor) - Inside the section loop
+            if actual_overlap > 0 and history_latents.shape[2] > 1:  # Only apply when we have history and overlap > 0
+                # Skip the overlapped frames when concatenating
+                # When generating from end to beginning, trim from the beginning of the new frames
+                skip_frames = actual_overlap
+                debug(f"Applying overlap: skipping first {skip_frames} frames of generated_latents")
+                generated_latents = generated_latents[:, :, skip_frames:, :, :]
+                
             history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
             debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
 
@@ -734,12 +774,15 @@ def worker(
                     history_pixels = current_pixels
                     debug(f"First section: Set history_pixels directly with shape: {history_pixels.shape}")
                 else:
-                    # For sequential sections, simply prepend the new frames 
-                    # (since we're generating from end to beginning)
-                    # IMPORTANT: Use simple concatenation instead of soft_append_bcthw
-                    # This eliminates the double exposure effect
-                    history_pixels = torch.cat([current_pixels, history_pixels], dim=2)
-                    debug(f"Concatenated new frames without blending. New history shape: {history_pixels.shape}")
+                    # For sequential sections, apply overlap when concatenating
+                    if actual_overlap > 0:
+                        # We've already trimmed the latents, so no need to trim pixels again
+                        history_pixels = torch.cat([current_pixels, history_pixels], dim=2)
+                        debug(f"Concatenated new frames with overlap = {actual_overlap}. New history shape: {history_pixels.shape}")
+                    else:
+                        # No overlap, regular concat
+                        history_pixels = torch.cat([current_pixels, history_pixels], dim=2)
+                        debug(f"Concatenated new frames without overlap. New history shape: {history_pixels.shape}")
                 
                 # === RESTORE PREVIEW VIDEO FUNCTIONALITY ===
                 # Save preview for progress updates
@@ -1277,7 +1320,7 @@ css = """
 
 block = gr.Blocks(css=css).queue()
 with block:
-    gr.Markdown('# FramePack')
+    gr.Markdown('# FramePack Advanced Playground by SCG')
     with gr.Row():
         with gr.Column(scale=2):
             mode_selector = gr.Radio(
@@ -1310,7 +1353,7 @@ with block:
                     label="Context Frames", 
                     minimum=1, 
                     maximum=16, 
-                    value=8, 
+                    value=0, 
                     step=1,
                     info="Number of frames to extract from video for continuity"
                 )
