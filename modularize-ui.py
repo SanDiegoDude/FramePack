@@ -1402,7 +1402,7 @@ with block:
             result_image_html = gr.Image(label='Single Frame Image', elem_classes="result-container", visible=False)
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
-           
+            gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
 
             
 
