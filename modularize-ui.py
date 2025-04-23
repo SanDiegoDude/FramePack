@@ -1205,7 +1205,26 @@ css = """
     margin-bottom: 16px;
     background: #222 !important;
 }
+/* Image and Video Container Styling */
+.input-image-container img {
+    max-height: 512px !important;
+    width: auto !important;
+    object-fit: contain !important;
+}
 
+.keyframe-image-container img {
+    max-height: 320px !important;
+    width: auto !important;
+    object-fit: contain !important;
+}
+
+.result-container img, .result-container video {
+    max-height: 512px !important;
+    width: auto !important;
+    object-fit: contain !important;
+    margin: 0 auto !important;
+    display: block !important;
+}
 /* Progress Bar Styling */
 .dual-progress-container {
     background: #222;
@@ -1248,13 +1267,18 @@ with block:
                 value="image2video", 
                 label="Mode"
             )
-            input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)  # always present, sometimes hidden
-            start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)", height=320, visible=False)
-            end_frame = gr.Image(sources='upload', type="numpy", label="End Frame (Required)", height=320, visible=False)
+            with gr.Row():
+                start_button = gr.Button(value="Start Generation")
+                end_button = gr.Button(value="End Generation", interactive=False)
+            input_image = gr.Image(sources='upload', type="numpy", label="Image", elem_classes="input-image-container")  # always present, sometimes hidden
+            start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)", elem_classes="keyframe-image-container", visible=False)
+            end_frame = gr.Image(sources='upload', type="numpy", label="End Frame (Required)", elem_classes="keyframe-image-container", visible=False)
             with gr.Group(visible=False) as video_extension_options:
                 input_video = gr.Video(
                     label="Upload Video to Extend", 
-                    format="mp4"
+                    format="mp4",
+                    height=320,
+                    elem_classes="video-container"
                 )
                 extension_direction = gr.Radio(
                     ["Forward", "Backward"], 
@@ -1281,13 +1305,12 @@ with block:
             prompt = gr.Textbox(label="Prompt", value='', lines=3)
             with gr.Accordion("Negative Prompt", open=False):
                 n_prompt = gr.Textbox(
-                    label="Negative Prompt", 
+                    label="Negative Prompt - Requires CFG higher than 1.0 to take effect", 
                     value="", 
                     lines=2
                 )
-            with gr.Row():
-                start_button = gr.Button(value="Start Generation")
-                end_button = gr.Button(value="End Generation", interactive=False)
+            with gr.Group(visible=False) as keyframes_options:
+                    keyframe_weight = gr.Slider(label="Start Frame Influence", minimum=0.0, maximum=1.0, value=0.7, step=0.1, info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)")
             advanced_mode = gr.Checkbox(label="Advanced Mode", value=False)
             latent_window_size = gr.Slider(label="Latent Window Size", minimum=2, maximum=33, value=9, step=1, visible=False)
             adv_seconds = gr.Slider(label="Video Length (Seconds)", minimum=0.1, maximum=120.0, value=5.0, step=0.1, visible=False)
@@ -1371,14 +1394,12 @@ with block:
                 lock_seed = gr.Checkbox(label="Lock Seed", value=False)
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
-                with gr.Group(visible=False) as keyframes_options:
-                    keyframe_weight = gr.Slider(label="Start Frame Influence", minimum=0.0, maximum=1.0, value=0.7, step=0.1, info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)")
         with gr.Column(scale=2):
             progress_bar = gr.HTML(visible=False)  # Start hidden
             progress_desc = gr.Markdown(visible=False)
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
-            result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
-            result_image_html = gr.Image(label='Single Frame Image', visible=False)
+            result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, elem_classes="result-container", loop=True)
+            result_image_html = gr.Image(label='Single Frame Image', elem_classes="result-container", visible=False)
             gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
