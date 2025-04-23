@@ -1272,6 +1272,8 @@ with block:
                 end_button = gr.Button(value="End Generation", interactive=False)
             input_image = gr.Image(sources='upload', type="numpy", label="Image", elem_classes="input-image-container")  # always present, sometimes hidden
             start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)", elem_classes="keyframe-image-container", visible=False)
+            with gr.Group(visible=False) as keyframes_options:
+                    keyframe_weight = gr.Slider(label="Start Frame Influence", minimum=0.0, maximum=1.0, value=0.7, step=0.1, info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)")
             end_frame = gr.Image(sources='upload', type="numpy", label="End Frame (Required)", elem_classes="keyframe-image-container", visible=False)
             with gr.Group(visible=False) as video_extension_options:
                 input_video = gr.Video(
@@ -1309,8 +1311,6 @@ with block:
                     value="", 
                     lines=2
                 )
-            with gr.Group(visible=False) as keyframes_options:
-                    keyframe_weight = gr.Slider(label="Start Frame Influence", minimum=0.0, maximum=1.0, value=0.7, step=0.1, info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)")
             advanced_mode = gr.Checkbox(label="Advanced Mode", value=False)
             latent_window_size = gr.Slider(label="Latent Window Size", minimum=2, maximum=33, value=9, step=1, visible=False)
             adv_seconds = gr.Slider(label="Video Length (Seconds)", minimum=0.1, maximum=120.0, value=5.0, step=0.1, visible=False)
