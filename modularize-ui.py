@@ -53,6 +53,32 @@ def make_mp4_faststart(mp4_path):
         if os.path.exists(tmpfile):
             os.remove(tmpfile)
 
+def apply_gaussian_blur(image_tensor, blur_amount):
+    """Apply gaussian blur to input tensor with specified amount (0.0-1.0)"""
+    if blur_amount <= 0.0:
+        return image_tensor
+    
+    import torch.nn.functional as F
+    
+    # Scale blur_amount to reasonable kernel size (1-21) and sigma value
+    # Maximum blur at 1.0 should be noticeable but not extreme
+    kernel_size = int(blur_amount * 20) + 1
+    kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1  # Must be odd
+    sigma = blur_amount * 3.0
+    
+    # Apply blur
+    # Note: F.gaussian_blur expects 4D tensor [B,C,H,W]
+    if len(image_tensor.shape) == 5:  # [B,C,T,H,W]
+        b, c, t, h, w = image_tensor.shape
+        # Reshape to [B*T,C,H,W]
+        reshaped = image_tensor.view(b*t, c, h, w)
+        blurred = F.gaussian_blur(reshaped, kernel_size=[kernel_size, kernel_size], sigma=[sigma, sigma])
+        # Reshape back to [B,C,T,H,W]
+        return blurred.view(b, c, t, h, w)
+    else:
+        return F.gaussian_blur(image_tensor, kernel_size=[kernel_size, kernel_size], sigma=[sigma, sigma])
+
+# ---- CLI Debug Output ----
 DEBUG = True
 def debug(*a, **k):
     if DEBUG:
@@ -184,7 +210,8 @@ def parse_hex_color(hexcode):
     return 0.5, 0.5, 0.5
 
 # ---- Worker Utility Split ----
-def prepare_inputs(input_image, prompt, n_prompt, cfg):
+def prepare_inputs(input_image, prompt, n_prompt, cfg, gaussian_blur_amount=0.0, 
+                   llm_weight=1.0, clip_weight=1.0):
     if input_image is None:
         raise ValueError(
             "No input image provided! For text2video, a blank will be created in worker -- "
@@ -205,11 +232,24 @@ def prepare_inputs(input_image, prompt, n_prompt, cfg):
         llama_vec_n, clip_pool_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
     llama_vec, mask = crop_or_pad_yield_mask(llama_vec, 512)
     llama_vec_n, mask_n = crop_or_pad_yield_mask(llama_vec_n, 512)
+
+    # Apply encoder weights
+    if llm_weight != 1.0:
+        llama_vec = llama_vec * llm_weight
+        llama_vec_n = llama_vec_n * llm_weight
+    
+    if clip_weight != 1.0:
+        clip_pool = clip_pool * clip_weight
+        clip_pool_n = clip_pool_n * clip_weight
+        
     h, w = find_nearest_bucket(H, W, resolution=640)
     input_np = resize_and_center_crop(input_image, target_width=w, target_height=h)
     Image.fromarray(input_np).save(os.path.join(outputs_folder, f'{generate_timestamp()}.png'))
     input_tensor = torch.from_numpy(input_np).float() / 127.5 - 1
     input_tensor = input_tensor.permute(2, 0, 1)[None, :, None]
+    # Apply gaussian blur if needed
+    if gaussian_blur_amount > 0.0:
+        input_tensor = apply_gaussian_blur(input_tensor, gaussian_blur_amount)
     return input_np, input_tensor, llama_vec, clip_pool, llama_vec_n, clip_pool_n, mask, mask_n, h, w
 
 def get_dims_from_aspect(aspect, custom_w, custom_h):
@@ -244,7 +284,10 @@ def worker(
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
     init_color, keyframe_weight,
     input_video=None, extension_direction="Forward", extension_frames=8,
-    original_mode=None 
+    original_mode=None,
+    # Add new parameters:
+    frame_overlap=0, trim_pct=0.2, gaussian_blur_amount=0.0,
+    llm_weight=1.0, clip_weight=1.0, clean_latent_weight=1.0
 ):
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
@@ -560,6 +603,12 @@ def worker(
                 stream.output_queue.push(('progress', (preview, desc, progress_html)))
             # --- End adapted callback definition ---
 
+            # Apply clean latent weight adjustment
+            if clean_latent_weight != 1.0:
+                clean_latents = clean_latents * clean_latent_weight
+                clean_latents_2x = clean_latents_2x * clean_latent_weight
+                clean_latents_4x = clean_latents_4x * clean_latent_weight
+            
             # --- Run sampling (Passes the correct indices/latents based on padding_size) ---
             # The mode check here ensures correct arguments like image_embeddings are passed
             if mode == "keyframes":
@@ -729,7 +778,7 @@ def worker(
         if mode == "text2video":
             N_actual = history_pixels.shape[2]
             # ----- txt2img edge-case: make a single image if very short/low window -----
-            if latent_window_size == 2 and total_sections == 1 and total_frames <= 8:
+            if latent_window_size <= 2 and total_sections <= 1 and total_frames <= 8:
                 debug("txt2img branch: pulling last frame, skipping video trim (window=2, adv=0.1)")
                 last_img_tensor = history_pixels[0, :, -1]
                 last_img = np.clip((np.transpose(last_img_tensor.cpu().numpy(), (1, 2, 0)) + 1) * 127.5, 0, 255).astype(np.uint8)
@@ -757,11 +806,16 @@ def worker(
                     drop_n = int(N_actual * 0.5)
                     debug(f"special trim for 4: dropping first {drop_n} frames of {N_actual}")
                 else:
-                    drop_n = math.floor(N_actual * 0.2)
-                    debug(f"normal trim: dropping first {drop_n} of {N_actual}")
+                    drop_n = math.floor(N_actual * trim_pct)  # Use trim_pct instead of hardcoded 0.2
+                    # Ensure we keep at least 1 frame
+                    drop_n = min(drop_n, N_actual - 1)
+                    debug(f"normal trim: dropping first {drop_n} of {N_actual} (trim_pct={trim_pct:.2f})")
+                
                 history_pixels = history_pixels[:, :, drop_n:, :, :]
                 N_after = history_pixels.shape[2]
                 debug(f"Final video after trim for txt2vid, {N_after} frames left")
+                
+                # Same single-frame handling as before
                 if N_after == 1:
                     last_img_tensor = history_pixels[0, :, 0]
                     last_img = np.clip((np.transpose(last_img_tensor.cpu().numpy(), (1,2,0)) + 1) * 127.5, 0, 255).astype(np.uint8)
@@ -780,12 +834,11 @@ def worker(
                         traceback.print_exc()
                         stream.output_queue.push(('end', "img"))
                     return
-                    
+        
         # ----- keyframes trim when no start frame provided -----
         elif mode == "keyframes" and start_frame is None:
             N_actual = history_pixels.shape[2]
             debug(f"keyframe mode with no start frame: considering trimming {N_actual} frames")
-            
             # Use similar trim logic as text2video
             if latent_window_size == 3:
                 drop_n = int(N_actual * 0.75)
@@ -794,14 +847,16 @@ def worker(
                 drop_n = int(N_actual * 0.5)
                 debug(f"keyframe special trim for 4: dropping first {drop_n} frames of {N_actual}")
             else:
-                drop_n = math.floor(N_actual * 0.2)  # Default to 20% trim
-                debug(f"keyframe normal trim: dropping first {drop_n} of {N_actual}")
+                drop_n = math.floor(N_actual * trim_pct)  # Use trim_pct instead of hardcoded 0.2
+                # Ensure we keep at least 1 frame
+                drop_n = min(drop_n, N_actual - 1)
+                debug(f"keyframe normal trim: dropping first {drop_n} of {N_actual} (trim_pct={trim_pct:.2f})")
             
             history_pixels = history_pixels[:, :, drop_n:, :, :]
             N_after = history_pixels.shape[2]
             debug(f"Final video after trim for keyframe (no start frame), {N_after} frames left")
             
-            # Handle case where trimming leaves just one frame
+            # Same handling for single frame case
             if N_after == 1:
                 debug("After trimming keyframe video, only one frame remains - will save as image")
                 last_img_tensor = history_pixels[0, :, 0]
@@ -888,7 +943,9 @@ def process(
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color,
     keyframe_weight,
     # Add new parameters here:
-    input_video=None, extension_direction="Forward", extension_frames=8
+    input_video=None, extension_direction="Forward", extension_frames=8,
+    frame_overlap=0, trim_pct=0.2, gaussian_blur_amount=0.0,
+    llm_weight=1.0, clip_weight=1.0, clean_latent_weight=1.0
 ):
     global stream
     debug("process: called with mode", mode)
@@ -1199,6 +1256,12 @@ with block:
             custom_w = gr.Number(label="Width", value=768, visible=False)
             custom_h = gr.Number(label="Height", value=768, visible=False)
             prompt = gr.Textbox(label="Prompt", value='', lines=3)
+            with gr.Accordion("Negative Prompt", open=False):
+                n_prompt = gr.Textbox(
+                    label="Negative Prompt", 
+                    value="", 
+                    lines=2
+                )
             with gr.Row():
                 start_button = gr.Button(value="Start Generation")
                 end_button = gr.Button(value="End Generation", interactive=False)
@@ -1211,14 +1274,79 @@ with block:
                 value=str(get_valid_frame_stops(9)[0]),
                 visible=True
             )
+            overlap_slider = gr.Slider(
+                label="Frame Overlap", 
+                minimum=0, 
+                maximum=33, 
+                value=0, 
+                step=1, 
+                visible=False,
+                info="Controls how many frames overlap between sections"
+            )
+            
+            trim_percentage = gr.Slider(
+                label="Segment Trim Percentage", 
+                minimum=0.0, 
+                maximum=1.0, 
+                value=0.2, 
+                step=0.01, 
+                visible=False,
+                info="Percentage of frames to trim (0.0 = keep all, 1.0 = maximum trim)"
+            )
+            # -- Add encoder weight controls --
+            with gr.Accordion("Advanced Model Parameters", open=False):
+                llm_encoder_weight = gr.Slider(
+                    label="LLM Encoder Weight", 
+                    minimum=0.0, 
+                    maximum=5.0, 
+                    value=1.0, 
+                    step=0.01,
+                    info="0.0 to disable LLM encoder"
+                )
+                
+                clip_encoder_weight = gr.Slider(
+                    label="CLIP Encoder Weight", 
+                    minimum=0.0, 
+                    maximum=5.0, 
+                    value=1.0, 
+                    step=0.01,
+                    info="0.0 to disable CLIP encoder"
+                )
+                
+                clean_latent_weight = gr.Slider(
+                    label="Clean Latent Weight", 
+                    minimum=0.0, 
+                    maximum=2.0, 
+                    value=1.0, 
+                    step=0.01,
+                    info="Controls influence of anchor/initial frame"
+                )
+                
+                rs = gr.Slider(
+                    label="CFG Re-Scale", 
+                    minimum=0.0, 
+                    maximum=1.0, 
+                    value=0.0, 
+                    step=0.01
+                )
+            
+            # -- Add Gaussian blur control --
+            gaussian_blur = gr.Slider(
+                label="Gaussian Blur", 
+                minimum=0.0, 
+                maximum=1.0, 
+                value=0.0, 
+                step=0.01, 
+                visible=False,
+                info="Apply blur to input images before processing"
+            )
             init_color = gr.ColorPicker(label="Initial Frame Color", value="#808080", visible=False)
             with gr.Group():
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
-                n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
                 seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
                 lock_seed = gr.Checkbox(label="Lock Seed", value=False)
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
-                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, visible=False)
+                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, info="Must be >1.0 for negative prompts to work")
                 gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01)
                 rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False)
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
@@ -1255,12 +1383,19 @@ with block:
         lw_vis = gr.update(visible=show)
         secs_vis = gr.update(visible=show)
         dropdown_vis = gr.update(visible=not show)
+        overlap_vis = gr.update(visible=show)
+        trim_vis = gr.update(visible=show)
+        
+        # Calculate max overlap based on window size
+        max_overlap = window * 4 - 4  # Maximum possible overlap
+        overlap_update = gr.update(visible=show, maximum=max_overlap)
+        
         if not show:
             dropdown_update = update_frame_dropdown(window)
             dropdown_update["visible"] = True
-            return lw_vis, secs_vis, dropdown_update
+            return lw_vis, secs_vis, dropdown_update, overlap_update, trim_vis
         else:
-            return lw_vis, secs_vis, dropdown_vis
+            return lw_vis, secs_vis, dropdown_vis, overlap_update, trim_vis
     def switch_mode(mode):
         return (
             gr.update(visible=mode == "image2video"),  # input_image
@@ -1271,6 +1406,8 @@ with block:
             gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_h
             gr.update(visible=(mode == "keyframes")),  # keyframes_options
             gr.update(visible=(mode == "video_extension"))  # video_extension_options
+            gr.update(visible=is_video_ext),  # video_extension_options
+            gr.update(visible=show_blur)  # gaussian_blur
         )
     def show_custom(aspect):
         show = aspect == "Custom..."
@@ -1314,9 +1451,9 @@ with block:
     )
     ips = [
         mode_selector,
-        input_image,    # For im2vid/txt2vid
-        start_frame,    # For keyframes (optional)
-        end_frame,      # For keyframes (required)
+        input_image,
+        start_frame,
+        end_frame,
         aspect_selector,
         custom_w,
         custom_h,
@@ -1339,6 +1476,13 @@ with block:
         input_video,
         extension_direction,
         extension_frames,
+        # Add new parameters:
+        overlap_slider,
+        trim_percentage,
+        gaussian_blur,
+        llm_encoder_weight,
+        clip_encoder_weight,
+        clean_latent_weight,
     ]
     prompt.submit(
         fn=process,
