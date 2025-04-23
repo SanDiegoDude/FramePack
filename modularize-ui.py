@@ -301,7 +301,8 @@ def worker(
         latent_window_size = adv_window
         max_overlap = latent_window_size * 4 - 3
         actual_overlap = min(frame_overlap, max_overlap)
-        frames_per_section = latent_window_size * 4 - 3 - actual_overlap
+        # Ensure frames_per_section is at least 1
+        frames_per_section = max(1, latent_window_size * 4 - 3 - actual_overlap)
         total_frames = int(round(adv_seconds * 30))
         total_sections = math.ceil(total_frames / frames_per_section)
         debug(f"worker: Advanced mode | latent_window_size={latent_window_size} "
@@ -311,7 +312,8 @@ def worker(
         latent_window_size = 9
         max_overlap = latent_window_size * 4 - 3
         actual_overlap = min(frame_overlap, max_overlap)
-        frames_per_section = latent_window_size * 4 - 3 - actual_overlap
+        # Ensure frames_per_section is at least 1
+        frames_per_section = max(1, latent_window_size * 4 - 3 - actual_overlap)
         total_frames = int(selected_frames)
         total_sections = total_frames // frames_per_section
         debug(f"worker: Simple mode | latent_window_size=9 | overlap={actual_overlap} "
@@ -1423,7 +1425,7 @@ with block:
         trim_vis = gr.update(visible=show)
         
         # Calculate max overlap based on window size
-        max_overlap = window * 4 - 4  # Maximum possible overlap
+        max_overlap = max(0, (window * 4 - 4))  # Ensures at least 1 frame per section
         overlap_update = gr.update(visible=show, maximum=max_overlap)
         
         if not show:
