@@ -443,7 +443,7 @@ def get_dims_from_aspect(aspect, custom_w, custom_h):
 def worker(
     mode, input_image, start_frame, end_frame, aspect, custom_w, custom_h,
     prompt, n_prompt, seed,
-    use_adv, adv_window, adv_seconds, selected_frames,
+    use_adv, adv_window, segment_count, selected_frames,
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
     init_color, keyframe_weight,
     input_video=None, extension_direction="Forward", extension_frames=8,
