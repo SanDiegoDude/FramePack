@@ -295,30 +295,46 @@ def worker(
     # --- DEFINE DEFAULT OUTPUT FILENAME ---
     output_filename = os.path.join(outputs_folder, f'{job_id}_final.mp4')
     debug(f"worker: Default output filename set to: {output_filename}")
-    
+
     # -- section/frames logic
     if use_adv:
         latent_window_size = adv_window
-        max_overlap = latent_window_size * 4 - 3
-        actual_overlap = min(frame_overlap, max_overlap)
-        # Ensure frames_per_section is at least 1
-        frames_per_section = max(1, latent_window_size * 4 - 3 - actual_overlap)
+        theoretical_frames_per_section = latent_window_size * 4 - 3
         total_frames = int(round(adv_seconds * 30))
+        
+        # Check if this will be a single segment or image generation
+        estimated_sections = math.ceil(total_frames / theoretical_frames_per_section)
+        
+        if estimated_sections <= 1 or latent_window_size <= 2:
+            debug(f"Single section or small window detected, forcing overlap to 0")
+            actual_overlap = 0
+        else:
+            actual_overlap = min(frame_overlap, theoretical_frames_per_section - 1)
+            
+        frames_per_section = theoretical_frames_per_section - actual_overlap
         total_sections = math.ceil(total_frames / frames_per_section)
-        debug(f"worker: Advanced mode | latent_window_size={latent_window_size} "
+        debug(f"worker: Advanced mode | latent_window_size={latent_window_size} " 
               f"| overlap={actual_overlap} | frames_per_section={frames_per_section} "
               f"| total_frames={total_frames} | total_sections={total_sections}")
     else:
         latent_window_size = 9
-        max_overlap = latent_window_size * 4 - 3
-        actual_overlap = min(frame_overlap, max_overlap)
-        # Ensure frames_per_section is at least 1
-        frames_per_section = max(1, latent_window_size * 4 - 3 - actual_overlap)
+        theoretical_frames_per_section = latent_window_size * 4 - 3
         total_frames = int(selected_frames)
-        total_sections = total_frames // frames_per_section
-        debug(f"worker: Simple mode | latent_window_size=9 | overlap={actual_overlap} "
-              f"| frames_per_section={frames_per_section} | total_frames={total_frames} "
-              f"| total_sections={total_sections}")
+        
+        # Check if this will be a single section
+        estimated_sections = math.ceil(total_frames / theoretical_frames_per_section)
+        
+        if estimated_sections <= 1:
+            debug(f"Single section detected, forcing overlap to 0")
+            actual_overlap = 0
+        else:
+            actual_overlap = min(frame_overlap, theoretical_frames_per_section - 1)
+            
+        frames_per_section = theoretical_frames_per_section - actual_overlap
+        total_sections = math.ceil(total_frames / frames_per_section)
+        debug(f"worker: Simple mode | latent_window_size={latent_window_size} "
+              f"| overlap={actual_overlap} | frames_per_section={frames_per_section} "
+              f"| total_frames={total_frames} | total_sections={total_sections}")
 
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
     debug("worker: pushed progress event 'Starting ...'")
