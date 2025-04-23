@@ -189,58 +189,6 @@ def apply_gaussian_blur(image_tensor, blur_amount):
             debug("WARNING: Could not apply blur - no suitable method found. Returning original image.")
             return image_tensor
 
-def update_video_stats(window_size, segments, overlap):
-    """Calculate and format video statistics based on current settings"""
-    # Calculate frames
-    frames_per_section = window_size * 4 - 3
-    effective_frames = frames_per_section - min(overlap, frames_per_section-1)
-    total_frames = segments * effective_frames
-    
-    # Calculate time (at 30fps)
-    seconds = total_frames / 30.0
-    minutes = int(seconds // 60)
-    remaining_seconds = seconds % 60
-    
-    # Format the output
-    stats_html = f"""
-    <div class="stats-box">
-        <table>
-            <tr>
-                <td><b>Frames per segment:</b></td>
-                <td>{effective_frames} frames</td>
-            </tr>
-            <tr>
-                <td><b>Total frames:</b></td>
-                <td>{total_frames} frames</td>
-            </tr>
-            <tr>
-                <td><b>Video length:</b></td>
-                <td>{minutes}m {remaining_seconds:.1f}s (at 30fps)</td>
-            </tr>
-        </table>
-    </div>
-    """
-    return stats_html
-
-# Connect the sliders to update the stats
-latent_window_size.change(
-    update_video_stats,
-    inputs=[latent_window_size, segment_count, overlap_slider],
-    outputs=[video_stats]
-)
-
-segment_count.change(
-    update_video_stats,
-    inputs=[latent_window_size, segment_count, overlap_slider],
-    outputs=[video_stats]
-)
-
-overlap_slider.change(
-    update_video_stats,
-    inputs=[latent_window_size, segment_count, overlap_slider],
-    outputs=[video_stats]
-)
-
 # ---- CLI Debug Output ----
 DEBUG = True
 def debug(*a, **k):
@@ -1691,6 +1639,59 @@ with block:
     )
     def show_init_color(mode):
         return gr.update(visible=(mode == "text2video"))
+
+    def update_video_stats(window_size, segments, overlap):
+        """Calculate and format video statistics based on current settings"""
+        # Calculate frames
+        frames_per_section = window_size * 4 - 3
+        effective_frames = frames_per_section - min(overlap, frames_per_section-1)
+        total_frames = segments * effective_frames
+        
+        # Calculate time (at 30fps)
+        seconds = total_frames / 30.0
+        minutes = int(seconds // 60)
+        remaining_seconds = seconds % 60
+        
+        # Format the output
+        stats_html = f"""
+        <div class="stats-box">
+            <table>
+                <tr>
+                    <td><b>Frames per segment:</b></td>
+                    <td>{effective_frames} frames</td>
+                </tr>
+                <tr>
+                    <td><b>Total frames:</b></td>
+                    <td>{total_frames} frames</td>
+                </tr>
+                <tr>
+                    <td><b>Video length:</b></td>
+                    <td>{minutes}m {remaining_seconds:.1f}s (at 30fps)</td>
+                </tr>
+            </table>
+        </div>
+        """
+        return stats_html
+    
+    # Connect the sliders to update the stats
+    latent_window_size.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
+    )
+    
+    segment_count.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
+    )
+    
+    overlap_slider.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
+    )
+
     
     mode_selector.change(
         show_init_color,
