@@ -189,6 +189,58 @@ def apply_gaussian_blur(image_tensor, blur_amount):
             debug("WARNING: Could not apply blur - no suitable method found. Returning original image.")
             return image_tensor
 
+def update_video_stats(window_size, segments, overlap):
+    """Calculate and format video statistics based on current settings"""
+    # Calculate frames
+    frames_per_section = window_size * 4 - 3
+    effective_frames = frames_per_section - min(overlap, frames_per_section-1)
+    total_frames = segments * effective_frames
+    
+    # Calculate time (at 30fps)
+    seconds = total_frames / 30.0
+    minutes = int(seconds // 60)
+    remaining_seconds = seconds % 60
+    
+    # Format the output
+    stats_html = f"""
+    <div class="stats-box">
+        <table>
+            <tr>
+                <td><b>Frames per segment:</b></td>
+                <td>{effective_frames} frames</td>
+            </tr>
+            <tr>
+                <td><b>Total frames:</b></td>
+                <td>{total_frames} frames</td>
+            </tr>
+            <tr>
+                <td><b>Video length:</b></td>
+                <td>{minutes}m {remaining_seconds:.1f}s (at 30fps)</td>
+            </tr>
+        </table>
+    </div>
+    """
+    return stats_html
+
+# Connect the sliders to update the stats
+latent_window_size.change(
+    update_video_stats,
+    inputs=[latent_window_size, segment_count, overlap_slider],
+    outputs=[video_stats]
+)
+
+segment_count.change(
+    update_video_stats,
+    inputs=[latent_window_size, segment_count, overlap_slider],
+    outputs=[video_stats]
+)
+
+overlap_slider.change(
+    update_video_stats,
+    inputs=[latent_window_size, segment_count, overlap_slider],
+    outputs=[video_stats]
+)
+
 # ---- CLI Debug Output ----
 DEBUG = True
 def debug(*a, **k):
@@ -409,18 +461,23 @@ def worker(
 
     # -- section/frames logic
     # Keep exactly as in original code - don't modify these calculations
-    if use_adv:
+    if use_adv:  # keep this for backward compatibility temporarily
         latent_window_size = adv_window
-        frames_per_section = latent_window_size * 4 - 3
-        total_frames = int(round(adv_seconds * 30))
-        total_sections = math.ceil(total_frames / frames_per_section)
+        theoretical_frames_per_section = latent_window_size * 4 - 3
+        # Calculate actual overlap (ensuring we don't go negative)
+        actual_overlap = min(frame_overlap, theoretical_frames_per_section - 1)
+        actual_overlap = max(0, actual_overlap)  # Ensure non-negative
         
-        # Just store overlap value for later use - don't modify frames_per_section
-        actual_overlap = 0 if total_sections <= 1 else min(frame_overlap, frames_per_section - 1)
+        # Calculate effective frames per section
+        frames_per_section = theoretical_frames_per_section - actual_overlap
         
-        debug(f"worker: Advanced mode | latent_window_size={latent_window_size} "
+        # Use segment count directly instead of calculating from seconds
+        total_sections = segment_count
+        total_frames = frames_per_section * total_sections
+        
+        debug(f"worker: Using latent_window_size={latent_window_size} "
               f"| frames_per_section={frames_per_section} | overlap={actual_overlap} "
-              f"| total_frames={total_frames} | total_sections={total_sections}")
+              f"| segments={segment_count} | total_frames={total_frames}")
     else:
         latent_window_size = 9
         frames_per_section = latent_window_size * 4 - 3
@@ -1373,6 +1430,26 @@ css = """
     border-radius: 4px;
     transition: width 0.3s ease;
 }
+
+.stats-box {
+    background: #333;
+    border: 2px solid orange;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 16px;
+}
+
+.stats-box table {
+    width: 100%;
+}
+
+.stats-box td {
+    padding: 4px 8px;
+}
+
+.stats-box td:first-child {
+    width: 40%;
+}
 """
 
 block = gr.Blocks(css=css).queue()
@@ -1429,34 +1506,48 @@ with block:
                     value="", 
                     lines=2
                 )
-            advanced_mode = gr.Checkbox(label="Advanced Mode", value=False)
-            latent_window_size = gr.Slider(label="Latent Window Size", minimum=2, maximum=33, value=9, step=1, visible=False)
-            adv_seconds = gr.Slider(label="Video Length (Seconds)", minimum=0.1, maximum=120.0, value=5.0, step=0.1, visible=False)
-            total_frames_dropdown = gr.Dropdown(
-                label="Output Video Frames",
-                choices=[str(x) for x in get_valid_frame_stops(9)],
-                value=str(get_valid_frame_stops(9)[0]),
-                visible=True
+            
+            # Realtime calculation display
+            video_stats = gr.HTML(
+                value="<div class='stats-box'>Estimated video length: calculating...</div>",
+                label="Approximate Output Length"
             )
-            overlap_slider = gr.Slider(
-                label="Frame Overlap", 
-                minimum=0, 
+            
+            latent_window_size = gr.Slider(
+                label="Latent Window Size", 
+                minimum=2, 
                 maximum=33, 
-                value=0, 
-                step=1, 
-                visible=False,
+                value=9, 
+                step=1
+            )
+            
+            segment_count = gr.Slider(
+                label="Number of Segments", 
+                minimum=1, 
+                maximum=20, 
+                value=5, 
+                step=1,
+                info="More segments = longer video"
+            )
+            
+            overlap_slider = gr.Slider(
+                label="Frame Overlap",
+                minimum=0,
+                maximum=33,
+                value=0,
+                step=1,
                 info="Controls how many frames overlap between sections"
             )
             
             trim_percentage = gr.Slider(
-                label="Segment Trim Percentage", 
-                minimum=0.0, 
-                maximum=1.0, 
-                value=0.2, 
-                step=0.01, 
-                visible=False,
+                label="Segment Trim Percentage",
+                minimum=0.0,
+                maximum=1.0,
+                value=0.2,
+                step=0.01,
                 info="Percentage of frames to trim (0.0 = keep all, 1.0 = maximum trim)"
             )
+            
             # -- Add encoder weight controls --
             with gr.Accordion("Advanced Model Parameters", open=False):
                 llm_encoder_weight = gr.Slider(
