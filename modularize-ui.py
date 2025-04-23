@@ -391,55 +391,41 @@ def get_dims_from_aspect(aspect, custom_w, custom_h):
 def worker(
     mode, input_image, start_frame, end_frame, aspect, custom_w, custom_h,
     prompt, n_prompt, seed,
-    use_adv, adv_window, segment_count, selected_frames,
+    latent_window_size, segment_count,  # Simplified params
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
     init_color, keyframe_weight,
     input_video=None, extension_direction="Forward", extension_frames=8,
     original_mode=None,
-    # Add new parameters:
+    # New parameters:
     frame_overlap=0, trim_pct=0.2, gaussian_blur_amount=0.0,
     llm_weight=1.0, clip_weight=1.0, clean_latent_weight=1.0
 ):
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
-
     # --- DEFINE DEFAULT OUTPUT FILENAME ---
     output_filename = os.path.join(outputs_folder, f'{job_id}_final.mp4')
     debug(f"worker: Default output filename set to: {output_filename}")
-
-    # -- section/frames logic
-    # Keep exactly as in original code - don't modify these calculations
-    if use_adv:  # keep this for backward compatibility temporarily
-        latent_window_size = adv_window
-        theoretical_frames_per_section = latent_window_size * 4 - 3
-        # Calculate actual overlap (ensuring we don't go negative)
-        actual_overlap = min(frame_overlap, theoretical_frames_per_section - 1)
-        actual_overlap = max(0, actual_overlap)  # Ensure non-negative
-        
-        # Calculate effective frames per section
-        frames_per_section = theoretical_frames_per_section - actual_overlap
-        
-        # Use segment count directly instead of calculating from seconds
-        total_sections = segment_count
-        total_frames = frames_per_section * total_sections
-        
-        debug(f"worker: Using latent_window_size={latent_window_size} "
-              f"| frames_per_section={frames_per_section} | overlap={actual_overlap} "
-              f"| segments={segment_count} | total_frames={total_frames}")
-    else:
-        latent_window_size = 9
-        frames_per_section = latent_window_size * 4 - 3
-        total_frames = int(selected_frames)
-        total_sections = total_frames // frames_per_section
-        
-        # Just store overlap value - don't modify frames_per_section
-        actual_overlap = 0 if total_sections <= 1 else min(frame_overlap, frames_per_section - 1)
-        
-        debug(f"worker: Simple mode | latent_window_size=9 | frames_per_section=33 "
-              f"| overlap={actual_overlap} | total_frames={total_frames} | total_sections={total_sections}")
+    
+    # --- NEW SIMPLIFIED SECTION/FRAMES LOGIC ---
+    # Calculate core parameters
+    frames_per_section = latent_window_size * 4 - 3
+    
+    # Handle overlap
+    max_overlap = max(0, frames_per_section - 1)
+    actual_overlap = min(frame_overlap, max_overlap)
+    
+    # Calculate frames
+    effective_frames = frames_per_section
+    total_sections = segment_count
+    total_frames = effective_frames * total_sections
+    
+    debug(f"worker: Using latent_window_size={latent_window_size} "
+          f"| frames_per_section={frames_per_section} | overlap={actual_overlap} "
+          f"| segments={segment_count} | total_frames={total_frames}")
+    
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
     debug("worker: pushed progress event 'Starting ...'")
-
+    
     try:
         t_start = time.time()
 
@@ -1079,10 +1065,10 @@ def worker(
 def process(
     mode, input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h,
     prompt, n_prompt, seed,
-    use_adv, adv_window, adv_seconds, selected_frames,
+    latent_window_size, segment_count,  
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color,
     keyframe_weight,
-    # Add new parameters here:
+    # Add new parameters:
     input_video=None, extension_direction="Forward", extension_frames=8,
     frame_overlap=0, trim_pct=0.2, gaussian_blur_amount=0.0,
     llm_weight=1.0, clip_weight=1.0, clean_latent_weight=1.0
@@ -1196,7 +1182,8 @@ def process(
         prompt,
         n_prompt,
         seed,
-        use_adv, adv_window, adv_seconds, selected_frames,
+        latent_window_size,  # Pass latent_window_size directly
+        segment_count,       # Pass segment_count
         steps,
         cfg,
         gs,
@@ -1209,6 +1196,7 @@ def process(
         extension_direction,
         extension_frames,
         original_mode,
+        # Add new parameters
         frame_overlap,
         trim_pct,
         gaussian_blur_amount,
@@ -1381,6 +1369,26 @@ css = """
 
 .stats-box {
     background: #333;
+    border: 2px solid orange;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 16px;
+}
+
+.stats-box table {
+    width: 100%;
+}
+
+.stats-box td {
+    padding: 4px 8px;
+}
+
+.stats-box td:first-child {
+    width: 40%;
+}
+
+.stats-box {
+    background: #222;
     border: 2px solid orange;
     border-radius: 8px;
     padding: 12px;
@@ -1572,23 +1580,75 @@ with block:
             return gr.update(choices=[str(x) for x in stops], value=str(stops[0]))
         else:
             return gr.update(choices=[''], value='')
-    def show_hide_advanced(show, window):
-        lw_vis = gr.update(visible=show)
-        secs_vis = gr.update(visible=show)
-        dropdown_vis = gr.update(visible=not show)
-        overlap_vis = gr.update(visible=show)
-        trim_vis = gr.update(visible=show)
-        
-        # Calculate max overlap based on window size
-        max_overlap = max(0, (window * 4 - 4))  # Ensures at least 1 frame per section
-        overlap_update = gr.update(visible=show, maximum=max_overlap)
-        
-        if not show:
-            dropdown_update = update_frame_dropdown(window)
-            dropdown_update["visible"] = True
-            return lw_vis, secs_vis, dropdown_update, overlap_update, trim_vis
-        else:
-            return lw_vis, secs_vis, dropdown_vis, overlap_update, trim_vis
+
+
+    # Add new function to update overlap slider maximum
+def update_overlap_slider(window_size):
+    """Update maximum overlap based on window size"""
+    max_overlap = max(0, (window_size * 4 - 4))  # Ensures at least 1 frame per section
+    return gr.update(maximum=max_overlap)
+
+# Add function to calculate and display video stats
+def update_video_stats(window_size, segments, overlap):
+    """Calculate and display video statistics"""
+    # Calculate frames
+    frames_per_section = window_size * 4 - 3
+    max_overlap = max(0, frames_per_section - 1)
+    actual_overlap = min(overlap, max_overlap)
+    effective_frames = frames_per_section - actual_overlap
+    total_frames = segments * effective_frames
+    
+    # Calculate time (at 30fps)
+    seconds = total_frames / 30.0
+    minutes = int(seconds // 60)
+    remaining_seconds = seconds % 60
+    
+    # Format the output
+    stats_html = f"""
+    <div class="stats-box">
+        <table>
+            <tr>
+                <td><b>Frames per segment:</b></td>
+                <td>{effective_frames} frames</td>
+            </tr>
+            <tr>
+                <td><b>Total frames:</b></td>
+                <td>{total_frames} frames</td>
+            </tr>
+            <tr>
+                <td><b>Video length:</b></td>
+                <td>{minutes}m {remaining_seconds:.1f}s (at 30fps)</td>
+            </tr>
+        </table>
+    </div>
+    """
+    return stats_html
+
+# Connect callbacks
+latent_window_size.change(
+    update_overlap_slider,
+    inputs=[latent_window_size],
+    outputs=[overlap_slider]
+)
+
+latent_window_size.change(
+    update_video_stats,
+    inputs=[latent_window_size, segment_count, overlap_slider],
+    outputs=[video_stats]
+)
+
+segment_count.change(
+    update_video_stats,
+    inputs=[latent_window_size, segment_count, overlap_slider],
+    outputs=[video_stats]
+)
+
+overlap_slider.change(
+    update_video_stats,
+    inputs=[latent_window_size, segment_count, overlap_slider],
+    outputs=[video_stats]
+)
+    
     def switch_mode(mode):
         is_img2vid = mode == "image2video"
         is_txt2vid = mode == "text2video"
@@ -1636,59 +1696,7 @@ with block:
     def show_init_color(mode):
         return gr.update(visible=(mode == "text2video"))
 
-    def update_video_stats(window_size, segments, overlap):
-        """Calculate and format video statistics based on current settings"""
-        # Calculate frames
-        frames_per_section = window_size * 4 - 3
-        effective_frames = frames_per_section - min(overlap, frames_per_section-1)
-        total_frames = segments * effective_frames
         
-        # Calculate time (at 30fps)
-        seconds = total_frames / 30.0
-        minutes = int(seconds // 60)
-        remaining_seconds = seconds % 60
-        
-        # Format the output
-        stats_html = f"""
-        <div class="stats-box">
-            <table>
-                <tr>
-                    <td><b>Frames per segment:</b></td>
-                    <td>{effective_frames} frames</td>
-                </tr>
-                <tr>
-                    <td><b>Total frames:</b></td>
-                    <td>{total_frames} frames</td>
-                </tr>
-                <tr>
-                    <td><b>Video length:</b></td>
-                    <td>{minutes}m {remaining_seconds:.1f}s (at 30fps)</td>
-                </tr>
-            </table>
-        </div>
-        """
-        return stats_html
-    
-    # Connect the sliders to update the stats
-    latent_window_size.change(
-        update_video_stats,
-        inputs=[latent_window_size, segment_count, overlap_slider],
-        outputs=[video_stats]
-    )
-    
-    segment_count.change(
-        update_video_stats,
-        inputs=[latent_window_size, segment_count, overlap_slider],
-        outputs=[video_stats]
-    )
-    
-    overlap_slider.change(
-        update_video_stats,
-        inputs=[latent_window_size, segment_count, overlap_slider],
-        outputs=[video_stats]
-    )
-
-    
     mode_selector.change(
         show_init_color,
         inputs=[mode_selector],
@@ -1710,10 +1718,10 @@ with block:
         prompt,
         n_prompt,
         seed,
-        advanced_mode,
+        # No advanced_mode
         latent_window_size,
-        adv_seconds,
-        total_frames_dropdown,
+        segment_count,  # Replace adv_seconds
+        # No total_frames_dropdown
         steps,
         cfg,
         gs,
