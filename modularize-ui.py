@@ -1583,72 +1583,72 @@ with block:
 
 
     # Add new function to update overlap slider maximum
-def update_overlap_slider(window_size):
-    """Update maximum overlap based on window size"""
-    max_overlap = max(0, (window_size * 4 - 4))  # Ensures at least 1 frame per section
-    return gr.update(maximum=max_overlap)
-
-# Add function to calculate and display video stats
-def update_video_stats(window_size, segments, overlap):
-    """Calculate and display video statistics"""
-    # Calculate frames
-    frames_per_section = window_size * 4 - 3
-    max_overlap = max(0, frames_per_section - 1)
-    actual_overlap = min(overlap, max_overlap)
-    effective_frames = frames_per_section - actual_overlap
-    total_frames = segments * effective_frames
+    def update_overlap_slider(window_size):
+        """Update maximum overlap based on window size"""
+        max_overlap = max(0, (window_size * 4 - 4))  # Ensures at least 1 frame per section
+        return gr.update(maximum=max_overlap)
     
-    # Calculate time (at 30fps)
-    seconds = total_frames / 30.0
-    minutes = int(seconds // 60)
-    remaining_seconds = seconds % 60
+    # Add function to calculate and display video stats
+    def update_video_stats(window_size, segments, overlap):
+        """Calculate and display video statistics"""
+        # Calculate frames
+        frames_per_section = window_size * 4 - 3
+        max_overlap = max(0, frames_per_section - 1)
+        actual_overlap = min(overlap, max_overlap)
+        effective_frames = frames_per_section - actual_overlap
+        total_frames = segments * effective_frames
+        
+        # Calculate time (at 30fps)
+        seconds = total_frames / 30.0
+        minutes = int(seconds // 60)
+        remaining_seconds = seconds % 60
+        
+        # Format the output
+        stats_html = f"""
+        <div class="stats-box">
+            <table>
+                <tr>
+                    <td><b>Frames per segment:</b></td>
+                    <td>{effective_frames} frames</td>
+                </tr>
+                <tr>
+                    <td><b>Total frames:</b></td>
+                    <td>{total_frames} frames</td>
+                </tr>
+                <tr>
+                    <td><b>Video length:</b></td>
+                    <td>{minutes}m {remaining_seconds:.1f}s (at 30fps)</td>
+                </tr>
+            </table>
+        </div>
+        """
+        return stats_html
     
-    # Format the output
-    stats_html = f"""
-    <div class="stats-box">
-        <table>
-            <tr>
-                <td><b>Frames per segment:</b></td>
-                <td>{effective_frames} frames</td>
-            </tr>
-            <tr>
-                <td><b>Total frames:</b></td>
-                <td>{total_frames} frames</td>
-            </tr>
-            <tr>
-                <td><b>Video length:</b></td>
-                <td>{minutes}m {remaining_seconds:.1f}s (at 30fps)</td>
-            </tr>
-        </table>
-    </div>
-    """
-    return stats_html
-
-# Connect callbacks
-latent_window_size.change(
-    update_overlap_slider,
-    inputs=[latent_window_size],
-    outputs=[overlap_slider]
-)
-
-latent_window_size.change(
-    update_video_stats,
-    inputs=[latent_window_size, segment_count, overlap_slider],
-    outputs=[video_stats]
-)
-
-segment_count.change(
-    update_video_stats,
-    inputs=[latent_window_size, segment_count, overlap_slider],
-    outputs=[video_stats]
-)
-
-overlap_slider.change(
-    update_video_stats,
-    inputs=[latent_window_size, segment_count, overlap_slider],
-    outputs=[video_stats]
-)
+    # Connect callbacks
+    latent_window_size.change(
+        update_overlap_slider,
+        inputs=[latent_window_size],
+        outputs=[overlap_slider]
+    )
     
+    latent_window_size.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
+    )
+    
+    segment_count.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
+    )
+    
+    overlap_slider.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
+    )
+        
     def switch_mode(mode):
         is_img2vid = mode == "image2video"
         is_txt2vid = mode == "text2video"
