@@ -387,37 +387,40 @@ def get_dims_from_aspect(aspect, custom_w, custom_h):
     
 
 # ---- WORKER ----
+# ---- WORKER ----
 @torch.no_grad()
 def worker(
     mode, input_image, start_frame, end_frame, aspect, custom_w, custom_h,
     prompt, n_prompt, seed,
-    latent_window_size, segment_count,  # Changed from use_adv, adv_window, adv_seconds, selected_frames
+    use_adv, adv_window, adv_seconds, selected_frames,
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
     init_color, keyframe_weight,
     input_video=None, extension_direction="Forward", extension_frames=8,
-    original_mode=None,
-    # Add new parameters:
-    frame_overlap=0, trim_pct=0.2, gaussian_blur_amount=0.0,
-    llm_weight=1.0, clip_weight=1.0, clean_latent_weight=1.0
+    original_mode=None 
 ):
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
+
     # --- DEFINE DEFAULT OUTPUT FILENAME ---
     output_filename = os.path.join(outputs_folder, f'{job_id}_final.mp4')
     debug(f"worker: Default output filename set to: {output_filename}")
     
-    # -- section/frames logic - SIMPLIFIED
-    frames_per_section = latent_window_size * 4 - 3
-    total_sections = segment_count
-    total_frames = frames_per_section * total_sections
-    
-    # Handle overlap, but don't modify frames_per_section
-    max_overlap = max(0, frames_per_section - 1)
-    actual_overlap = 0 if total_sections <= 1 else min(frame_overlap, max_overlap)
-    
-    debug(f"worker: Using latent_window_size={latent_window_size} | frames_per_section={frames_per_section} "
-          f"| overlap={actual_overlap} | segments={segment_count} | total_frames={total_frames}")
-    
+    # -- section/frames logic
+    if use_adv:
+        latent_window_size = adv_window
+        frames_per_section = latent_window_size * 4 - 3
+        total_frames = int(round(adv_seconds * 30))
+        total_sections = math.ceil(total_frames / frames_per_section)
+        debug(f"worker: Advanced mode | latent_window_size={latent_window_size} "
+              f"| frames_per_section={frames_per_section} | total_frames={total_frames} | total_sections={total_sections}")
+    else:
+        latent_window_size = 9
+        frames_per_section = latent_window_size * 4 - 3
+        total_frames = int(selected_frames)
+        total_sections = total_frames // frames_per_section
+        debug(f"worker: Simple mode | latent_window_size=9 | frames_per_section=33 | "
+              f"total_frames={total_frames} | total_sections={total_sections}")
+
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
     debug("worker: pushed progress event 'Starting ...'")
 
@@ -470,14 +473,6 @@ def worker(
             lv, mask = crop_or_pad_yield_mask(lv, 512)
             lv_n, cp_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
             lv_n, mask_n = crop_or_pad_yield_mask(lv_n, 512)
-            # Add after the encoding code above
-            if llm_weight != 1.0:
-                lv = lv * llm_weight
-                lv_n = lv_n * llm_weight
-            
-            if clip_weight != 1.0:
-                cp = cp * clip_weight
-                cp_n = cp_n * clip_weight
             m = mask
             m_n = mask_n
             
@@ -556,10 +551,7 @@ def worker(
         if mode != "keyframes":
             # --- Image2Video/Text2Video (legacy/unchanged)
             inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = prepare_inputs(
-                input_image, prompt, n_prompt, cfg, 
-                gaussian_blur_amount=gaussian_blur_amount,
-                llm_weight=llm_weight,
-                clip_weight=clip_weight
+                input_image, prompt, n_prompt, cfg
             )
             start_latent = vae_encode(inp_tensor.float(), vae.float())
 
@@ -720,12 +712,6 @@ def worker(
                 stream.output_queue.push(('progress', (preview, desc, progress_html)))
             # --- End adapted callback definition ---
 
-            # Apply clean latent weight adjustment
-            if clean_latent_weight != 1.0:
-                clean_latents = clean_latents * clean_latent_weight
-                clean_latents_2x = clean_latents_2x * clean_latent_weight
-                clean_latents_4x = clean_latents_4x * clean_latent_weight
-            
             # --- Run sampling (Passes the correct indices/latents based on padding_size) ---
             # The mode check here ensures correct arguments like image_embeddings are passed
             if mode == "keyframes":
@@ -761,16 +747,12 @@ def worker(
 
             # Update latent frame count (Tracks only newly added frames)
             new_latent_frames = generated_latents.shape[2]
-            # After generation, but before concatenation with history:
-            if actual_overlap > 0 and not is_first_iteration and generated_latents.shape[2] > actual_overlap:
-                # Only trim if we have enough frames to trim and this isn't the first section
-                debug(f"Applying overlap: skipping first {actual_overlap} frames of {generated_latents.shape[2]} generated_latents")
-                trim_end = generated_latents.shape[2]  # Keep all frames except overlap
-                generated_latents = generated_latents[:, :, actual_overlap:trim_end, :, :]
-            else:
-                debug(f"Not applying overlap - first section or not enough frames ({generated_latents.shape[2]})")
-            
-            # Then concatenate
+            # Note: This 'total_generated_latent_frames' might be slightly misleading if only used in desc.
+            # The VAE decode step below uses the actual length of history_latents.
+            # total_generated_latent_frames += new_latent_frames # Commenting out as it wasn't used correctly
+            # debug(f"worker: Added {new_latent_frames} latent frames this section.")
+
+            # Update history latents (CPU tensor)
             history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
             debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
 
@@ -820,9 +802,12 @@ def worker(
                     history_pixels = current_pixels
                     debug(f"First section: Set history_pixels directly with shape: {history_pixels.shape}")
                 else:
-                    # Just concatenate - we already handled overlap at the latent level
+                    # For sequential sections, simply prepend the new frames 
+                    # (since we're generating from end to beginning)
+                    # IMPORTANT: Use simple concatenation instead of soft_append_bcthw
+                    # This eliminates the double exposure effect
                     history_pixels = torch.cat([current_pixels, history_pixels], dim=2)
-                    debug(f"Concatenated frames. New history shape: {history_pixels.shape}")
+                    debug(f"Concatenated new frames without blending. New history shape: {history_pixels.shape}")
                 
                 # === RESTORE PREVIEW VIDEO FUNCTIONALITY ===
                 # Save preview for progress updates
@@ -896,7 +881,7 @@ def worker(
         if mode == "text2video":
             N_actual = history_pixels.shape[2]
             # ----- txt2img edge-case: make a single image if very short/low window -----
-            if latent_window_size <= 2 and total_sections <= 1 and total_frames <= 8:
+            if latent_window_size == 2 and total_sections == 1 and total_frames <= 8:
                 debug("txt2img branch: pulling last frame, skipping video trim (window=2, adv=0.1)")
                 last_img_tensor = history_pixels[0, :, -1]
                 last_img = np.clip((np.transpose(last_img_tensor.cpu().numpy(), (1, 2, 0)) + 1) * 127.5, 0, 255).astype(np.uint8)
@@ -924,16 +909,11 @@ def worker(
                     drop_n = int(N_actual * 0.5)
                     debug(f"special trim for 4: dropping first {drop_n} frames of {N_actual}")
                 else:
-                    drop_n = math.floor(N_actual * trim_pct)  # Use trim_pct instead of hardcoded 0.2
-                    # Ensure we keep at least 1 frame
-                    drop_n = min(drop_n, N_actual - 1)
-                    debug(f"normal trim: dropping first {drop_n} of {N_actual} (trim_pct={trim_pct:.2f})")
-                
+                    drop_n = math.floor(N_actual * 0.2)
+                    debug(f"normal trim: dropping first {drop_n} of {N_actual}")
                 history_pixels = history_pixels[:, :, drop_n:, :, :]
                 N_after = history_pixels.shape[2]
                 debug(f"Final video after trim for txt2vid, {N_after} frames left")
-                
-                # Same single-frame handling as before
                 if N_after == 1:
                     last_img_tensor = history_pixels[0, :, 0]
                     last_img = np.clip((np.transpose(last_img_tensor.cpu().numpy(), (1,2,0)) + 1) * 127.5, 0, 255).astype(np.uint8)
@@ -952,11 +932,12 @@ def worker(
                         traceback.print_exc()
                         stream.output_queue.push(('end', "img"))
                     return
-        
+                    
         # ----- keyframes trim when no start frame provided -----
         elif mode == "keyframes" and start_frame is None:
             N_actual = history_pixels.shape[2]
             debug(f"keyframe mode with no start frame: considering trimming {N_actual} frames")
+            
             # Use similar trim logic as text2video
             if latent_window_size == 3:
                 drop_n = int(N_actual * 0.75)
@@ -965,16 +946,14 @@ def worker(
                 drop_n = int(N_actual * 0.5)
                 debug(f"keyframe special trim for 4: dropping first {drop_n} frames of {N_actual}")
             else:
-                drop_n = math.floor(N_actual * trim_pct)  # Use trim_pct instead of hardcoded 0.2
-                # Ensure we keep at least 1 frame
-                drop_n = min(drop_n, N_actual - 1)
-                debug(f"keyframe normal trim: dropping first {drop_n} of {N_actual} (trim_pct={trim_pct:.2f})")
+                drop_n = math.floor(N_actual * 0.2)  # Default to 20% trim
+                debug(f"keyframe normal trim: dropping first {drop_n} of {N_actual}")
             
             history_pixels = history_pixels[:, :, drop_n:, :, :]
             N_after = history_pixels.shape[2]
             debug(f"Final video after trim for keyframe (no start frame), {N_after} frames left")
             
-            # Same handling for single frame case
+            # Handle case where trimming leaves just one frame
             if N_after == 1:
                 debug("After trimming keyframe video, only one frame remains - will save as image")
                 last_img_tensor = history_pixels[0, :, 0]
@@ -1008,14 +987,11 @@ def worker(
                 debug(f"[QUEUE] Queued event 'file' with data: {combined_filename}")
             elif not image_likely_saved:
                 debug(f"[FILE] Attempting to save final video to {output_filename}")
-                # After the final video is saved, call our compatibility fix function
                 try:
                     save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
-                    debug(f"[FILE] Video initially saved to {output_filename}: {os.path.exists(output_filename)}")
-                    
-                    # Apply compatibility fix (replaces the original file)
-                    fix_video_compatibility(output_filename, fps=30)
-                    
+                    debug(f"[FILE] Video successfully saved to {output_filename}: {os.path.exists(output_filename)}")
+                    make_mp4_faststart(output_filename)
+                    debug(f"[FILE] Faststart patch applied to {output_filename}: {os.path.exists(output_filename)}")
                     stream.output_queue.push(('file', output_filename))
                     debug(f"[QUEUE] Queued event 'file' with data: {output_filename}")
                 except Exception as e:
@@ -1060,10 +1036,9 @@ def worker(
 def process(
     mode, input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h,
     prompt, n_prompt, seed,
-    latent_window_size, segment_count,  
+    latent_window_size, segment_count,  # New parameters
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color,
     keyframe_weight,
-    # Add new parameters:
     input_video=None, extension_direction="Forward", extension_frames=8,
     frame_overlap=0, trim_pct=0.2, gaussian_blur_amount=0.0,
     llm_weight=1.0, clip_weight=1.0, clean_latent_weight=1.0
@@ -1071,6 +1046,18 @@ def process(
     global stream
     debug("process: called with mode", mode)
     assert mode in ['image2video', 'text2video', 'keyframes', 'video_extension'], "Invalid mode"
+    
+    # Map our new UI values to what the original worker expects
+    use_adv = True  # Always use advanced mode
+    adv_window = latent_window_size
+    
+    # Calculate frames per section (for selected_frames mapping)
+    frames_per_section = latent_window_size * 4 - 3
+    effective_frames = frames_per_section - min(frame_overlap, frames_per_section-1)
+    
+    # Map segment_count to appropriate parameter
+    adv_seconds = (segment_count * effective_frames) / 30.0
+    selected_frames = segment_count * effective_frames
     
     # Create initial empty progress bars HTML
     empty_progress = """
@@ -1177,8 +1164,7 @@ def process(
         prompt,
         n_prompt,
         seed,
-        latent_window_size,  # Passing directly now
-        segment_count,       # Instead of adv_seconds
+        use_adv, adv_window, adv_seconds, selected_frames,  # Feed mapped values to worker
         steps,
         cfg,
         gs,
@@ -1190,14 +1176,7 @@ def process(
         input_video,
         extension_direction,
         extension_frames,
-        original_mode,
-        # New parameters
-        frame_overlap,
-        trim_pct,
-        gaussian_blur_amount,
-        llm_weight,
-        clip_weight,
-        clean_latent_weight
+        original_mode
     )
     output_filename = None
     last_desc = ""
@@ -1580,20 +1559,31 @@ with block:
     # Add new function to update overlap slider maximum
     def update_overlap_slider(window_size):
         """Update maximum overlap based on window size"""
-        window_size_val = window_size.value if hasattr(window_size, 'value') else window_size
-        max_overlap = max(0, (window_size_val * 4 - 4))  # Ensures at least 1 frame per section
+        # Convert input to value if it's a Gradio component
+        window_size_val = window_size if not hasattr(window_size, 'value') else window_size.value
+        window_size_val = float(window_size_val)
+        
+        # Calculate max overlap
+        frames_per_section = int(window_size_val * 4 - 3)
+        max_overlap = max(0, frames_per_section - 1)
+        
         return gr.update(maximum=max_overlap)
     
     # Add function to calculate and display video stats
     def update_video_stats(window_size, segments, overlap):
         """Calculate and format video statistics based on current settings"""
-        # Extract the values safely
-        window_size_val = window_size if isinstance(window_size, (int, float)) else window_size.value
-        segments_val = segments if isinstance(segments, (int, float)) else segments.value
-        overlap_val = overlap if isinstance(overlap, (int, float)) else overlap.value
+        # Convert inputs to values if they're Gradio components
+        window_size_val = window_size if not hasattr(window_size, 'value') else window_size.value
+        segments_val = segments if not hasattr(segments, 'value') else segments.value
+        overlap_val = overlap if not hasattr(overlap, 'value') else overlap.value
+        
+        # Ensure we're working with numbers
+        window_size_val = float(window_size_val)
+        segments_val = float(segments_val)
+        overlap_val = float(overlap_val)
         
         # Calculate frames
-        frames_per_section = window_size_val * 4 - 3
+        frames_per_section = int(window_size_val * 4 - 3)
         max_overlap = max(0, frames_per_section - 1)
         actual_overlap = min(overlap_val, max_overlap)
         effective_frames = frames_per_section - actual_overlap
@@ -1610,11 +1600,11 @@ with block:
             <table>
                 <tr>
                     <td><b>Frames per segment:</b></td>
-                    <td>{effective_frames} frames</td>
+                    <td>{int(effective_frames)} frames</td>
                 </tr>
                 <tr>
                     <td><b>Total frames:</b></td>
-                    <td>{total_frames} frames</td>
+                    <td>{int(total_frames)} frames</td>
                 </tr>
                 <tr>
                     <td><b>Video length:</b></td>
