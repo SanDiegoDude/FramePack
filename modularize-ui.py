@@ -1256,7 +1256,6 @@ css = """
     transition: width 0.3s ease;
 }
 """
-
 block = gr.Blocks(css=css).queue()
 with block:
     gr.Markdown('# FramePack Playground by SCG')
@@ -1346,7 +1345,7 @@ with block:
                     minimum=0.0, 
                     maximum=5.0, 
                     value=1.0, 
-                    step=0.1,
+                    step=0.01,
                     info="0.0 to disable LLM encoder"
                 )
                 
@@ -1355,7 +1354,7 @@ with block:
                     minimum=0.0, 
                     maximum=5.0, 
                     value=1.0, 
-                    step=0.1,
+                    step=0.01,
                     info="0.0 to disable CLIP encoder"
                 )
                 
