@@ -33,7 +33,67 @@ def get_valid_frame_stops(latent_window_size, max_seconds=120, fps=30):
     max_sections = int((max_seconds * fps) // frames_per_section)
     stops = [frames_per_section * i for i in range(1, max_sections + 1)]
     return stops
-
+    
+def fix_video_compatibility(video_path, fps=30):
+    """Fix compatibility issues with MP4 videos for QuickTime and Windows Media Player."""
+    import os
+    import subprocess
+    
+    if not os.path.exists(video_path):
+        debug(f"[VIDEO FIX] Video not found: {video_path}")
+        return False
+    
+    # Create a temporary file path
+    temp_path = video_path + ".compatible.mp4"
+    
+    # Use ffmpeg to convert with proper settings
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-c:v", "libx264",           # Use H.264 codec
+        "-pix_fmt", "yuv420p",       # Use widely supported pixel format
+        "-crf", "23",                # Reasonable quality level (lower = better)
+        "-preset", "medium",         # Encoding speed/quality tradeoff
+        "-movflags", "+faststart",   # Enable faststart
+        "-metadata", f"encoder=FeatureScope",
+        temp_path
+    ]
+    
+    try:
+        debug(f"[VIDEO FIX] Running compatibility fix for {video_path}")
+        process = subprocess.run(
+            cmd, 
+            check=True, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE
+        )
+        
+        # Check if output file exists and has valid size
+        if os.path.exists(temp_path) and os.path.getsize(temp_path) > 1000:
+            # Replace original with compatible version
+            os.replace(temp_path, video_path)
+            debug(f"[VIDEO FIX] Successfully fixed compatibility for {video_path}")
+            return True
+        else:
+            debug(f"[VIDEO FIX] Failed to create valid output file")
+            return False
+            
+    except subprocess.CalledProcessError as e:
+        debug(f"[VIDEO FIX] FFMPEG error: {e}")
+        stderr = e.stderr.decode('utf-8') if e.stderr else "Unknown error"
+        debug(f"[VIDEO FIX] FFMPEG stderr: {stderr}")
+        return False
+    except Exception as e:
+        debug(f"[VIDEO FIX] Unexpected error: {e}")
+        return False
+    finally:
+        # Clean up temp file if it still exists
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+                
 def make_mp4_faststart(mp4_path):
     tmpfile = mp4_path + ".tmp"
     cmd = [
@@ -53,6 +113,83 @@ def make_mp4_faststart(mp4_path):
         if os.path.exists(tmpfile):
             os.remove(tmpfile)
 
+def apply_gaussian_blur(image_tensor, blur_amount):
+    """Apply gaussian blur to input tensor with specified amount (0.0-1.0)"""
+    if blur_amount <= 0.0:
+        return image_tensor
+    
+    # Try multiple methods to apply blur
+    try:
+        # Method 1: Try torchvision (most reliable)
+        import torchvision.transforms.functional as TF
+        
+        kernel_size = int(blur_amount * 20) + 1
+        kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
+        sigma = [blur_amount * 3.0]
+        
+        if len(image_tensor.shape) == 5:  # [B,C,T,H,W]
+            b, c, t, h, w = image_tensor.shape
+            result = torch.zeros_like(image_tensor)
+            
+            for bi in range(b):
+                for ti in range(t):
+                    frame = image_tensor[bi, :, ti]
+                    result[bi, :, ti] = TF.gaussian_blur(frame, kernel_size, sigma)
+            
+            return result
+        else:
+            return TF.gaussian_blur(image_tensor, kernel_size, sigma)
+            
+    except (ImportError, AttributeError, ModuleNotFoundError):
+        # Method 2: Use OpenCV as fallback
+        try:
+            import cv2
+            import numpy as np
+            
+            kernel_size = int(blur_amount * 20) + 1
+            kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
+            sigma = blur_amount * 3.0
+            
+            # We need to handle the numpy conversion
+            if len(image_tensor.shape) == 5:  # [B,C,T,H,W]
+                b, c, t, h, w = image_tensor.shape
+                result = torch.zeros_like(image_tensor)
+                
+                for bi in range(b):
+                    for ti in range(t):
+                        # Get frame, convert to numpy, apply blur, convert back
+                        frame = image_tensor[bi, :, ti].cpu().numpy()  # C,H,W
+                        
+                        # OpenCV expects HWC format
+                        frame = np.transpose(frame, (1, 2, 0))  # H,W,C
+                        
+                        # Apply blur (make sure kernel size is odd)
+                        blurred = cv2.GaussianBlur(frame, (kernel_size, kernel_size), sigma)
+                        
+                        # Convert back to tensor format CHW
+                        blurred = np.transpose(blurred, (2, 0, 1))  # C,H,W
+                        result[bi, :, ti] = torch.from_numpy(blurred).to(image_tensor.device)
+                
+                return result
+            else:
+                # Assume BCHW
+                b, c, h, w = image_tensor.shape
+                result = torch.zeros_like(image_tensor)
+                
+                for bi in range(b):
+                    frame = image_tensor[bi].cpu().numpy()  # C,H,W
+                    frame = np.transpose(frame, (1, 2, 0))  # H,W,C
+                    blurred = cv2.GaussianBlur(frame, (kernel_size, kernel_size), sigma)
+                    blurred = np.transpose(blurred, (2, 0, 1))  # C,H,W
+                    result[bi] = torch.from_numpy(blurred).to(image_tensor.device)
+                
+                return result
+        
+        except (ImportError, AttributeError, ModuleNotFoundError):
+            debug("WARNING: Could not apply blur - no suitable method found. Returning original image.")
+            return image_tensor
+
+# ---- CLI Debug Output ----
 DEBUG = True
 def debug(*a, **k):
     if DEBUG:
@@ -184,7 +321,8 @@ def parse_hex_color(hexcode):
     return 0.5, 0.5, 0.5
 
 # ---- Worker Utility Split ----
-def prepare_inputs(input_image, prompt, n_prompt, cfg):
+def prepare_inputs(input_image, prompt, n_prompt, cfg, gaussian_blur_amount=0.0, 
+                   llm_weight=1.0, clip_weight=1.0):
     if input_image is None:
         raise ValueError(
             "No input image provided! For text2video, a blank will be created in worker -- "
@@ -205,11 +343,24 @@ def prepare_inputs(input_image, prompt, n_prompt, cfg):
         llama_vec_n, clip_pool_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
     llama_vec, mask = crop_or_pad_yield_mask(llama_vec, 512)
     llama_vec_n, mask_n = crop_or_pad_yield_mask(llama_vec_n, 512)
+
+    # Apply encoder weights
+    if llm_weight != 1.0:
+        llama_vec = llama_vec * llm_weight
+        llama_vec_n = llama_vec_n * llm_weight
+    
+    if clip_weight != 1.0:
+        clip_pool = clip_pool * clip_weight
+        clip_pool_n = clip_pool_n * clip_weight
+        
     h, w = find_nearest_bucket(H, W, resolution=640)
     input_np = resize_and_center_crop(input_image, target_width=w, target_height=h)
     Image.fromarray(input_np).save(os.path.join(outputs_folder, f'{generate_timestamp()}.png'))
     input_tensor = torch.from_numpy(input_np).float() / 127.5 - 1
     input_tensor = input_tensor.permute(2, 0, 1)[None, :, None]
+    # Apply gaussian blur if needed
+    if gaussian_blur_amount > 0.0:
+        input_tensor = apply_gaussian_blur(input_tensor, gaussian_blur_amount)
     return input_np, input_tensor, llama_vec, clip_pool, llama_vec_n, clip_pool_n, mask, mask_n, h, w
 
 def get_dims_from_aspect(aspect, custom_w, custom_h):
@@ -235,6 +386,7 @@ def get_dims_from_aspect(aspect, custom_w, custom_h):
     return width, height
     
 
+# ---- WORKER ----
 # ---- WORKER ----
 @torch.no_grad()
 def worker(
@@ -884,15 +1036,28 @@ def worker(
 def process(
     mode, input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h,
     prompt, n_prompt, seed,
-    use_adv, adv_window, adv_seconds, selected_frames,
+    latent_window_size, segment_count,  # New parameters
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color,
     keyframe_weight,
-    # Add new parameters here:
-    input_video=None, extension_direction="Forward", extension_frames=8
+    input_video=None, extension_direction="Forward", extension_frames=8,
+    frame_overlap=0, trim_pct=0.2, gaussian_blur_amount=0.0,
+    llm_weight=1.0, clip_weight=1.0, clean_latent_weight=1.0
 ):
     global stream
     debug("process: called with mode", mode)
     assert mode in ['image2video', 'text2video', 'keyframes', 'video_extension'], "Invalid mode"
+    
+    # Map our new UI values to what the original worker expects
+    use_adv = True  # Always use advanced mode
+    adv_window = latent_window_size
+    
+    # Calculate frames per section (for selected_frames mapping)
+    frames_per_section = latent_window_size * 4 - 3
+    effective_frames = frames_per_section - min(frame_overlap, frames_per_section-1)
+    
+    # Map segment_count to appropriate parameter
+    adv_seconds = (segment_count * effective_frames) / 30.0
+    selected_frames = segment_count * effective_frames
     
     # Create initial empty progress bars HTML
     empty_progress = """
@@ -999,7 +1164,7 @@ def process(
         prompt,
         n_prompt,
         seed,
-        use_adv, adv_window, adv_seconds, selected_frames,
+        use_adv, adv_window, adv_seconds, selected_frames,  # Feed mapped values to worker
         steps,
         cfg,
         gs,
@@ -1011,7 +1176,7 @@ def process(
         input_video,
         extension_direction,
         extension_frames,
-        original_mode 
+        original_mode
     )
     output_filename = None
     last_desc = ""
@@ -1125,7 +1290,26 @@ css = """
     margin-bottom: 16px;
     background: #222 !important;
 }
+/* Image and Video Container Styling */
+.input-image-container img {
+    max-height: 512px !important;
+    width: auto !important;
+    object-fit: contain !important;
+}
 
+.keyframe-image-container img {
+    max-height: 320px !important;
+    width: auto !important;
+    object-fit: contain !important;
+}
+
+.result-container img, .result-container video {
+    max-height: 512px !important;
+    width: auto !important;
+    object-fit: contain !important;
+    margin: 0 auto !important;
+    display: block !important;
+}
 /* Progress Bar Styling */
 .dual-progress-container {
     background: #222;
@@ -1156,11 +1340,51 @@ css = """
     border-radius: 4px;
     transition: width 0.3s ease;
 }
+
+.stats-box {
+    background: #333;
+    border: 2px solid orange;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 16px;
+}
+
+.stats-box table {
+    width: 100%;
+}
+
+.stats-box td {
+    padding: 4px 8px;
+}
+
+.stats-box td:first-child {
+    width: 40%;
+}
+
+.stats-box {
+    background: #222;
+    border: 2px solid orange;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 16px;
+}
+
+.stats-box table {
+    width: 100%;
+}
+
+.stats-box td {
+    padding: 4px 8px;
+}
+
+.stats-box td:first-child {
+    width: 40%;
+}
 """
 
 block = gr.Blocks(css=css).queue()
 with block:
-    gr.Markdown('# FramePack')
+    gr.Markdown('# FramePack Advanced Playground by SCG')
     with gr.Row():
         with gr.Column(scale=2):
             mode_selector = gr.Radio(
@@ -1168,13 +1392,20 @@ with block:
                 value="image2video", 
                 label="Mode"
             )
-            input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)  # always present, sometimes hidden
-            start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)", height=320, visible=False)
-            end_frame = gr.Image(sources='upload', type="numpy", label="End Frame (Required)", height=320, visible=False)
+            with gr.Row():
+                start_button = gr.Button(value="Start Generation")
+                end_button = gr.Button(value="End Generation", interactive=False)
+            input_image = gr.Image(sources='upload', type="numpy", label="Image", elem_classes="input-image-container")  # always present, sometimes hidden
+            start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)", elem_classes="keyframe-image-container", visible=False)
+            with gr.Group(visible=False) as keyframes_options:
+                    keyframe_weight = gr.Slider(label="Start Frame Influence", minimum=0.0, maximum=1.0, value=0.7, step=0.1, info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)")
+            end_frame = gr.Image(sources='upload', type="numpy", label="End Frame (Required)", elem_classes="keyframe-image-container", visible=False)
             with gr.Group(visible=False) as video_extension_options:
                 input_video = gr.Video(
                     label="Upload Video to Extend", 
-                    format="mp4"
+                    format="mp4",
+                    height=320,
+                    elem_classes="video-container"
                 )
                 extension_direction = gr.Radio(
                     ["Forward", "Backward"], 
@@ -1186,7 +1417,7 @@ with block:
                     label="Context Frames", 
                     minimum=1, 
                     maximum=16, 
-                    value=8, 
+                    value=0, 
                     step=1,
                     info="Number of frames to extract from video for continuity"
                 )
@@ -1199,47 +1430,119 @@ with block:
             custom_w = gr.Number(label="Width", value=768, visible=False)
             custom_h = gr.Number(label="Height", value=768, visible=False)
             prompt = gr.Textbox(label="Prompt", value='', lines=3)
-            with gr.Row():
-                start_button = gr.Button(value="Start Generation")
-                end_button = gr.Button(value="End Generation", interactive=False)
-            advanced_mode = gr.Checkbox(label="Advanced Mode", value=False)
-            latent_window_size = gr.Slider(label="Latent Window Size", minimum=2, maximum=33, value=9, step=1, visible=False)
-            adv_seconds = gr.Slider(label="Video Length (Seconds)", minimum=0.1, maximum=120.0, value=5.0, step=0.1, visible=False)
-            total_frames_dropdown = gr.Dropdown(
-                label="Output Video Frames",
-                choices=[str(x) for x in get_valid_frame_stops(9)],
-                value=str(get_valid_frame_stops(9)[0]),
-                visible=True
+            with gr.Accordion("Negative Prompt", open=False):
+                n_prompt = gr.Textbox(
+                    label="Negative Prompt - Requires CFG higher than 1.0 to take effect", 
+                    value="", 
+                    lines=2
+                )
+            
+            # Realtime calculation display
+            video_stats = gr.HTML(
+                value="<div class='stats-box'>Estimated video length: calculating...</div>",
+                label="Approximate Output Length"
+            )
+            
+            latent_window_size = gr.Slider(
+                label="Latent Window Size", 
+                minimum=2, 
+                maximum=33, 
+                value=9, 
+                step=1
+            )
+            
+            segment_count = gr.Slider(
+                label="Number of Segments", 
+                minimum=1, 
+                maximum=50, 
+                value=5, 
+                step=1,
+                info="More segments = longer video"
+            )
+            
+            overlap_slider = gr.Slider(
+                label="Frame Overlap",
+                minimum=0,
+                maximum=33,
+                value=8,
+                step=1,
+                info="Controls how many frames overlap between sections"
+            )
+            
+            trim_percentage = gr.Slider(
+                label="Segment Trim Percentage",
+                minimum=0.0,
+                maximum=1.0,
+                value=0.2,
+                step=0.01,
+                info="Percentage of frames to trim (0.0 = keep all, 1.0 = maximum trim)"
+            )
+            
+            # -- Add encoder weight controls --
+            with gr.Accordion("Advanced Model Parameters", open=False):
+                llm_encoder_weight = gr.Slider(
+                    label="LLM Encoder Weight", 
+                    minimum=0.0, 
+                    maximum=5.0, 
+                    value=1.0, 
+                    step=0.1,
+                    info="0.0 to disable LLM encoder"
+                )
+                
+                clip_encoder_weight = gr.Slider(
+                    label="CLIP Encoder Weight", 
+                    minimum=0.0, 
+                    maximum=5.0, 
+                    value=1.0, 
+                    step=0.1,
+                    info="0.0 to disable CLIP encoder"
+                )
+                
+                clean_latent_weight = gr.Slider(
+                    label="Clean Latent Weight", 
+                    minimum=0.0, 
+                    maximum=2.0, 
+                    value=1.0, 
+                    step=0.01,
+                    info="Controls influence of anchor/initial frame"
+                )
+                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, info="Must be >1.0 for negative prompts to work")
+                gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01)
+                rs = gr.Slider(
+                    label="CFG Re-Scale", 
+                    minimum=0.0, 
+                    maximum=1.0, 
+                    value=0.0, 
+                    step=0.01
+                )
+            
+            # -- Add Gaussian blur control --
+            gaussian_blur = gr.Slider(
+                label="Gaussian Blur", 
+                minimum=0.0, 
+                maximum=1.0, 
+                value=0.0, 
+                step=0.01, 
+                visible=False,
+                info="Apply blur to input images before processing"
             )
             init_color = gr.ColorPicker(label="Initial Frame Color", value="#808080", visible=False)
             with gr.Group():
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
-                n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
                 seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
                 lock_seed = gr.Checkbox(label="Lock Seed", value=False)
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
-                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, visible=False)
-                gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01)
-                rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False)
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
         with gr.Column(scale=2):
             progress_bar = gr.HTML(visible=False)  # Start hidden
             progress_desc = gr.Markdown(visible=False)
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
-            result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
-            result_image_html = gr.Image(label='Single Frame Image', visible=False)
+            result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, elem_classes="result-container", loop=True)
+            result_image_html = gr.Image(label='Single Frame Image', elem_classes="result-container", visible=False)
             gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
-            with gr.Group(visible=False) as keyframes_options:
-                keyframe_weight = gr.Slider(
-                    label="Start Frame Influence", 
-                    minimum=0.0, 
-                    maximum=1.0, 
-                    value=0.7, 
-                    step=0.1,
-                    info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)"
-                )
+           
 
             
 
@@ -1251,57 +1554,159 @@ with block:
             return gr.update(choices=[str(x) for x in stops], value=str(stops[0]))
         else:
             return gr.update(choices=[''], value='')
-    def show_hide_advanced(show, window):
-        lw_vis = gr.update(visible=show)
-        secs_vis = gr.update(visible=show)
-        dropdown_vis = gr.update(visible=not show)
-        if not show:
-            dropdown_update = update_frame_dropdown(window)
-            dropdown_update["visible"] = True
-            return lw_vis, secs_vis, dropdown_update
-        else:
-            return lw_vis, secs_vis, dropdown_vis
+
+
+    # Add new function to update overlap slider maximum
+    def update_overlap_slider(window_size):
+        """Update maximum overlap based on window size"""
+        # Convert input to value if it's a Gradio component
+        window_size_val = window_size if not hasattr(window_size, 'value') else window_size.value
+        window_size_val = float(window_size_val)
+        
+        # Calculate max overlap
+        frames_per_section = int(window_size_val * 4 - 3)
+        max_overlap = max(0, frames_per_section - 1)
+        
+        return gr.update(maximum=max_overlap)
+    
+    # Add function to calculate and display video stats
+    def update_video_stats(window_size, segments, overlap):
+        """Calculate and format video statistics based on current settings"""
+        # Convert inputs to values if they're Gradio components
+        window_size_val = window_size if not hasattr(window_size, 'value') else window_size.value
+        segments_val = segments if not hasattr(segments, 'value') else segments.value
+        overlap_val = overlap if not hasattr(overlap, 'value') else overlap.value
+        
+        # Ensure we're working with numbers
+        window_size_val = float(window_size_val)
+        segments_val = float(segments_val)
+        overlap_val = float(overlap_val)
+        
+        # Calculate frames
+        frames_per_section = int(window_size_val * 4 - 3)
+        max_overlap = max(0, frames_per_section - 1)
+        actual_overlap = min(overlap_val, max_overlap)
+        effective_frames = frames_per_section - actual_overlap
+        total_frames = segments_val * effective_frames
+        
+        # Calculate time (at 30fps)
+        seconds = total_frames / 30.0
+        minutes = int(seconds // 60)
+        remaining_seconds = seconds % 60
+        
+        # Format the output
+        stats_html = f"""
+        <div class="stats-box">
+            <table>
+                <tr>
+                    <td><b>Frames per segment:</b></td>
+                    <td>{int(effective_frames)} frames</td>
+                </tr>
+                <tr>
+                    <td><b>Total frames:</b></td>
+                    <td>{int(total_frames)} frames</td>
+                </tr>
+                <tr>
+                    <td><b>Video length:</b></td>
+                    <td>{minutes}m {remaining_seconds:.1f}s (at 30fps)</td>
+                </tr>
+            </table>
+        </div>
+        """
+        return stats_html
+    
+    # Connect callbacks
+    latent_window_size.change(
+        update_overlap_slider,
+        inputs=[latent_window_size],
+        outputs=[overlap_slider]
+    )
+    
+    latent_window_size.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
+    )
+    
+    segment_count.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
+    )
+    
+    overlap_slider.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
+    )
+        
     def switch_mode(mode):
+        is_img2vid = mode == "image2video"
+        is_txt2vid = mode == "text2video"
+        is_keyframes = mode == "keyframes"
+        is_video_ext = mode == "video_extension"
+        
+        # Show blur for img2vid, keyframes, and extend video
+        show_blur = is_img2vid or is_keyframes or is_video_ext
+        
         return (
-            gr.update(visible=mode == "image2video"),  # input_image
-            gr.update(visible=(mode == "keyframes")),  # start_frame
-            gr.update(visible=(mode == "keyframes")),  # end_frame
-            gr.update(visible=(mode == "text2video")),  # aspect_selector
-            gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_w
-            gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_h
-            gr.update(visible=(mode == "keyframes")),  # keyframes_options
-            gr.update(visible=(mode == "video_extension"))  # video_extension_options
+            gr.update(visible=is_img2vid),  # input_image
+            gr.update(visible=is_keyframes),  # start_frame
+            gr.update(visible=is_keyframes),  # end_frame
+            gr.update(visible=is_txt2vid),  # aspect_selector
+            gr.update(visible=(is_txt2vid and aspect_selector.value == "Custom...")),  # custom_w
+            gr.update(visible=(is_txt2vid and aspect_selector.value == "Custom...")),  # custom_h
+            gr.update(visible=is_keyframes),  # keyframes_options
+            gr.update(visible=is_video_ext),  # video_extension_options
+            gr.update(visible=show_blur)  # gaussian_blur
         )
     def show_custom(aspect):
         show = aspect == "Custom..."
         return gr.update(visible=show), gr.update(visible=show)
-    advanced_mode.change(
-        show_hide_advanced,
-        inputs=[advanced_mode, latent_window_size],
-        outputs=[latent_window_size, adv_seconds, total_frames_dropdown],
-    )
+    
+    
     latent_window_size.change(
-        lambda window, adv: update_frame_dropdown(window) if not adv else gr.update(),
-        inputs=[latent_window_size, advanced_mode],
-        outputs=[total_frames_dropdown],
+        update_overlap_slider,
+        inputs=[latent_window_size],
+        outputs=[overlap_slider]
+    )
+    
+    latent_window_size.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
+    )
+    
+    segment_count.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
+    )
+    
+    overlap_slider.change(
+        update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
     )
     mode_selector.change(
         switch_mode,
         inputs=[mode_selector],
         outputs=[
-            input_image, 
-            start_frame, 
-            end_frame, 
-            aspect_selector, 
-            custom_w, 
-            custom_h, 
+            input_image,
+            start_frame,
+            end_frame,
+            aspect_selector,
+            custom_w,
+            custom_h,
             keyframes_options,
-            video_extension_options  # Add this new output component
+            video_extension_options,
+            gaussian_blur  # Add this output
         ]
     )
     def show_init_color(mode):
         return gr.update(visible=(mode == "text2video"))
-    
+
+        
     mode_selector.change(
         show_init_color,
         inputs=[mode_selector],
@@ -1314,19 +1719,19 @@ with block:
     )
     ips = [
         mode_selector,
-        input_image,    # For im2vid/txt2vid
-        start_frame,    # For keyframes (optional)
-        end_frame,      # For keyframes (required)
+        input_image,
+        start_frame,
+        end_frame,
         aspect_selector,
         custom_w,
         custom_h,
         prompt,
         n_prompt,
         seed,
-        advanced_mode,
+        # No advanced_mode
         latent_window_size,
-        adv_seconds,
-        total_frames_dropdown,
+        segment_count,  # Replace adv_seconds
+        # No total_frames_dropdown
         steps,
         cfg,
         gs,
@@ -1339,6 +1744,13 @@ with block:
         input_video,
         extension_direction,
         extension_frames,
+        # Add new parameters:
+        overlap_slider,
+        trim_percentage,
+        gaussian_blur,
+        llm_encoder_weight,
+        clip_encoder_weight,
+        clean_latent_weight,
     ]
     prompt.submit(
         fn=process,
