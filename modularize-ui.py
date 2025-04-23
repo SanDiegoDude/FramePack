@@ -391,12 +391,12 @@ def get_dims_from_aspect(aspect, custom_w, custom_h):
 def worker(
     mode, input_image, start_frame, end_frame, aspect, custom_w, custom_h,
     prompt, n_prompt, seed,
-    latent_window_size, segment_count,  # Simplified params
+    latent_window_size, segment_count,  # Changed from use_adv, adv_window, adv_seconds, selected_frames
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
     init_color, keyframe_weight,
     input_video=None, extension_direction="Forward", extension_frames=8,
     original_mode=None,
-    # New parameters:
+    # Add new parameters:
     frame_overlap=0, trim_pct=0.2, gaussian_blur_amount=0.0,
     llm_weight=1.0, clip_weight=1.0, clean_latent_weight=1.0
 ):
@@ -406,26 +406,21 @@ def worker(
     output_filename = os.path.join(outputs_folder, f'{job_id}_final.mp4')
     debug(f"worker: Default output filename set to: {output_filename}")
     
-    # --- NEW SIMPLIFIED SECTION/FRAMES LOGIC ---
-    # Calculate core parameters
+    # -- section/frames logic - SIMPLIFIED
     frames_per_section = latent_window_size * 4 - 3
-    
-    # Handle overlap
-    max_overlap = max(0, frames_per_section - 1)
-    actual_overlap = min(frame_overlap, max_overlap)
-    
-    # Calculate frames
-    effective_frames = frames_per_section
     total_sections = segment_count
-    total_frames = effective_frames * total_sections
+    total_frames = frames_per_section * total_sections
     
-    debug(f"worker: Using latent_window_size={latent_window_size} "
-          f"| frames_per_section={frames_per_section} | overlap={actual_overlap} "
-          f"| segments={segment_count} | total_frames={total_frames}")
+    # Handle overlap, but don't modify frames_per_section
+    max_overlap = max(0, frames_per_section - 1)
+    actual_overlap = 0 if total_sections <= 1 else min(frame_overlap, max_overlap)
+    
+    debug(f"worker: Using latent_window_size={latent_window_size} | frames_per_section={frames_per_section} "
+          f"| overlap={actual_overlap} | segments={segment_count} | total_frames={total_frames}")
     
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
     debug("worker: pushed progress event 'Starting ...'")
-    
+
     try:
         t_start = time.time()
 
@@ -764,19 +759,16 @@ def worker(
                 generated_latents = torch.cat([start_latent.to(generated_latents.device, dtype=generated_latents.dtype), generated_latents], dim=2)
                 debug(f"worker: is_last_section => concatenated latent, new shape: {generated_latents.shape}")
 
-            # Apply overlap trimming only if:
-            # 1. We have overlap
-            # 2. This isn't the first iteration (nothing to overlap with yet)
-            # 3. We have enough frames to trim
+            # Update latent frame count (Tracks only newly added frames)
+            new_latent_frames = generated_latents.shape[2]
+            # After generation, but before concatenation with history:
             if actual_overlap > 0 and not is_first_iteration and generated_latents.shape[2] > actual_overlap:
-                debug(f"Applying overlap: trimming first {actual_overlap} frames of {generated_latents.shape[2]} generated_latents")
-                generated_latents = generated_latents[:, :, actual_overlap:, :, :]
+                # Only trim if we have enough frames to trim and this isn't the first section
+                debug(f"Applying overlap: skipping first {actual_overlap} frames of {generated_latents.shape[2]} generated_latents")
+                trim_end = generated_latents.shape[2]  # Keep all frames except overlap
+                generated_latents = generated_latents[:, :, actual_overlap:trim_end, :, :]
             else:
-                debug(f"Not applying overlap (first section or not enough frames)")
-            
-            # Update history latents (CPU tensor)
-            history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
-            debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
+                debug(f"Not applying overlap - first section or not enough frames ({generated_latents.shape[2]})")
             
             # Then concatenate
             history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
@@ -828,9 +820,9 @@ def worker(
                     history_pixels = current_pixels
                     debug(f"First section: Set history_pixels directly with shape: {history_pixels.shape}")
                 else:
-                    # No need to apply overlap trimming here - we already did it at the latent level
+                    # Just concatenate - we already handled overlap at the latent level
                     history_pixels = torch.cat([current_pixels, history_pixels], dim=2)
-                    debug(f"Concatenated new frames. New history shape: {history_pixels.shape}")
+                    debug(f"Concatenated frames. New history shape: {history_pixels.shape}")
                 
                 # === RESTORE PREVIEW VIDEO FUNCTIONALITY ===
                 # Save preview for progress updates
@@ -1185,8 +1177,8 @@ def process(
         prompt,
         n_prompt,
         seed,
-        latent_window_size,  # Pass latent_window_size directly
-        segment_count,       # Pass segment_count
+        latent_window_size,  # Passing directly now
+        segment_count,       # Instead of adv_seconds
         steps,
         cfg,
         gs,
@@ -1199,7 +1191,7 @@ def process(
         extension_direction,
         extension_frames,
         original_mode,
-        # Add new parameters
+        # New parameters
         frame_overlap,
         trim_pct,
         gaussian_blur_amount,
@@ -1595,10 +1587,10 @@ with block:
     # Add function to calculate and display video stats
     def update_video_stats(window_size, segments, overlap):
         """Calculate and format video statistics based on current settings"""
-        # Get numeric values from sliders
-        window_size_val = window_size.value if hasattr(window_size, 'value') else window_size
-        segments_val = segments.value if hasattr(segments, 'value') else segments
-        overlap_val = overlap.value if hasattr(overlap, 'value') else overlap
+        # Extract the values safely
+        window_size_val = window_size if isinstance(window_size, (int, float)) else window_size.value
+        segments_val = segments if isinstance(segments, (int, float)) else segments.value
+        overlap_val = overlap if isinstance(overlap, (int, float)) else overlap.value
         
         # Calculate frames
         frames_per_section = window_size_val * 4 - 3
