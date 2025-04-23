@@ -1588,23 +1588,24 @@ with block:
     # Add new function to update overlap slider maximum
     def update_overlap_slider(window_size):
         """Update maximum overlap based on window size"""
-        max_overlap = max(0, (window_size * 4 - 4))  # Ensures at least 1 frame per section
+        window_size_val = window_size.value if hasattr(window_size, 'value') else window_size
+        max_overlap = max(0, (window_size_val * 4 - 4))  # Ensures at least 1 frame per section
         return gr.update(maximum=max_overlap)
     
     # Add function to calculate and display video stats
     def update_video_stats(window_size, segments, overlap):
-        """Calculate and display video statistics"""
-        # Calculate core parameters
-        frames_per_section = latent_window_size * 4 - 3
+        """Calculate and format video statistics based on current settings"""
+        # Get numeric values from sliders
+        window_size_val = window_size.value if hasattr(window_size, 'value') else window_size
+        segments_val = segments.value if hasattr(segments, 'value') else segments
+        overlap_val = overlap.value if hasattr(overlap, 'value') else overlap
         
-        # Handle overlap
+        # Calculate frames
+        frames_per_section = window_size_val * 4 - 3
         max_overlap = max(0, frames_per_section - 1)
-        actual_overlap = min(frame_overlap, max_overlap)
-        
-        # Calculate frames 
-        effective_frames = frames_per_section - actual_overlap  
-        total_sections = segment_count
-        total_frames = effective_frames * total_sections
+        actual_overlap = min(overlap_val, max_overlap)
+        effective_frames = frames_per_section - actual_overlap
+        total_frames = segments_val * effective_frames
         
         # Calculate time (at 30fps)
         seconds = total_frames / 30.0
