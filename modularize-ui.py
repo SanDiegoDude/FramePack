@@ -33,7 +33,67 @@ def get_valid_frame_stops(latent_window_size, max_seconds=120, fps=30):
     max_sections = int((max_seconds * fps) // frames_per_section)
     stops = [frames_per_section * i for i in range(1, max_sections + 1)]
     return stops
-
+    
+def fix_video_compatibility(video_path, fps=30):
+    """Fix compatibility issues with MP4 videos for QuickTime and Windows Media Player."""
+    import os
+    import subprocess
+    
+    if not os.path.exists(video_path):
+        debug(f"[VIDEO FIX] Video not found: {video_path}")
+        return False
+    
+    # Create a temporary file path
+    temp_path = video_path + ".compatible.mp4"
+    
+    # Use ffmpeg to convert with proper settings
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-c:v", "libx264",           # Use H.264 codec
+        "-pix_fmt", "yuv420p",       # Use widely supported pixel format
+        "-crf", "23",                # Reasonable quality level (lower = better)
+        "-preset", "medium",         # Encoding speed/quality tradeoff
+        "-movflags", "+faststart",   # Enable faststart
+        "-metadata", f"encoder=FeatureScope",
+        temp_path
+    ]
+    
+    try:
+        debug(f"[VIDEO FIX] Running compatibility fix for {video_path}")
+        process = subprocess.run(
+            cmd, 
+            check=True, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE
+        )
+        
+        # Check if output file exists and has valid size
+        if os.path.exists(temp_path) and os.path.getsize(temp_path) > 1000:
+            # Replace original with compatible version
+            os.replace(temp_path, video_path)
+            debug(f"[VIDEO FIX] Successfully fixed compatibility for {video_path}")
+            return True
+        else:
+            debug(f"[VIDEO FIX] Failed to create valid output file")
+            return False
+            
+    except subprocess.CalledProcessError as e:
+        debug(f"[VIDEO FIX] FFMPEG error: {e}")
+        stderr = e.stderr.decode('utf-8') if e.stderr else "Unknown error"
+        debug(f"[VIDEO FIX] FFMPEG stderr: {stderr}")
+        return False
+    except Exception as e:
+        debug(f"[VIDEO FIX] Unexpected error: {e}")
+        return False
+    finally:
+        # Clean up temp file if it still exists
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+                
 def make_mp4_faststart(mp4_path):
     tmpfile = mp4_path + ".tmp"
     cmd = [
@@ -962,11 +1022,14 @@ def worker(
                 debug(f"[QUEUE] Queued event 'file' with data: {combined_filename}")
             elif not image_likely_saved:
                 debug(f"[FILE] Attempting to save final video to {output_filename}")
+                # After the final video is saved, call our compatibility fix function
                 try:
                     save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
-                    debug(f"[FILE] Video successfully saved to {output_filename}: {os.path.exists(output_filename)}")
-                    make_mp4_faststart(output_filename)
-                    debug(f"[FILE] Faststart patch applied to {output_filename}: {os.path.exists(output_filename)}")
+                    debug(f"[FILE] Video initially saved to {output_filename}: {os.path.exists(output_filename)}")
+                    
+                    # Apply compatibility fix (replaces the original file)
+                    fix_video_compatibility(output_filename, fps=30)
+                    
                     stream.output_queue.push(('file', output_filename))
                     debug(f"[QUEUE] Queued event 'file' with data: {output_filename}")
                 except Exception as e:
