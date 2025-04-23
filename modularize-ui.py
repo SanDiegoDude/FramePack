@@ -1366,20 +1366,13 @@ with block:
             )
             init_color = gr.ColorPicker(label="Initial Frame Color", value="#808080", visible=False)
             with gr.Group():
-                 with gr.Group(visible=False) as keyframes_options:
-                    keyframe_weight = gr.Slider(
-                        label="Start Frame Influence", 
-                        minimum=0.0, 
-                        maximum=1.0, 
-                        value=0.7, 
-                        step=0.1,
-                        info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)"
-                    )
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
                 seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
                 lock_seed = gr.Checkbox(label="Lock Seed", value=False)
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
+                with gr.Group(visible=False) as keyframes_options:
+                    keyframe_weight = gr.Slider(label="Start Frame Influence", minimum=0.0, maximum=1.0, value=0.7, step=0.1, info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)")
         with gr.Column(scale=2):
             progress_bar = gr.HTML(visible=False)  # Start hidden
             progress_desc = gr.Markdown(visible=False)
