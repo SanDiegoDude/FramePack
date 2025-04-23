@@ -1256,9 +1256,10 @@ css = """
     transition: width 0.3s ease;
 }
 """
+
 block = gr.Blocks(css=css).queue()
 with block:
-    gr.Markdown('# FramePack Playground by SCG')
+    gr.Markdown('# FramePack')
     with gr.Row():
         with gr.Column(scale=2):
             mode_selector = gr.Radio(
@@ -1323,7 +1324,7 @@ with block:
                 label="Frame Overlap", 
                 minimum=0, 
                 maximum=33, 
-                value=8, 
+                value=0, 
                 step=1, 
                 visible=False,
                 info="Controls how many frames overlap between sections"
