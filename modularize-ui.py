@@ -299,18 +299,24 @@ def worker(
     # -- section/frames logic
     if use_adv:
         latent_window_size = adv_window
-        frames_per_section = latent_window_size * 4 - 3
+        max_overlap = latent_window_size * 4 - 3
+        actual_overlap = min(frame_overlap, max_overlap)
+        frames_per_section = latent_window_size * 4 - 3 - actual_overlap
         total_frames = int(round(adv_seconds * 30))
         total_sections = math.ceil(total_frames / frames_per_section)
         debug(f"worker: Advanced mode | latent_window_size={latent_window_size} "
-              f"| frames_per_section={frames_per_section} | total_frames={total_frames} | total_sections={total_sections}")
+              f"| overlap={actual_overlap} | frames_per_section={frames_per_section} "
+              f"| total_frames={total_frames} | total_sections={total_sections}")
     else:
         latent_window_size = 9
-        frames_per_section = latent_window_size * 4 - 3
+        max_overlap = latent_window_size * 4 - 3
+        actual_overlap = min(frame_overlap, max_overlap)
+        frames_per_section = latent_window_size * 4 - 3 - actual_overlap
         total_frames = int(selected_frames)
         total_sections = total_frames // frames_per_section
-        debug(f"worker: Simple mode | latent_window_size=9 | frames_per_section=33 | "
-              f"total_frames={total_frames} | total_sections={total_sections}")
+        debug(f"worker: Simple mode | latent_window_size=9 | overlap={actual_overlap} "
+              f"| frames_per_section={frames_per_section} | total_frames={total_frames} "
+              f"| total_sections={total_sections}")
 
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
     debug("worker: pushed progress event 'Starting ...'")
@@ -1397,15 +1403,22 @@ with block:
         else:
             return lw_vis, secs_vis, dropdown_vis, overlap_update, trim_vis
     def switch_mode(mode):
+        is_img2vid = mode == "image2video"
+        is_txt2vid = mode == "text2video"
+        is_keyframes = mode == "keyframes"
+        is_video_ext = mode == "video_extension"
+        
+        # Show blur for img2vid, keyframes, and extend video
+        show_blur = is_img2vid or is_keyframes or is_video_ext
+        
         return (
-            gr.update(visible=mode == "image2video"),  # input_image
-            gr.update(visible=(mode == "keyframes")),  # start_frame
-            gr.update(visible=(mode == "keyframes")),  # end_frame
-            gr.update(visible=(mode == "text2video")),  # aspect_selector
-            gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_w
-            gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_h
-            gr.update(visible=(mode == "keyframes")),  # keyframes_options
-            gr.update(visible=(mode == "video_extension")),  # video_extension_options
+            gr.update(visible=is_img2vid),  # input_image
+            gr.update(visible=is_keyframes),  # start_frame
+            gr.update(visible=is_keyframes),  # end_frame
+            gr.update(visible=is_txt2vid),  # aspect_selector
+            gr.update(visible=(is_txt2vid and aspect_selector.value == "Custom...")),  # custom_w
+            gr.update(visible=(is_txt2vid and aspect_selector.value == "Custom...")),  # custom_h
+            gr.update(visible=is_keyframes),  # keyframes_options
             gr.update(visible=is_video_ext),  # video_extension_options
             gr.update(visible=show_blur)  # gaussian_blur
         )
@@ -1415,7 +1428,7 @@ with block:
     advanced_mode.change(
         show_hide_advanced,
         inputs=[advanced_mode, latent_window_size],
-        outputs=[latent_window_size, adv_seconds, total_frames_dropdown],
+        outputs=[latent_window_size, adv_seconds, total_frames_dropdown, overlap_slider, trim_percentage],
     )
     latent_window_size.change(
         lambda window, adv: update_frame_dropdown(window) if not adv else gr.update(),
@@ -1426,14 +1439,15 @@ with block:
         switch_mode,
         inputs=[mode_selector],
         outputs=[
-            input_image, 
-            start_frame, 
-            end_frame, 
-            aspect_selector, 
-            custom_w, 
-            custom_h, 
+            input_image,
+            start_frame,
+            end_frame,
+            aspect_selector,
+            custom_w,
+            custom_h,
             keyframes_options,
-            video_extension_options  # Add this new output component
+            video_extension_options,
+            gaussian_blur  # Add this output
         ]
     )
     def show_init_color(mode):
