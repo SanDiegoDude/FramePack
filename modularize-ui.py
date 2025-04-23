@@ -1675,7 +1675,7 @@ with block:
     
     latent_window_size.change(
         lambda window, adv: update_frame_dropdown(window) if not adv else gr.update(),
-        inputs=[latent_window_size, advanced_mode],
+        inputs=[latent_window_size, segment_count],
         outputs=[total_frames_dropdown],
     )
     mode_selector.change(
