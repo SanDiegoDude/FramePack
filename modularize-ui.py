@@ -1405,7 +1405,7 @@ with block:
             gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_w
             gr.update(visible=(mode == "text2video" and aspect_selector.value == "Custom...")), # custom_h
             gr.update(visible=(mode == "keyframes")),  # keyframes_options
-            gr.update(visible=(mode == "video_extension"))  # video_extension_options
+            gr.update(visible=(mode == "video_extension")),  # video_extension_options
             gr.update(visible=is_video_ext),  # video_extension_options
             gr.update(visible=show_blur)  # gaussian_blur
         )
