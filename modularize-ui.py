@@ -502,38 +502,46 @@ def worker(
                     return
                     
                 try:
-                    # Make sure extension_frames is at least 1
-                    extension_frames_val = max(1, int(extension_frames))
-                    debug(f"Extracting frames from video for {extension_direction} extension (frames={extension_frames_val})")
-                    
-                    # Extract frames from the video
-                    extracted_frames, video_fps, _ = extract_frames_from_video(
-                        input_video,
-                        num_frames=extension_frames_val,
-                        from_end=(extension_direction == "Forward"),
-                        max_resolution=640
-                    )
+                # Make sure extension_frames is at least 1
+                extension_frames_val = max(1, int(extension_frames))
+                debug(f"Extracting frames from video for {extension_direction} extension (frames={extension_frames_val})")
                 
-                    if len(extracted_frames) == 0:
-                        raise ValueError("Failed to extract frames from the input video")
+                # Extract frames from the video
+                extracted_frames, video_fps, _ = extract_frames_from_video(
+                    input_video,
+                    num_frames=extension_frames_val,
+                    from_end=(extension_direction == "Forward"),
+                    max_resolution=640
+                )
+                
+                # Check for empty frames - must be INSIDE the try block
+                if len(extracted_frames) == 0:
+                    raise ValueError("Failed to extract frames from the input video")
                     
-                    # Set input_image based on direction 
-                    if extension_direction == "Forward":
-                        # Use last frame as input for forward extension
-                        input_image = extracted_frames[-1]
-                        debug(f"Using last frame as input_image for forward extension")
-                    else:
-                        # Use first frame as input for backward extension
-                        input_image = extracted_frames[0]
-                        debug(f"Using first frame as input_image for backward extension")
+                # Set input_image based on direction
+                if extension_direction == "Forward":
+                    input_image = extracted_frames[-1]  # Use last frame
+                    debug(f"Using last frame as input_image for forward extension")
+                    mode = "image2video"  # Use image2video processing path
+                else:
+                    # For backward extension, set up as keyframe generation
+                    end_frame = extracted_frames[0]  # First frame becomes the target
+                    start_frame = None  # No start frame needed
+                    mode = "keyframes"  # Use keyframes mode
+                    debug(f"Setting up backward extension as keyframe targeting first frame of video")
                     
-                    # Store the extracted frames for later use in video stitching
-                    all_extracted_frames = extracted_frames
-                    
-                    # Let processing continue with normal mode handling
-                    mode = "image2video"  # Redirect to use image2video processing path
-                    debug(f"Redirecting to image2video path with selected frame as input")
-            
+            except Exception as e:
+                debug(f"Video frame extraction error: {str(e)}")
+                traceback.print_exc()
+                yield (
+                    None, None, None,
+                    f"Error processing video: {str(e)}", None,
+                    gr.update(interactive=True),
+                    gr.update(interactive=False),
+                    gr.update()
+                )
+                return
+        
             if mode == "keyframes":
                 # Process end frame with CLIP
                 end_clip_output = hf_clip_vision_encode(end_np, feature_extractor, image_encoder).last_hidden_state
