@@ -394,8 +394,6 @@ def get_dims_from_aspect(aspect, custom_w, custom_h):
     height = (height // 8) * 8
     return width, height
     
-
-# ---- WORKER ----
 # ---- WORKER ----
 @torch.no_grad()
 def worker(
@@ -409,6 +407,10 @@ def worker(
 ):
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
+    debug(f"Worker params: original_mode={original_mode}, extension_direction={extension_direction}")
+    debug(f"Incoming parameters: mode={mode}, latent_window_size={adv_window}")
+    debug(f"total_frames={total_frames}, frames_per_section={frames_per_section}")
+    debug(f"total_sections calculated as {total_sections}")
 
     # --- DEFINE DEFAULT OUTPUT FILENAME ---
     output_filename = os.path.join(outputs_folder, f'{job_id}_final.mp4')
@@ -628,16 +630,22 @@ def worker(
              debug(f"WARNING: Mismatch between total_sections ({total_sections}) and latent_paddings_list_for_info length ({len(latent_paddings_list_for_info)})")
 
         # Replace the current loop iterator setup with:
-        if original_mode == "video_extension" and extension_direction == "Backward":
-            # For backward extension, use forward iteration (don't reverse)
-            debug(f"worker: Using forward iteration for backward extension (sections={total_sections})")
+        debug(f"About to set up loop iterator with total_sections={total_sections}")
+        debug(f"History latents initialized with shape: {history_latents.shape}")
+        
+        # Try different iteration approach for backward extension
+        if mode == "keyframes" and original_mode == "video_extension" and extension_direction == "Backward":
+            # For backward extension, don't reverse the iterator
+            debug(f"BACKWARD EXTENSION MODE: Using FORWARD iteration (0 to {total_sections-1})")
             loop_iterator = range(total_sections)
         else:
-            # For all other modes including forward extension, use reversed iteration
-            debug(f"worker: Using reversed iteration (sections={total_sections})")
+            # For all other cases use reversed iteration
+            debug(f"Using REVERSED iteration ({total_sections-1} down to 0)")
             loop_iterator = reversed(range(total_sections))
         # Process each section using the old iteration method
-        for section in loop_iterator: # Iterates from total_sections-1 down to 0
+        for section in loop_iterator:
+            debug(f"*** SECTION {section} PROCESSING STARTED ***")
+            debug(f"Memory status: {get_cuda_free_memory_gb(gpu):.1f}GB free")
             # Determine section properties (Unchanged)
             is_last_section = section == 0
             latent_padding_size = section * latent_window_size
@@ -650,6 +658,10 @@ def worker(
                  stream.output_queue.push(('end', None))
                  return
 
+            # Before tensor operations
+            debug(f"Setting up indices for section {section}")
+            debug(f"latent_padding_size={latent_padding_size}, window_size={latent_window_size}")
+            
             # Setup indices and clean latents for sample_hunyuan (Uses latent_padding_size)
             split_sizes = [1, latent_padding_size, latent_window_size, 1, 2, 16]
             total_indices = sum(split_sizes)
@@ -665,9 +677,13 @@ def worker(
             # Selectively override for keyframes mode FIRST ITERATION
             # 'is_first_iteration' now correctly flags the start of the reversed loop
             if mode == "keyframes" and is_first_iteration:
-                debug("Keyframes mode: Overriding clean_latents_post with end_latent for first iteration.")
+                debug("*** KEYFRAMES MODE: First iteration special handling ***")
+                debug(f"end_latent shape: {end_latent.shape}")
+                debug(f"clean_latents_post before: {clean_latents_post.shape}")
                 clean_latents_post = end_latent.to(history_latents.device, dtype=history_latents.dtype)
+                debug(f"clean_latents_post after: {clean_latents_post.shape}")
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
+                debug(f"clean_latents shape after special handling: {clean_latents.shape}")
 
             # Mask fallback safeguard (Unchanged)
             m   = m if m is not None else torch.ones_like(lv)
@@ -748,6 +764,11 @@ def worker(
                 stream.output_queue.push(('progress', (preview, desc, progress_html)))
             # --- End adapted callback definition ---
 
+            # Before sample_hunyuan
+            debug(f"About to call sample_hunyuan for section {section}")
+            debug(f"clean_latents shape: {clean_latents.shape}")
+            debug(f"latent_indices shape: {latent_indices.shape}")
+
             # --- Run sampling (Passes the correct indices/latents based on padding_size) ---
             # The mode check here ensures correct arguments like image_embeddings are passed
             if mode == "keyframes":
@@ -775,6 +796,11 @@ def worker(
                     callback=callback
                 )
 
+
+            # After sample_hunyuan returns
+            debug(f"sample_hunyuan completed for section {section}")
+            debug(f"generated_latents shape: {generated_latents.shape}")
+
             # --- Post-sampling ---
             # Handle the last section specially (add start latent if needed)
             if is_last_section:
@@ -790,7 +816,7 @@ def worker(
 
             # Update history latents (CPU tensor)
             history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
-            debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
+            debug(f"Updated history_latents shape: {history_latents.shape}")
 
             # --- VAE Decoding Section (COMBINED BEST VERSION) ---
             if not high_vram:
