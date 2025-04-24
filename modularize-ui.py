@@ -248,7 +248,10 @@ def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resol
         import cv2
     except ImportError:
         raise ImportError("OpenCV (cv2) is required for video extension. Please install it with 'pip install opencv-python'")
-        
+    
+    # Safety check to ensure at least 1 frame
+    num_frames = max(1, int(num_frames))
+    
     debug(f"Extracting frames from video: {video_path}, num_frames={num_frames}, from_end={from_end}")
     
     cap = cv2.VideoCapture(video_path)
@@ -263,6 +266,11 @@ def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resol
     
     debug(f"Video properties: total_frames={total_frames}, fps={fps}, dimensions={orig_width}x{orig_height}")
     
+    # Additional safety check for video with no frames
+    if total_frames == 0:
+        cap.release()
+        raise ValueError(f"Video has no frames: {video_path}")
+        
     # Calculate bucket dimensions
     bucket_height, bucket_width = find_nearest_bucket(orig_height, orig_width, resolution=max_resolution)
     debug(f"Using bucket dimensions: {bucket_width}x{bucket_height}")
@@ -274,6 +282,8 @@ def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resol
     else:
         frame_indices = list(range(min(num_frames, total_frames)))
     
+    debug(f"Will extract frames at indices: {frame_indices}")
+    
     # Extract the frames
     frames = []
     current_frame = 0
@@ -282,16 +292,15 @@ def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resol
         ret, frame = cap.read()
         if not ret:
             break
-            
+        
         if current_frame in frame_indices:
             # Convert BGR to RGB
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
             # Resize to bucket dimensions
             frame = resize_and_center_crop(frame, target_width=bucket_width, target_height=bucket_height)
-            
             frames.append(frame)
-            
+            debug(f"Extracted frame {current_frame}")
+        
         current_frame += 1
         
         # Break if we've extracted all needed frames
@@ -482,17 +491,28 @@ def worker(
             
             if mode == "video_extension":
                 if input_video is None:
-                    raise ValueError("Video extension mode requires a video to be uploaded!")
-                
-                debug(f"Processing video extension: direction={extension_direction}")
-                
-                # Extract frames from the video
-                extracted_frames, video_fps, original_dims = extract_frames_from_video(
-                    input_video,
-                    num_frames=int(extension_frames),
-                    from_end=(extension_direction == "Forward"),
-                    max_resolution=640
-                )
+                    debug("process: Aborting early -- no input video for video_extension")
+                    yield (
+                        None, None, None,
+                        "Please upload a video to extend!", None,
+                        gr.update(interactive=True),
+                        gr.update(interactive=False),
+                        gr.update()
+                    )
+                    return
+                    
+                try:
+                    # Make sure extension_frames is at least 1
+                    extension_frames_val = max(1, int(extension_frames))
+                    debug(f"Extracting frames from video for {extension_direction} extension (frames={extension_frames_val})")
+                    
+                    # Extract frames from the video
+                    extracted_frames, video_fps, _ = extract_frames_from_video(
+                        input_video,
+                        num_frames=extension_frames_val,
+                        from_end=(extension_direction == "Forward"),
+                        max_resolution=640
+                    )
                 
                 if len(extracted_frames) == 0:
                     raise ValueError("Failed to extract frames from the input video")
