@@ -514,25 +514,25 @@ def worker(
                         max_resolution=640
                     )
                 
-                if len(extracted_frames) == 0:
-                    raise ValueError("Failed to extract frames from the input video")
-                
-                # Set input_image based on direction 
-                if extension_direction == "Forward":
-                    # Use last frame as input for forward extension
-                    input_image = extracted_frames[-1]
-                    debug(f"Using last frame as input_image for forward extension")
-                else:
-                    # Use first frame as input for backward extension
-                    input_image = extracted_frames[0]
-                    debug(f"Using first frame as input_image for backward extension")
-                
-                # Store the extracted frames for later use in video stitching
-                all_extracted_frames = extracted_frames
-                
-                # Let processing continue with normal mode handling
-                mode = "image2video"  # Redirect to use image2video processing path
-                debug(f"Redirecting to image2video path with selected frame as input")
+                    if len(extracted_frames) == 0:
+                        raise ValueError("Failed to extract frames from the input video")
+                    
+                    # Set input_image based on direction 
+                    if extension_direction == "Forward":
+                        # Use last frame as input for forward extension
+                        input_image = extracted_frames[-1]
+                        debug(f"Using last frame as input_image for forward extension")
+                    else:
+                        # Use first frame as input for backward extension
+                        input_image = extracted_frames[0]
+                        debug(f"Using first frame as input_image for backward extension")
+                    
+                    # Store the extracted frames for later use in video stitching
+                    all_extracted_frames = extracted_frames
+                    
+                    # Let processing continue with normal mode handling
+                    mode = "image2video"  # Redirect to use image2video processing path
+                    debug(f"Redirecting to image2video path with selected frame as input")
             
             if mode == "keyframes":
                 # Process end frame with CLIP
