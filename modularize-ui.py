@@ -1981,7 +1981,7 @@ with block:
             seed               # 7
         ]
     )
-    end_button.click(fn=end_process)
+    end_button.click(fn=end_process, outputs=[end_button])
 block.launch(
     server_name=args.server,
     server_port=args.port,
