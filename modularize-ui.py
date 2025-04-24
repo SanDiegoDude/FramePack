@@ -627,11 +627,15 @@ def worker(
         if len(latent_paddings_list_for_info) != total_sections:
              debug(f"WARNING: Mismatch between total_sections ({total_sections}) and latent_paddings_list_for_info length ({len(latent_paddings_list_for_info)})")
 
-        # --- FORCE OLD ITERATION SCHEME ---
-        debug(f"worker: [TESTING] Forcing old iteration scheme: reversed(range(total_sections={total_sections}))")
-        loop_iterator = reversed(range(total_sections))
-        # --- END FORCE OLD ITERATION ---
-
+        # Replace the current loop iterator setup with:
+        if original_mode == "video_extension" and extension_direction == "Backward":
+            # For backward extension, use forward iteration (don't reverse)
+            debug(f"worker: Using forward iteration for backward extension (sections={total_sections})")
+            loop_iterator = range(total_sections)
+        else:
+            # For all other modes including forward extension, use reversed iteration
+            debug(f"worker: Using reversed iteration (sections={total_sections})")
+            loop_iterator = reversed(range(total_sections))
         # Process each section using the old iteration method
         for section in loop_iterator: # Iterates from total_sections-1 down to 0
             # Determine section properties (Unchanged)
