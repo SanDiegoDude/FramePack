@@ -842,38 +842,100 @@ def worker(
             combined_filename = os.path.join(outputs_folder, f'{job_id}_combined.mp4')
             try:
                 import subprocess
-                if extension_direction == "Forward":
-                    # Append the extension to the original video
-                    cmd = [
-                        "ffmpeg",
-                        "-y",
-                        "-i", input_video,
-                        "-i", extension_filename,
-                        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[outv]",
-                        "-map", "[outv]",
-                        combined_filename
-                    ]
-                else:  # Backward
-                    # Prepend the extension to the original video
-                    cmd = [
-                        "ffmpeg",
-                        "-y",
-                        "-i", extension_filename,
-                        "-i", input_video,
-                        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[outv]",
-                        "-map", "[outv]",
-                        combined_filename
-                    ]
-                debug(f"[FFMPEG] Running command: {' '.join(cmd)}")
-                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                make_mp4_faststart(combined_filename)
                 
-                # IMPORTANT: Update the output_filename to use the combined file
-                output_filename = combined_filename
-                debug(f"[FILE] Combined video saved as {output_filename} - using as final output")
+                # Add diagnostic info about files
+                debug(f"[FFMPEG] Checking input files before concatenation:")
+                if not os.path.exists(extension_filename):
+                    debug(f"[FFMPEG] ERROR: Extension file does not exist: {extension_filename}")
+                else:
+                    debug(f"[FFMPEG] Extension file exists, size: {os.path.getsize(extension_filename)} bytes")
+                
+                if not os.path.exists(input_video):
+                    debug(f"[FFMPEG] ERROR: Original video does not exist: {input_video}")
+                else:
+                    debug(f"[FFMPEG] Original video file exists, size: {os.path.getsize(input_video)} bytes")
+                
+                # First make sure both videos have compatible encoding
+                debug("[FFMPEG] Preparing videos for concatenation...")
+                
+                # Create temporary files with compatible encoding
+                temp_ext = os.path.join(outputs_folder, f'{job_id}_ext_compat.mp4')
+                temp_orig = os.path.join(outputs_folder, f'{job_id}_orig_compat.mp4')
+                
+                # Convert extension to compatible format
+                convert_cmd = [
+                    "ffmpeg", "-y", 
+                    "-i", extension_filename,
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-vsync", "cfr", "-r", "30",
+                    temp_ext
+                ]
+                debug(f"[FFMPEG] Converting extension: {' '.join(convert_cmd)}")
+                try:
+                    subprocess.run(convert_cmd, check=True, capture_output=True)
+                except subprocess.CalledProcessError as e:
+                    debug(f"[FFMPEG] Extension conversion failed: {e.stderr.decode() if e.stderr else str(e)}")
+                    # Continue with original file if conversion fails
+                    temp_ext = extension_filename
+                
+                # Convert original video to compatible format
+                convert_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", input_video,
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-vsync", "cfr", "-r", "30",
+                    temp_orig
+                ]
+                debug(f"[FFMPEG] Converting original: {' '.join(convert_cmd)}")
+                try:
+                    subprocess.run(convert_cmd, check=True, capture_output=True)
+                except subprocess.CalledProcessError as e:
+                    debug(f"[FFMPEG] Original conversion failed: {e.stderr.decode() if e.stderr else str(e)}")
+                    # Continue with original file if conversion fails
+                    temp_orig = input_video
+                    
+                # Try concat demuxer (more reliable than filter_complex for some files)
+                filelist_path = os.path.join(outputs_folder, f'{job_id}_filelist.txt')
+                with open(filelist_path, 'w') as f:
+                    if extension_direction == "Forward":
+                        f.write(f"file '{os.path.abspath(temp_orig)}'\n")
+                        f.write(f"file '{os.path.abspath(temp_ext)}'\n")
+                    else:  # Backward
+                        f.write(f"file '{os.path.abspath(temp_ext)}'\n")
+                        f.write(f"file '{os.path.abspath(temp_orig)}'\n")
+                
+                concat_cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "concat",
+                    "-safe", "0",
+                    "-i", filelist_path,
+                    "-c", "copy",
+                    combined_filename
+                ]
+                
+                debug(f"[FFMPEG] Running concat: {' '.join(concat_cmd)}")
+                result = subprocess.run(concat_cmd, capture_output=True)
+                
+                if result.returncode != 0:
+                    debug(f"[FFMPEG] Concat failed: {result.stderr.decode() if result.stderr else 'Unknown error'}")
+                    debug("[FFMPEG] Falling back to using just the extension video")
+                    output_filename = extension_filename
+                else:
+                    debug(f"[FFMPEG] Concat succeeded!")
+                    make_mp4_faststart(combined_filename)
+                    output_filename = combined_filename
+                    
+                # Clean up temp files
+                for f in [filelist_path, temp_ext, temp_orig]:
+                    if os.path.exists(f) and f != extension_filename and f != input_video:
+                        try:
+                            os.remove(f)
+                        except:
+                            pass
+                        
             except Exception as e:
                 debug(f"[ERROR] Failed to combine videos: {e}")
-                traceback.print_exc()
+                traceback.print_exc()  # Now we have traceback imported
                 output_filename = extension_filename
                 debug(f"[FILE] Using extension video as fallback: {output_filename}")
 
