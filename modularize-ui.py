@@ -916,9 +916,9 @@ def worker(
         # --- Loop finished ---
 
 
-        if graceful_stop:
-            debug("worker: graceful stop requested, ending generation after completing section.")
-            break
+            if graceful_stop:
+                debug("worker: graceful stop requested, ending generation after completing section.")
+                break
         
         # After history_pixels is fully processed and before final video export
         if original_mode == "video_extension" and input_video is not None and 'history_pixels' in locals() and history_pixels is not None:
