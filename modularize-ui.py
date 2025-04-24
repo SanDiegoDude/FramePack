@@ -983,6 +983,7 @@ def worker(
             # Special handling for video_extension - use the combined file directly
             if original_mode == "video_extension" and 'combined_filename' in locals() and os.path.exists(combined_filename):
                 debug(f"[FILE] Using pre-combined video file for video_extension mode: {combined_filename}")
+                fix_video_compatibility(combined_filename, fps=30)
                 stream.output_queue.push(('file', combined_filename))
                 debug(f"[QUEUE] Queued event 'file' with data: {combined_filename}")
             elif not image_likely_saved:
@@ -990,8 +991,8 @@ def worker(
                 try:
                     save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
                     debug(f"[FILE] Video successfully saved to {output_filename}: {os.path.exists(output_filename)}")
-                    make_mp4_faststart(output_filename)
-                    debug(f"[FILE] Faststart patch applied to {output_filename}: {os.path.exists(output_filename)}")
+                    
+                    fix_video_compatibility(output_filename, fps=30)
                     stream.output_queue.push(('file', output_filename))
                     debug(f"[QUEUE] Queued event 'file' with data: {output_filename}")
                 except Exception as e:
