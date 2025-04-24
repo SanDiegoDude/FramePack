@@ -248,10 +248,7 @@ def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resol
         import cv2
     except ImportError:
         raise ImportError("OpenCV (cv2) is required for video extension. Please install it with 'pip install opencv-python'")
-    
-    # Safety check to ensure at least 1 frame
-    num_frames = max(1, int(num_frames))
-    
+        
     debug(f"Extracting frames from video: {video_path}, num_frames={num_frames}, from_end={from_end}")
     
     cap = cv2.VideoCapture(video_path)
@@ -266,11 +263,6 @@ def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resol
     
     debug(f"Video properties: total_frames={total_frames}, fps={fps}, dimensions={orig_width}x{orig_height}")
     
-    # Additional safety check for video with no frames
-    if total_frames == 0:
-        cap.release()
-        raise ValueError(f"Video has no frames: {video_path}")
-        
     # Calculate bucket dimensions
     bucket_height, bucket_width = find_nearest_bucket(orig_height, orig_width, resolution=max_resolution)
     debug(f"Using bucket dimensions: {bucket_width}x{bucket_height}")
@@ -282,8 +274,6 @@ def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resol
     else:
         frame_indices = list(range(min(num_frames, total_frames)))
     
-    debug(f"Will extract frames at indices: {frame_indices}")
-    
     # Extract the frames
     frames = []
     current_frame = 0
@@ -292,15 +282,16 @@ def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resol
         ret, frame = cap.read()
         if not ret:
             break
-        
+            
         if current_frame in frame_indices:
             # Convert BGR to RGB
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
             # Resize to bucket dimensions
             frame = resize_and_center_crop(frame, target_width=bucket_width, target_height=bucket_height)
+            
             frames.append(frame)
-            debug(f"Extracted frame {current_frame}")
-        
+            
         current_frame += 1
         
         # Break if we've extracted all needed frames
@@ -394,6 +385,8 @@ def get_dims_from_aspect(aspect, custom_w, custom_h):
     height = (height // 8) * 8
     return width, height
     
+
+# ---- WORKER ----
 # ---- WORKER ----
 @torch.no_grad()
 def worker(
@@ -407,10 +400,6 @@ def worker(
 ):
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
-    debug(f"Worker params: original_mode={original_mode}, extension_direction={extension_direction}")
-    debug(f"Incoming parameters: mode={mode}, latent_window_size={adv_window}")
-    debug(f"total_frames={total_frames}, frames_per_section={frames_per_section}")
-    debug(f"total_sections calculated as {total_sections}")
 
     # --- DEFINE DEFAULT OUTPUT FILENAME ---
     output_filename = os.path.join(outputs_folder, f'{job_id}_final.mp4')
@@ -493,61 +482,38 @@ def worker(
             
             if mode == "video_extension":
                 if input_video is None:
-                    debug("process: Aborting early -- no input video for video_extension")
-                    yield (
-                        None, None, None,
-                        "Please upload a video to extend!", None,
-                        gr.update(interactive=True),
-                        gr.update(interactive=False),
-                        gr.update()
-                    )
-                    return
-                    
-                try:
-                    # Make sure extension_frames is at least 1
-                    extension_frames_val = max(1, int(extension_frames))
-                    debug(f"Extracting frames from video for {extension_direction} extension (frames={extension_frames_val})")
-                    
-                    # Extract frames from the video
-                    extracted_frames, video_fps, _ = extract_frames_from_video(
-                        input_video,
-                        num_frames=extension_frames_val,
-                        from_end=(extension_direction == "Forward"),
-                        max_resolution=640
-                    )
-                    
-                    if len(extracted_frames) == 0:
-                        raise ValueError("Failed to extract frames from the input video")
-                    
-                    # Set input_image based on direction
-                    if extension_direction == "Forward":
-                        # Use last frame as input for forward extension
-                        input_image = extracted_frames[-1]
-                        debug(f"Using last frame as input_image for forward extension")
-                    else:
-                        # Use first frame as input for backward extension
-                        input_image = extracted_frames[0]
-                        debug(f"Using first frame as input_image for backward extension")
-                        
-                    # Store the extracted frames for later use in video stitching
-                    all_extracted_frames = extracted_frames
-                    
-                    # Let processing continue with normal mode handling
-                    mode = "image2video"  # Redirect to use image2video processing path
-                    debug(f"Redirecting to image2video path with selected frame as input")
-                    
-                except Exception as e:
-                    debug(f"Video frame extraction error: {str(e)}")
-                    traceback.print_exc()
-                    yield (
-                        None, None, None,
-                        f"Error processing video: {str(e)}", None,
-                        gr.update(interactive=True),
-                        gr.update(interactive=False),
-                        gr.update()
-                    )
-                    return
-        
+                    raise ValueError("Video extension mode requires a video to be uploaded!")
+                
+                debug(f"Processing video extension: direction={extension_direction}")
+                
+                # Extract frames from the video
+                extracted_frames, video_fps, original_dims = extract_frames_from_video(
+                    input_video,
+                    num_frames=int(extension_frames),
+                    from_end=(extension_direction == "Forward"),
+                    max_resolution=640
+                )
+                
+                if len(extracted_frames) == 0:
+                    raise ValueError("Failed to extract frames from the input video")
+                
+                # Set input_image based on direction 
+                if extension_direction == "Forward":
+                    # Use last frame as input for forward extension
+                    input_image = extracted_frames[-1]
+                    debug(f"Using last frame as input_image for forward extension")
+                else:
+                    # Use first frame as input for backward extension
+                    input_image = extracted_frames[0]
+                    debug(f"Using first frame as input_image for backward extension")
+                
+                # Store the extracted frames for later use in video stitching
+                all_extracted_frames = extracted_frames
+                
+                # Let processing continue with normal mode handling
+                mode = "image2video"  # Redirect to use image2video processing path
+                debug(f"Redirecting to image2video path with selected frame as input")
+            
             if mode == "keyframes":
                 # Process end frame with CLIP
                 end_clip_output = hf_clip_vision_encode(end_np, feature_extractor, image_encoder).last_hidden_state
@@ -629,23 +595,13 @@ def worker(
         if len(latent_paddings_list_for_info) != total_sections:
              debug(f"WARNING: Mismatch between total_sections ({total_sections}) and latent_paddings_list_for_info length ({len(latent_paddings_list_for_info)})")
 
-        # Replace the current loop iterator setup with:
-        debug(f"About to set up loop iterator with total_sections={total_sections}")
-        debug(f"History latents initialized with shape: {history_latents.shape}")
-        
-        # Try different iteration approach for backward extension
-        if mode == "keyframes" and original_mode == "video_extension" and extension_direction == "Backward":
-            # For backward extension, don't reverse the iterator
-            debug(f"BACKWARD EXTENSION MODE: Using FORWARD iteration (0 to {total_sections-1})")
-            loop_iterator = range(total_sections)
-        else:
-            # For all other cases use reversed iteration
-            debug(f"Using REVERSED iteration ({total_sections-1} down to 0)")
-            loop_iterator = reversed(range(total_sections))
+        # --- FORCE OLD ITERATION SCHEME ---
+        debug(f"worker: [TESTING] Forcing old iteration scheme: reversed(range(total_sections={total_sections}))")
+        loop_iterator = reversed(range(total_sections))
+        # --- END FORCE OLD ITERATION ---
+
         # Process each section using the old iteration method
-        for section in loop_iterator:
-            debug(f"*** SECTION {section} PROCESSING STARTED ***")
-            debug(f"Memory status: {get_cuda_free_memory_gb(gpu):.1f}GB free")
+        for section in loop_iterator: # Iterates from total_sections-1 down to 0
             # Determine section properties (Unchanged)
             is_last_section = section == 0
             latent_padding_size = section * latent_window_size
@@ -658,10 +614,6 @@ def worker(
                  stream.output_queue.push(('end', None))
                  return
 
-            # Before tensor operations
-            debug(f"Setting up indices for section {section}")
-            debug(f"latent_padding_size={latent_padding_size}, window_size={latent_window_size}")
-            
             # Setup indices and clean latents for sample_hunyuan (Uses latent_padding_size)
             split_sizes = [1, latent_padding_size, latent_window_size, 1, 2, 16]
             total_indices = sum(split_sizes)
@@ -677,13 +629,9 @@ def worker(
             # Selectively override for keyframes mode FIRST ITERATION
             # 'is_first_iteration' now correctly flags the start of the reversed loop
             if mode == "keyframes" and is_first_iteration:
-                debug("*** KEYFRAMES MODE: First iteration special handling ***")
-                debug(f"end_latent shape: {end_latent.shape}")
-                debug(f"clean_latents_post before: {clean_latents_post.shape}")
+                debug("Keyframes mode: Overriding clean_latents_post with end_latent for first iteration.")
                 clean_latents_post = end_latent.to(history_latents.device, dtype=history_latents.dtype)
-                debug(f"clean_latents_post after: {clean_latents_post.shape}")
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
-                debug(f"clean_latents shape after special handling: {clean_latents.shape}")
 
             # Mask fallback safeguard (Unchanged)
             m   = m if m is not None else torch.ones_like(lv)
@@ -764,11 +712,6 @@ def worker(
                 stream.output_queue.push(('progress', (preview, desc, progress_html)))
             # --- End adapted callback definition ---
 
-            # Before sample_hunyuan
-            debug(f"About to call sample_hunyuan for section {section}")
-            debug(f"clean_latents shape: {clean_latents.shape}")
-            debug(f"latent_indices shape: {latent_indices.shape}")
-
             # --- Run sampling (Passes the correct indices/latents based on padding_size) ---
             # The mode check here ensures correct arguments like image_embeddings are passed
             if mode == "keyframes":
@@ -796,11 +739,6 @@ def worker(
                     callback=callback
                 )
 
-
-            # After sample_hunyuan returns
-            debug(f"sample_hunyuan completed for section {section}")
-            debug(f"generated_latents shape: {generated_latents.shape}")
-
             # --- Post-sampling ---
             # Handle the last section specially (add start latent if needed)
             if is_last_section:
@@ -816,7 +754,7 @@ def worker(
 
             # Update history latents (CPU tensor)
             history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
-            debug(f"Updated history_latents shape: {history_latents.shape}")
+            debug(f"worker: history_latents.shape after concat: {history_latents.shape}")
 
             # --- VAE Decoding Section (COMBINED BEST VERSION) ---
             if not high_vram:
@@ -904,38 +842,100 @@ def worker(
             combined_filename = os.path.join(outputs_folder, f'{job_id}_combined.mp4')
             try:
                 import subprocess
-                if extension_direction == "Forward":
-                    # Append the extension to the original video
-                    cmd = [
-                        "ffmpeg",
-                        "-y",
-                        "-i", input_video,
-                        "-i", extension_filename,
-                        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[outv]",
-                        "-map", "[outv]",
-                        combined_filename
-                    ]
-                else:  # Backward
-                    # Prepend the extension to the original video
-                    cmd = [
-                        "ffmpeg",
-                        "-y",
-                        "-i", extension_filename,
-                        "-i", input_video,
-                        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[outv]",
-                        "-map", "[outv]",
-                        combined_filename
-                    ]
-                debug(f"[FFMPEG] Running command: {' '.join(cmd)}")
-                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                make_mp4_faststart(combined_filename)
                 
-                # IMPORTANT: Update the output_filename to use the combined file
-                output_filename = combined_filename
-                debug(f"[FILE] Combined video saved as {output_filename} - using as final output")
+                # Add diagnostic info about files
+                debug(f"[FFMPEG] Checking input files before concatenation:")
+                if not os.path.exists(extension_filename):
+                    debug(f"[FFMPEG] ERROR: Extension file does not exist: {extension_filename}")
+                else:
+                    debug(f"[FFMPEG] Extension file exists, size: {os.path.getsize(extension_filename)} bytes")
+                
+                if not os.path.exists(input_video):
+                    debug(f"[FFMPEG] ERROR: Original video does not exist: {input_video}")
+                else:
+                    debug(f"[FFMPEG] Original video file exists, size: {os.path.getsize(input_video)} bytes")
+                
+                # First make sure both videos have compatible encoding
+                debug("[FFMPEG] Preparing videos for concatenation...")
+                
+                # Create temporary files with compatible encoding
+                temp_ext = os.path.join(outputs_folder, f'{job_id}_ext_compat.mp4')
+                temp_orig = os.path.join(outputs_folder, f'{job_id}_orig_compat.mp4')
+                
+                # Convert extension to compatible format
+                convert_cmd = [
+                    "ffmpeg", "-y", 
+                    "-i", extension_filename,
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-vsync", "cfr", "-r", "30",
+                    temp_ext
+                ]
+                debug(f"[FFMPEG] Converting extension: {' '.join(convert_cmd)}")
+                try:
+                    subprocess.run(convert_cmd, check=True, capture_output=True)
+                except subprocess.CalledProcessError as e:
+                    debug(f"[FFMPEG] Extension conversion failed: {e.stderr.decode() if e.stderr else str(e)}")
+                    # Continue with original file if conversion fails
+                    temp_ext = extension_filename
+                
+                # Convert original video to compatible format
+                convert_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", input_video,
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-vsync", "cfr", "-r", "30",
+                    temp_orig
+                ]
+                debug(f"[FFMPEG] Converting original: {' '.join(convert_cmd)}")
+                try:
+                    subprocess.run(convert_cmd, check=True, capture_output=True)
+                except subprocess.CalledProcessError as e:
+                    debug(f"[FFMPEG] Original conversion failed: {e.stderr.decode() if e.stderr else str(e)}")
+                    # Continue with original file if conversion fails
+                    temp_orig = input_video
+                    
+                # Try concat demuxer (more reliable than filter_complex for some files)
+                filelist_path = os.path.join(outputs_folder, f'{job_id}_filelist.txt')
+                with open(filelist_path, 'w') as f:
+                    if extension_direction == "Forward":
+                        f.write(f"file '{os.path.abspath(temp_orig)}'\n")
+                        f.write(f"file '{os.path.abspath(temp_ext)}'\n")
+                    else:  # Backward
+                        f.write(f"file '{os.path.abspath(temp_ext)}'\n")
+                        f.write(f"file '{os.path.abspath(temp_orig)}'\n")
+                
+                concat_cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "concat",
+                    "-safe", "0",
+                    "-i", filelist_path,
+                    "-c", "copy",
+                    combined_filename
+                ]
+                
+                debug(f"[FFMPEG] Running concat: {' '.join(concat_cmd)}")
+                result = subprocess.run(concat_cmd, capture_output=True)
+                
+                if result.returncode != 0:
+                    debug(f"[FFMPEG] Concat failed: {result.stderr.decode() if result.stderr else 'Unknown error'}")
+                    debug("[FFMPEG] Falling back to using just the extension video")
+                    output_filename = extension_filename
+                else:
+                    debug(f"[FFMPEG] Concat succeeded!")
+                    make_mp4_faststart(combined_filename)
+                    output_filename = combined_filename
+                    
+                # Clean up temp files
+                for f in [filelist_path, temp_ext, temp_orig]:
+                    if os.path.exists(f) and f != extension_filename and f != input_video:
+                        try:
+                            os.remove(f)
+                        except:
+                            pass
+                        
             except Exception as e:
                 debug(f"[ERROR] Failed to combine videos: {e}")
-                traceback.print_exc()
+                traceback.print_exc()  # Now we have traceback imported
                 output_filename = extension_filename
                 debug(f"[FILE] Using extension video as fallback: {output_filename}")
 
