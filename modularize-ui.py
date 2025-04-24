@@ -514,22 +514,26 @@ def worker(
                         max_resolution=640
                     )
                     
-                    # Check for empty frames - must be INSIDE the try block
                     if len(extracted_frames) == 0:
                         raise ValueError("Failed to extract frames from the input video")
-                        
+                    
                     # Set input_image based on direction
                     if extension_direction == "Forward":
-                        input_image = extracted_frames[-1]  # Use last frame
+                        # Use last frame as input for forward extension
+                        input_image = extracted_frames[-1]
                         debug(f"Using last frame as input_image for forward extension")
-                        mode = "image2video"  # Use image2video processing path
                     else:
-                        # For backward extension, set up as keyframe generation
-                        end_frame = extracted_frames[0]  # First frame becomes the target
-                        start_frame = None  # No start frame needed
-                        mode = "keyframes"  # Use keyframes mode
-                        debug(f"Setting up backward extension as keyframe targeting first frame of video")
+                        # Use first frame as input for backward extension
+                        input_image = extracted_frames[0]
+                        debug(f"Using first frame as input_image for backward extension")
                         
+                    # Store the extracted frames for later use in video stitching
+                    all_extracted_frames = extracted_frames
+                    
+                    # Let processing continue with normal mode handling
+                    mode = "image2video"  # Redirect to use image2video processing path
+                    debug(f"Redirecting to image2video path with selected frame as input")
+                    
                 except Exception as e:
                     debug(f"Video frame extraction error: {str(e)}")
                     traceback.print_exc()
