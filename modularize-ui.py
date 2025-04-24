@@ -93,7 +93,25 @@ def fix_video_compatibility(video_path, fps=30):
                 os.remove(temp_path)
             except:
                 pass
-                
+
+def unload_all_models():
+    """Unload all models from GPU to free memory"""
+    try:
+        unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
+        torch.cuda.empty_cache()
+        return "All models unloaded from GPU and memory cleared."
+    except Exception as e:
+        return f"Error unloading models: {str(e)}"
+
+def clear_cuda_cache():
+    """Clear CUDA cache to free fragmented memory"""
+    try:
+        torch.cuda.empty_cache()
+        free_mem = get_cuda_free_memory_gb(gpu)
+        return f"CUDA cache cleared. Free VRAM: {free_mem:.1f} GB"
+    except Exception as e:
+        return f"Error clearing CUDA cache: {str(e)}"
+
 def make_mp4_faststart(mp4_path):
     tmpfile = mp4_path + ".tmp"
     cmd = [
@@ -238,6 +256,61 @@ else:
 stream = AsyncStream()
 outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
+graceful_stop_requested = False
+
+def cleanup_temp_files(job_id, output_folder, keep_final=True, final_output_path=None):
+    """Clean up temporary files created during generation."""
+    import glob
+    import os
+    
+    debug(f"[CLEANUP] Starting cleanup for job {job_id}")
+    
+    # Find all preview videos for this job
+    preview_pattern = os.path.join(output_folder, f"{job_id}_preview_*.mp4")
+    preview_files = glob.glob(preview_pattern)
+    
+    # Find extension/temporary files
+    extension_file = os.path.join(output_folder, f"{job_id}_extension.mp4")
+    compat_files = glob.glob(os.path.join(output_folder, f"{job_id}_*_compat.mp4"))
+    filelist = os.path.join(output_folder, f"{job_id}_filelist.txt")
+    
+    # Delete preview videos
+    for f in preview_files:
+        if os.path.exists(f):
+            try:
+                os.remove(f)
+                debug(f"[CLEANUP] Removed preview: {f}")
+            except Exception as e:
+                debug(f"[CLEANUP] Failed to remove {f}: {e}")
+    
+    # Delete temporary files used for video concatenation
+    temp_files = compat_files + [filelist]
+    if not keep_final or final_output_path != extension_file:
+        temp_files.append(extension_file)
+        
+    for f in temp_files:
+        if os.path.exists(f):
+            try:
+                os.remove(f)
+                debug(f"[CLEANUP] Removed temp file: {f}")
+            except Exception as e:
+                debug(f"[CLEANUP] Failed to remove {f}: {e}")
+                
+    debug(f"[CLEANUP] Completed cleanup for job {job_id}")
+
+def end_process():
+    global graceful_stop_requested, stream
+    
+    if not graceful_stop_requested:
+        # First click: request graceful stop
+        graceful_stop_requested = True
+        stream.input_queue.push('graceful_end')
+        return gr.update(value="Force Stop Now", variant="stop")
+    else:
+        # Second click: force immediate stop
+        graceful_stop_requested = False  # Reset for next time
+        stream.input_queue.push('end')
+        return gr.update(value="End Generation", variant="secondary") 
 
 # Step 1: Define the extract_frames_from_video function
 def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resolution=640):
@@ -385,8 +458,6 @@ def get_dims_from_aspect(aspect, custom_w, custom_h):
     height = (height // 8) * 8
     return width, height
     
-
-# ---- WORKER ----
 # ---- WORKER ----
 @torch.no_grad()
 def worker(
@@ -600,6 +671,9 @@ def worker(
         loop_iterator = reversed(range(total_sections))
         # --- END FORCE OLD ITERATION ---
 
+        # ---- 2 Stage End Generation Button Setup
+        graceful_stop = False
+        
         # Process each section using the old iteration method
         for section in loop_iterator: # Iterates from total_sections-1 down to 0
             # Determine section properties (Unchanged)
@@ -608,11 +682,16 @@ def worker(
             is_first_iteration = (section == total_sections - 1)
             debug(f'section = {section}, latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}')
 
-            # Check for abort signal (Unchanged)
-            if stream.input_queue.top() == 'end':
-                 debug("worker: input_queue 'end' received. Aborting generation.")
-                 stream.output_queue.push(('end', None))
-                 return
+            # Inside the section loop, check for graceful_end
+            if stream.input_queue.top() == 'graceful_end':
+                debug("worker: input_queue 'graceful_end' received. Will stop after current section.")
+                graceful_stop = True
+                # Continue processing current section
+            
+            # At the end of the section loop
+            if graceful_stop:
+                debug("worker: graceful stop requested, ending generation after completing section.")
+                break
 
             # Setup indices and clean latents for sample_hunyuan (Uses latent_padding_size)
             split_sizes = [1, latent_padding_size, latent_window_size, 1, 2, 16]
@@ -660,6 +739,11 @@ def worker(
                     debug("worker: callback: received 'end', stopping generation.")
                     stream.output_queue.push(('end', None))
                     raise KeyboardInterrupt('User ends the task.')
+
+                if stream.input_queue.top() == 'graceful_end':
+                    debug("worker: input_queue 'graceful_end' received. Will stop after current section.")
+                    graceful_stop = True
+                    # Continue processing current section
     
                 # Section progress (Unchanged)
                 current_step = d['i'] + 1
@@ -831,6 +915,11 @@ def worker(
                 raise
         # --- Loop finished ---
 
+
+            if graceful_stop:
+                debug("worker: graceful stop requested, ending generation after completing section.")
+                break
+        
         # After history_pixels is fully processed and before final video export
         if original_mode == "video_extension" and input_video is not None and 'history_pixels' in locals() and history_pixels is not None:
             # Save the generated extension
@@ -1048,6 +1137,7 @@ def worker(
                 fix_video_compatibility(combined_filename, fps=30)
                 stream.output_queue.push(('file', combined_filename))
                 debug(f"[QUEUE] Queued event 'file' with data: {combined_filename}")
+                cleanup_temp_files(job_id, outputs_folder, keep_final=True, final_output_path=combined_filename)
             elif not image_likely_saved:
                 debug(f"[FILE] Attempting to save final video to {output_filename}")
                 try:
@@ -1057,6 +1147,7 @@ def worker(
                     fix_video_compatibility(output_filename, fps=30)
                     stream.output_queue.push(('file', output_filename))
                     debug(f"[QUEUE] Queued event 'file' with data: {output_filename}")
+                    cleanup_temp_files(job_id, outputs_folder, keep_final=True, final_output_path=output_filename)
                 except Exception as e:
                     debug(f"[ERROR] FAILED to save final video {output_filename}: {e}")
                     traceback.print_exc()
@@ -1065,6 +1156,22 @@ def worker(
         else:
             debug(f"[FILE] Skipping final video save: No valid history_pixels found.")
 
+    except KeyboardInterrupt:
+        debug("worker: KeyboardInterrupt received, performing clean recovery")
+        # Clean up resources
+        if not high_vram:
+            unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
+        torch.cuda.empty_cache()
+        # Cleanup temporary files
+        cleanup_temp_files(job_id, outputs_folder, keep_final=False)
+        # Reset graceful stop flag
+        global graceful_stop_requested
+        graceful_stop_requested = False
+        # Push messages to UI
+        stream.output_queue.push(('progress', (None, "Generation stopped by user.", "")))
+        stream.output_queue.push(('end', "interrupted"))
+        return
+    
     except Exception as ex:
         debug("worker: EXCEPTION THROWN", ex)
         traceback.print_exc()
@@ -1315,6 +1422,17 @@ def process(
             last_img_path = img_filename
         elif flag == 'end':
             debug("process: yielding end event. output_filename =", output_filename)
+            if data == "interrupted":
+                yield (
+                    gr.update(visible=False),       # result_video
+                    gr.update(visible=False),       # result_image_html
+                    gr.update(visible=False),       # preview_image
+                    "Generation stopped by user.",  # progress_desc
+                    gr.update(visible=False),       # progress_bar
+                    gr.update(interactive=True, value="Start Generation"),
+                    gr.update(interactive=False, value="End Generation"),
+                    gr.update()
+                )
             if data == "img" or last_is_image:  # special image end
                 yield (
                     gr.update(visible=False),               # result_video
@@ -1344,7 +1462,18 @@ def process(
             last_img_path = None
 
 def end_process():
-    stream.input_queue.push('end')
+    global graceful_stop_requested, stream
+    
+    if not graceful_stop_requested:
+        # First click: request graceful stop
+        graceful_stop_requested = True
+        stream.input_queue.push('graceful_end')
+        return gr.update(value="Force Stop Now", variant="stop")
+    else:
+        # Second click: force immediate stop
+        graceful_stop_requested = False  # Reset for next time
+        stream.input_queue.push('end')
+        return gr.update(value="End Generation", variant="secondary") 
 
 css = """
 .gr-box, .gr-image, .gr-video {
@@ -1596,6 +1725,13 @@ with block:
                 lock_seed = gr.Checkbox(label="Lock Seed", value=False)
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
+                with gr.Row():
+                    unload_button = gr.Button(value="Unload All Models", variant="secondary")
+                    clear_cache_button = gr.Button(value="Clear CUDA Cache", variant="secondary")
+                
+                mem_status = gr.Markdown("")
+                unload_button.click(fn=unload_all_models, outputs=mem_status)
+                clear_cache_button.click(fn=clear_cuda_cache, outputs=mem_status)
         with gr.Column(scale=2):
             progress_bar = gr.HTML(visible=False)  # Start hidden
             progress_desc = gr.Markdown(visible=False)
@@ -1845,7 +1981,7 @@ with block:
             seed               # 7
         ]
     )
-    end_button.click(fn=end_process)
+    end_button.click(fn=end_process, outputs=[end_button])
 block.launch(
     server_name=args.server,
     server_port=args.port,
