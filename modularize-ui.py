@@ -517,6 +517,27 @@ def worker(
     input_video=None, extension_direction="Forward", extension_frames=8,
     original_mode=None 
 ):
+
+    # Helper function to extract values from Gradio components if needed
+    def get_value(obj):
+        if hasattr(obj, 'value'):
+            return obj.value
+        return obj
+    
+    # Extract actual values from any Gradio components
+    segment_count = get_value(selected_frames) / (get_value(adv_window) * 4 - 3)
+    adv_window = get_value(adv_window)
+    adv_seconds = get_value(adv_seconds)
+    selected_frames = get_value(selected_frames)
+    steps = get_value(steps)
+    cfg = get_value(cfg)
+    gs = get_value(gs)
+    rs = get_value(rs)
+    gpu_memory_preservation = get_value(gpu_memory_preservation)
+    use_teacache = get_value(use_teacache)
+    keyframe_weight = get_value(keyframe_weight)
+    extension_frames = get_value(extension_frames)
+    
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
 
