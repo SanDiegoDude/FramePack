@@ -730,49 +730,45 @@ def worker(
 
             # --- Define the *callback adapted for the 'section' index* ---
             def callback(d):
-                # Preview generation first (more important than timing)
+                # Preview generation (Unchanged)
                 preview = d['denoised']
                 preview = vae_decode_fake(preview)
                 preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
                 preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
-                
-                # Check for stop conditions
                 if stream.input_queue.top() == 'end':
                     debug("worker: callback: received 'end', stopping generation.")
                     stream.output_queue.push(('end', None))
                     raise KeyboardInterrupt('User ends the task.')
-                
-                # Use nonlocal to correctly access the outer variable
-                nonlocal graceful_stop
+
                 if stream.input_queue.top() == 'graceful_end':
-                    debug("worker: callback: received 'graceful_end', will stop after current section.")
+                    debug("worker: input_queue 'graceful_end' received. Will stop after current section.")
                     graceful_stop = True
-                
-                # Simple step timing - add minimal overhead
+                    # Continue processing current section
+    
+                # Section progress (Unchanged)
                 current_step = d['i'] + 1
-                if current_step > 1:  # Skip first step for timing (initialization can be slow)
-                    current_time = time.time()
-                    if hasattr(callback, 'last_time'):
-                        step_time = current_time - callback.last_time
-                        timings["step_times"].append(step_time)
-                        timings["generation_time"] += step_time
-                    callback.last_time = current_time
-                elif current_step == 1:
-                    callback.last_time = time.time()
-                    
-                # Progress calculations
                 section_percentage = int(100.0 * current_step / steps)
-                sections_completed = (total_sections - 1) - section
-                overall_percentage = int(100.0 * (sections_completed + (current_step / steps)) / total_sections) if total_sections > 0 else 0
+    
+                # Overall progress (ADAPTED - FIX HERE)
+                # 'section' goes from total_sections-1 down to 0
+                # Use total_sections instead of local_total_sections
+                sections_completed = (total_sections - 1) - section # How many sections came *before* this one
+
+                # FIX HERE: Guard against division by zero if total_sections could potentially be 0
+                if total_sections > 0:
+                    overall_percentage = int(100.0 * (sections_completed + (current_step / steps)) / total_sections)
+                else:
+                    overall_percentage = 0 # Or handle as appropriate if total_sections is 0
                 
-                # Frame count
+                # Calculate actual frame count (Based on history_pixels, as before)
                 actual_pixel_frames = history_pixels.shape[2] if history_pixels is not None else 0
                 actual_seconds = actual_pixel_frames / 30.0
-                
+
+                # FIX HERE: Use total_sections in the f-string
                 hint = f'Section {sections_completed+1}/{total_sections} - Step {current_step}/{steps}'
                 desc = f'Pixel frames generated: {actual_pixel_frames}, Length: {actual_seconds:.2f}s (FPS-30)'
-                
-                # HTML progress display
+    
+                # Create dual progress bar HTML (Unchanged - uses calculated percentages)
                 progress_html = f"""
                 <div class="dual-progress-container">
                     <div class="progress-label">
@@ -782,6 +778,7 @@ def worker(
                     <div class="progress-bar-bg">
                         <div class="progress-bar-fg" style="width: {section_percentage}%"></div>
                     </div>
+    
                     <div class="progress-label">
                         <span>Overall Progress:</span>
                         <span>{overall_percentage}%</span>
@@ -789,10 +786,12 @@ def worker(
                     <div class="progress-bar-bg">
                         <div class="progress-bar-fg" style="width: {overall_percentage}%"></div>
                     </div>
+    
                     <div style="font-size:0.9em; opacity:0.8;">{hint}</div>
                 </div>
                 """
-                
+    
+                # Debug message and pushing to queue (Unchanged)
                 debug(f"worker: In callback, section: {section_percentage}%, overall: {overall_percentage}%")
                 stream.output_queue.push(('progress', (preview, desc, progress_html)))
             # --- End adapted callback definition ---
