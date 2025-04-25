@@ -1393,7 +1393,10 @@ def process(
                 f"Error processing video: {str(e)}", None,
                 gr.update(interactive=True),
                 gr.update(interactive=False),
-                gr.update()
+                gr.update(),
+                gr.update(), # first_frame
+                gr.update(), # last_frame
+                gr.update()  # extend_button
             )
             return
     
@@ -1462,14 +1465,17 @@ def process(
         if flag == 'file':
             output_filename = data
             yield (
-                gr.update(value=output_filename, visible=True), # result_video (show final video)
+                gr.update(value=output_filename, visible=True),  # result_video
                 gr.update(visible=False),                       # result_image_html
                 gr.update(visible=False),                       # preview_image
                 gr.update(value="", visible=False),             # progress_desc
                 gr.update(value="", visible=False),             # progress_bar
-                gr.update(interactive=False),
-                gr.update(interactive=True),
-                gr.update()
+                gr.update(interactive=True, value="Start Generation", variant="primary"),  # start_button
+                gr.update(interactive=False, value="End Generation"),  # end_button
+                gr.update(),                                    # seed
+                gr.update(value=first, visible=True),           # first_frame
+                gr.update(value=last, visible=True),            # last_frame
+                gr.update(visible=True)                         # extend_button
             )
             last_is_image = False
             last_img_path = None
@@ -1488,7 +1494,10 @@ def process(
                     gr.update(visible=True),                       # progress_bar 
                     gr.update(interactive=False),
                     gr.update(interactive=True),
-                    gr.update()
+                    gr.update(),                    # seed
+                    gr.update(),                    # first_frame
+                    gr.update(),                    # last_frame
+                    gr.update()                     # extend_button
                 )
             else:
                 debug(f"[UI] Warning: Preview file not found: {preview_filename}")
@@ -1503,10 +1512,13 @@ def process(
                 gr.update(),                           # result_image_html
                 gr.update(visible=True, value=preview), # preview_image
                 desc,                                  # progress_desc
-                gr.update(value=html, visible=True),   # Make progress bar visible with EACH update
-                gr.update(interactive=False),
-                gr.update(interactive=True),
-                gr.update()
+                gr.update(value=html, visible=True),   # progress_bar
+                gr.update(interactive=False),          # start_button
+                gr.update(interactive=True),           # end_button
+                gr.update(),                           # seed
+                gr.update(),                           # first_frame
+                gr.update(),                           # last_frame
+                gr.update()                            # extend_button
             )
         elif flag == 'file':
             output_filename = data
@@ -1530,13 +1542,16 @@ def process(
             debug("process: yielding file_img/single image output", img_filename)
             yield (
                 gr.update(visible=False),                           # result_video
-                gr.update(value=img_filename, visible=True),        # result_image_html as Image!
+                gr.update(value=img_filename, visible=True),        # result_image_html
                 gr.update(visible=False),                           # preview_image
                 f"Generated single image!<br>Saved as <code>{img_filename}</code>",  # progress_desc
                 gr.update(visible=False),                           # progress_bar
-                gr.update(interactive=False),
-                gr.update(interactive=True),
-                gr.update()
+                gr.update(interactive=True),                        # start_button
+                gr.update(interactive=False),                       # end_button
+                gr.update(),                                        # seed
+                gr.update(),                                        # first_frame
+                gr.update(),                                        # last_frame
+                gr.update()                                         # extend_button
             )
             last_is_image = True
             last_img_path = img_filename
@@ -1551,7 +1566,10 @@ def process(
                     gr.update(visible=False),       # progress_bar
                     gr.update(interactive=True, value="Start Generation"),
                     gr.update(interactive=False, value="End Generation"),
-                    gr.update()
+                    gr.update(),                    # seed
+                    gr.update(),                    # first_frame
+                    gr.update(),                    # last_frame
+                    gr.update()                     # extend_button
                 )
             if data == "img" or last_is_image:  # special image end
                 yield (
@@ -1562,7 +1580,10 @@ def process(
                     gr.update(visible=False),               # progress_bar
                     gr.update(interactive=True),
                     gr.update(interactive=False),
-                    gr.update()
+                    gr.update(),                    # seed
+                    gr.update(),                    # first_frame
+                    gr.update(),                    # last_frame
+                    gr.update()                     # extend_button
                 )
             else:
                 yield (
@@ -1573,7 +1594,10 @@ def process(
                     gr.update(value="", visible=False),             # progress_bar
                     gr.update(interactive=True),
                     gr.update(interactive=False),
-                    gr.update()
+                    gr.update(),                    # seed
+                    gr.update(),                    # first_frame
+                    gr.update(),                    # last_frame
+                    gr.update()                     # extend_button
                 )
             debug("process: end event, breaking loop.")
             break
