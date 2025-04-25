@@ -1454,6 +1454,15 @@ def process(
         debug(f"process: got queue event: {flag}, type(data): {type(data)}")
         if flag == 'file':
             output_filename = data
+            # Extract first and last frames
+            first_frame_img, last_frame_img = extract_video_frames(output_filename)
+            
+            # Handle case where extraction fails
+            if first_frame_img is None:
+                first_frame_img = np.zeros((256, 256, 3), dtype=np.uint8)  # Black fallback image
+            if last_frame_img is None:
+                last_frame_img = np.zeros((256, 256, 3), dtype=np.uint8)  # Black fallback image
+            
             yield (
                 gr.update(value=output_filename, visible=True),  # result_video
                 gr.update(visible=False),                       # result_image_html
@@ -1463,8 +1472,8 @@ def process(
                 gr.update(interactive=True, value="Start Generation", variant="primary"),  # start_button
                 gr.update(interactive=False, value="End Generation"),  # end_button
                 gr.update(),                                    # seed
-                gr.update(value=first, visible=True),           # first_frame
-                gr.update(value=last, visible=True),            # last_frame
+                gr.update(value=first_frame_img, visible=True), # first_frame - use extracted frames
+                gr.update(value=last_frame_img, visible=True),  # last_frame - use extracted frames
                 gr.update(visible=True)                         # extend_button
             )
             last_is_image = False
@@ -1784,11 +1793,6 @@ with block:
                     lines=2
                 )
                 
-            # Seed controls moved up
-            with gr.Row():
-                seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
-                lock_seed = gr.Checkbox(label="Lock Seed", value=False)
-                
             # Input sections for different modes
             input_image = gr.Image(sources='upload', type="numpy", label="Image", elem_classes="input-image-container")
             
@@ -1841,19 +1845,17 @@ with block:
             custom_h = gr.Number(label="Height", value=768, visible=False)
             init_color = gr.ColorPicker(label="Initial Frame Color", value="#808080", visible=False)
             
-            # Blur control
-            gaussian_blur = gr.Slider(
-                label="Gaussian Blur",
-                minimum=0.0,
-                maximum=1.0,
-                value=0.0,
-                step=0.01,
-                visible=True,
-                info="Apply blur to input images before processing"
-            )
             
             # Generation Parameters accordion
             with gr.Accordion("Generation Parameters", open=True):
+                lock_seed = gr.Checkbox(label="Lock Seed", value=False)
+                seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
+                steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
+                # Video stats display
+                video_stats = gr.HTML(
+                    value="<div class='stats-box'>Calculating...</div>",
+                    label="Approximate Output Length"
+                )
                 latent_window_size = gr.Slider(
                     label="Latent Window Size",
                     minimum=2, maximum=33, value=9, step=1
@@ -1873,17 +1875,21 @@ with block:
                     minimum=0.0, maximum=1.0, value=0.2, step=0.01,
                     info="Percentage of frames to trim (0.0 = keep all, 1.0 = maximum trim)"
                 )
-            
-            # Video stats display
-            video_stats = gr.HTML(
-                value="<div class='stats-box'>Calculating...</div>",
-                label="Approximate Output Length"
-            )
+                # Blur control
+                gaussian_blur = gr.Slider(
+                    label="Gaussian Blur",
+                    minimum=0.0,
+                    maximum=1.0,
+                    value=0.0,
+                    step=0.01,
+                    visible=True,
+                    info="Apply blur to input images before processing"
+                )
             
             # Advanced Model Parameters
             with gr.Accordion("Advanced Model Parameters", open=False):
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
-                steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
+                
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)",
                                                  minimum=6, maximum=128, value=6, step=0.1)
                 
@@ -1911,9 +1917,9 @@ with block:
                     step=0.01,
                     info="Controls influence of anchor/initial frame"
                 )
-                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, 
+                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.1, 
                               info="Must be >1.0 for negative prompts to work")
-                gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01)
+                gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.1)
                 rs = gr.Slider(
                     label="CFG Re-Scale",
                     minimum=0.0,
