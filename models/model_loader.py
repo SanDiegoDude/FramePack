@@ -149,21 +149,48 @@ class ModelManager:
             return False
     
     def unload_all_models(self):
-        """Unload all models from GPU to free memory"""
+        """
+        Unload all models completely from memory (both CPU and GPU)
+        
+        This clears all model references to fully free memory
+        """
         try:
+            # First move everything to CPU to free GPU memory
             if self.models_loaded:
-                unload_complete_models(
-                    self.text_encoder, 
-                    self.text_encoder_2, 
-                    self.image_encoder, 
-                    self.vae, 
-                    self.transformer
-                )
-                torch.cuda.empty_cache()
-                debug("All models unloaded from GPU and memory cleared")
+                for model_attr in ['text_encoder', 'text_encoder_2', 'image_encoder', 'vae', 'transformer']:
+                    if hasattr(self, model_attr) and getattr(self, model_attr) is not None:
+                        try:
+                            model = getattr(self, model_attr)
+                            model.to('cpu')
+                            debug(f"Moved {model_attr} to CPU")
+                        except Exception as e:
+                            debug(f"Error moving {model_attr} to CPU: {e}")
+            
+            # Clear CUDA cache
+            torch.cuda.empty_cache()
+            
+            # Set all model references to None
+            self.text_encoder = None
+            self.text_encoder_2 = None 
+            self.image_encoder = None
+            self.vae = None
+            self.transformer = None
+            
+            # Mark models as unloaded
+            self.models_loaded = False
+            
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+            # Report free memory
+            free_mem = get_cuda_free_memory_gb(gpu)
+            debug(f"All models completely unloaded. Free VRAM: {free_mem:.2f} GB")
             return True
         except Exception as e:
-            debug(f"Error unloading models: {e}")
+            debug(f"Error completely unloading models: {e}")
+            import traceback
+            debug(traceback.format_exc())
             return False
     
     def load_model_to_device(self, model_name, target_device=None):
