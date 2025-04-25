@@ -1878,7 +1878,10 @@ with block:
                     unload_button = gr.Button(value="Unload All Models", variant="secondary")
                     clear_cache_button = gr.Button(value="Clear CUDA Cache", variant="secondary")
                 mem_status = gr.Markdown("")
-            
+                mem_status = gr.Markdown("")
+                unload_button.click(fn=unload_all_models, outputs=mem_status)
+                clear_cache_button.click(fn=clear_cuda_cache, outputs=mem_status)
+                
             # -- Add Gaussian blur control --
             gaussian_blur = gr.Slider(
                 label="Gaussian Blur", 
@@ -1889,11 +1892,6 @@ with block:
                 visible=True,
                 info="Apply blur to input images before processing"
             )
-            
-                
-                mem_status = gr.Markdown("")
-                unload_button.click(fn=unload_all_models, outputs=mem_status)
-                clear_cache_button.click(fn=clear_cuda_cache, outputs=mem_status)
         
         # Right column for outputs
         with gr.Column(scale=2):
