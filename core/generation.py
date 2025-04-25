@@ -80,11 +80,8 @@ class VideoGenerator:
         return 0.5, 0.5, 0.5
     
     def prepare_inputs(self, input_image, prompt, n_prompt, cfg, gaussian_blur_amount=0.0,
-                       llm_weight=1.0, clip_weight=1.0):
-        """
-        Prepare inputs for generation
-        """
-        # Validate input image
+                      llm_weight=1.0, clip_weight=1.0):
+        """Prepare inputs for generation"""
         if input_image is None:
             raise ValueError(
                 "No input image provided! For text2video, a blank will be created in worker -- "
@@ -96,7 +93,7 @@ class VideoGenerator:
         else:
             raise ValueError("Input image is not a valid numpy array!")
         
-        # CRITICAL MEMORY MANAGEMENT: First unload all models to clear GPU
+        # Clear GPU first
         if not self.model_manager.high_vram:
             unload_complete_models(
                 self.model_manager.text_encoder, 
@@ -106,10 +103,8 @@ class VideoGenerator:
                 self.model_manager.transformer
             )
         
-        # Carefully load only the models needed for text encoding
+        # Load only text encoders for prompt processing
         fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
-        self.model_manager.text_encoder.to(gpu)  # Actually move it to GPU
-        
         load_model_as_complete(self.model_manager.text_encoder_2, target_device=gpu)
         
         # Encode prompts
@@ -121,7 +116,7 @@ class VideoGenerator:
             self.model_manager.tokenizer_2
         )
         
-        # Handle CFG=1 case (no negative prompt)
+        # Create negative prompts
         if cfg == 1:
             llama_vec_n, clip_pool_n = torch.zeros_like(llama_vec), torch.zeros_like(clip_pool)
         else:
@@ -133,15 +128,15 @@ class VideoGenerator:
                 self.model_manager.tokenizer_2
             )
         
-        # Crop or pad prompt embeddings
+        # Process masks
         llama_vec, mask = crop_or_pad_yield_mask(llama_vec, 512)
         llama_vec_n, mask_n = crop_or_pad_yield_mask(llama_vec_n, 512)
         
-        # Apply encoder weights
+        # Apply weights
         if llm_weight != 1.0:
             llama_vec = llama_vec * llm_weight
             llama_vec_n = llama_vec_n * llm_weight
-            
+        
         if clip_weight != 1.0:
             clip_pool = clip_pool * clip_weight
             clip_pool_n = clip_pool_n * clip_weight
@@ -150,14 +145,14 @@ class VideoGenerator:
         h, w = find_nearest_bucket(H, W, resolution=640)
         input_np = resize_and_center_crop(input_image, target_width=w, target_height=h)
         
-        # Save a copy of the input
+        # Save a copy
         Image.fromarray(input_np).save(os.path.join(self.output_folder, f'{generate_timestamp()}.png'))
         
-        # Normalize and reshape
+        # Convert to tensor
         input_tensor = torch.from_numpy(input_np).float() / 127.5 - 1
         input_tensor = input_tensor.permute(2, 0, 1)[None, :, None]
         
-        # Apply gaussian blur if needed
+        # Apply blur if needed
         if gaussian_blur_amount > 0.0:
             input_tensor = apply_gaussian_blur(input_tensor, gaussian_blur_amount)
         
@@ -374,8 +369,27 @@ class VideoGenerator:
                 m_n = mask_n
                 
                 # CLIP Vision feature extraction
+                # ---- Unload all models before sampling
                 if not self.model_manager.high_vram:
-                    load_model_as_complete(self.model_manager.image_encoder, target_device=gpu)
+                    unload_complete_models(
+                        self.model_manager.text_encoder, 
+                        self.model_manager.text_encoder_2, 
+                        self.model_manager.image_encoder, 
+                        self.model_manager.vae, 
+                        self.model_manager.transformer
+                    )
+                    debug("explicitly unloaded all models (before sampling)")
+                    
+                    # Load only the transformer for sampling
+                    move_model_to_device_with_memory_preservation(
+                        self.model_manager.transformer, 
+                        target_device=gpu, 
+                        preserved_memory_gb=gpu_memory_preservation
+                    )
+                    debug("moved transformer to gpu (memory preservation)")
+
+                # Set up teacache
+                self.model_manager.initialize_teacache(enable_teacache=use_teacache, num_steps=steps if use_teacache else 0)
                 
                 # Process end frame with CLIP
                 end_clip_output = hf_clip_vision_encode(
@@ -479,7 +493,16 @@ class VideoGenerator:
                 
                 # CLIP vision encoding for image2video and text2video
                 if not self.model_manager.high_vram:
-                    load_model_as_complete(self.model_manager.image_encoder, target_device=gpu)
+                    # Offload transformer
+                    offload_model_from_device_for_memory_preservation(
+                        self.model_manager.transformer, 
+                        target_device=gpu, 
+                        preserved_memory_gb=8
+                    )
+                    
+                    # Load VAE for decoding
+                    load_model_as_complete(self.model_manager.vae, target_device=gpu)
+                    debug("loaded vae to gpu")
                 
                 if mode == "text2video" or mode == "image2video":
                     clip_output = hf_clip_vision_encode(
