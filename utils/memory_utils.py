@@ -103,29 +103,25 @@ def fake_diffusers_current_device(model, device):
     """
     Helper to handle model device context issues with diffusers models
     
-    Many HuggingFace models track device in a way that PyTorch doesn't update with .to()
+    This doesn't move the entire model, but sets up device tracking
     """
     if model is None:
         return None
     
-    # First move the model to the device
-    model = model.to(device)
-    debug(f"Moved {model.__class__.__name__} to {device}")
-    
-    # For diffusers models, try to add device tracking safely
     try:
-        # Instead of trying to set a read-only property, just store the target device
+        # Set up device tracking without necessarily moving the model
         if not hasattr(model, '_target_device'):
             object.__setattr__(model, '_target_device', device)
-            
-        # Some HuggingFace models have specific device methods
+        
+        # Use HuggingFace-specific methods if available
         if hasattr(model, 'set_device') and callable(model.set_device):
             model.set_device(device)
+            
+        debug(f"Set up device tracking for {model.__class__.__name__}")
+        return model
     except Exception as e:
-        debug(f"Warning: Could not update device tracking for {model.__class__.__name__}: {e}")
-        # This is not critical - the model is already on the right device via .to()
-    
-    return model
+        debug(f"Warning: Could not set up device tracking: {e}")
+        return model
 
 def unload_complete_models(*models):
     """
