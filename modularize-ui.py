@@ -467,11 +467,21 @@ def worker(
     steps, cfg, gs, rs, gpu_memory_preservation, use_teacache,
     init_color, keyframe_weight,
     input_video=None, extension_direction="Forward", extension_frames=8,
-    original_mode=None 
+    original_mode=None
 ):
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
-
+    
+    # Initialize timing statistics
+    t_start = time.time()
+    timings = {
+        "latent_encoding": 0,
+        "step_times": [],
+        "generation_time": 0,
+        "vae_decode_time": 0,
+        "total_time": 0
+    }
+    
     # --- DEFINE DEFAULT OUTPUT FILENAME ---
     output_filename = os.path.join(outputs_folder, f'{job_id}_final.mp4')
     debug(f"worker: Default output filename set to: {output_filename}")
@@ -481,7 +491,8 @@ def worker(
         latent_window_size = adv_window
         frames_per_section = latent_window_size * 4 - 3
         total_frames = int(round(adv_seconds * 30))
-        total_sections = math.ceil(total_frames / frames_per_section)
+        # Ensure we generate the exact number of requested segments
+        total_sections = int(segment_count) if 'segment_count' in locals() else math.ceil(total_frames / frames_per_section)
         debug(f"worker: Advanced mode | latent_window_size={latent_window_size} "
               f"| frames_per_section={frames_per_section} | total_frames={total_frames} | total_sections={total_sections}")
     else:
@@ -730,6 +741,7 @@ def worker(
 
             # --- Define the *callback adapted for the 'section' index* ---
             def callback(d):
+                nonlocal graceful_stop  # Important!
                 # Preview generation (Unchanged)
                 preview = d['denoised']
                 preview = vae_decode_fake(preview)
@@ -1217,17 +1229,22 @@ def process(
     debug("process: called with mode", mode)
     assert mode in ['image2video', 'text2video', 'keyframes', 'video_extension'], "Invalid mode"
     
+    # Use explicit extraction of values from UI components
+    latent_window_size_val = latent_window_size.value if hasattr(latent_window_size, 'value') else latent_window_size
+    segment_count_val = segment_count.value if hasattr(segment_count, 'value') else segment_count
+    frame_overlap_val = frame_overlap.value if hasattr(frame_overlap, 'value') else frame_overlap
+    
     # Map our new UI values to what the original worker expects
     use_adv = True  # Always use advanced mode
-    adv_window = latent_window_size
+    adv_window = latent_window_size_val
     
     # Calculate frames per section (for selected_frames mapping)
-    frames_per_section = latent_window_size * 4 - 3
-    effective_frames = frames_per_section - min(frame_overlap, frames_per_section-1)
+    frames_per_section = latent_window_size_val * 4 - 3
+    effective_frames = frames_per_section - min(frame_overlap_val, frames_per_section-1)
     
     # Map segment_count to appropriate parameter
-    adv_seconds = (segment_count * effective_frames) / 30.0
-    selected_frames = segment_count * effective_frames
+    adv_seconds = (segment_count_val * effective_frames) / 30.0
+    selected_frames = segment_count_val * effective_frames
     
     # Create initial empty progress bars HTML
     empty_progress = """
@@ -1468,13 +1485,26 @@ def end_process():
         # First click: request graceful stop
         graceful_stop_requested = True
         stream.input_queue.push('graceful_end')
-        return gr.update(value="Force Stop Now", variant="stop")
+        return gr.update(value="Force Stop Now", elem_classes="end-button-warning")
     else:
         # Second click: force immediate stop
         graceful_stop_requested = False  # Reset for next time
+        
+        # Send stop signal to worker
         stream.input_queue.push('end')
-        return gr.update(value="End Generation", variant="secondary") 
-
+        
+        # Forcefully kill the process as a last resort
+        import threading
+        for thread in threading.enumerate():
+            if hasattr(thread, 'getName') and thread.getName() == "GradioProgress":
+                import os, signal
+                try:
+                    os.kill(os.getpid(), signal.SIGINT)
+                except:
+                    import sys
+                    sys.exit(0)
+        
+        return gr.update(value="End Generation", elem_classes="end-button-force")
 css = """
 .gr-box, .gr-image, .gr-video {
     border: 2px solid orange !important;
