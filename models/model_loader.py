@@ -114,13 +114,28 @@ class ModelManager:
             # Handle device placement based on VRAM
             if not self.high_vram:
                 debug("Low VRAM mode: Using dynamic swapping")
-                DynamicSwapInstaller.install_model(self.transformer, device=gpu)
-                DynamicSwapInstaller.install_model(self.text_encoder, device=gpu)
+                try:
+                    DynamicSwapInstaller.install_model(self.transformer, device=gpu)
+                    DynamicSwapInstaller.install_model(self.text_encoder, device=gpu)
+                except Exception as e:
+                    debug(f"Warning: Dynamic swapping setup failed: {e}")
+                    debug("Falling back to standard CPU/GPU transfers")
             else:
                 debug("High VRAM mode: Moving all models to GPU")
                 for m in [self.text_encoder, self.text_encoder_2, self.image_encoder, self.vae, self.transformer]:
                     if m is not None:
                         m.to(gpu)
+            
+            self.models_loaded = True
+            debug("All models loaded successfully")
+            return True
+            
+        except Exception as e:
+            debug(f"Error loading models: {e}")
+            import traceback
+            debug(traceback.format_exc())
+            self.models_loaded = False
+            return False
             
             self.models_loaded = True
             debug("All models loaded successfully")
