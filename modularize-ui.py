@@ -312,6 +312,67 @@ def end_process():
         stream.input_queue.push('end')
         return gr.update(value="End Generation", variant="secondary") 
 
+def setup_for_extension(video_path):
+    """Setup UI for video extension"""
+    return [
+        gr.update(value="video_extension"),  # mode_selector
+        gr.update(value=video_path),         # input_video
+        gr.update(visible=False),            # input_image
+        gr.update(visible=False),            # start_frame
+        gr.update(visible=False),            # end_frame
+        gr.update(visible=True)              # video_extension_options
+    ]
+
+extend_button.click(
+    fn=setup_for_extension,
+    inputs=[result_video],
+    outputs=[
+        mode_selector,
+        input_video,
+        input_image,
+        start_frame, 
+        end_frame,
+        video_extension_options
+    ]
+)
+
+def extract_video_frames(video_path, first_and_last=True):
+    """Extract first and/or last frame from a video file"""
+    try:
+        import cv2
+        debug(f"Extracting frames from {video_path}")
+        
+        if not os.path.exists(video_path):
+            debug(f"Video file not found: {video_path}")
+            return None, None
+            
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            debug(f"Could not open video: {video_path}")
+            return None, None
+            
+        # Get first frame
+        ret, first = cap.read()
+        first_frame = cv2.cvtColor(first, cv2.COLOR_BGR2RGB) if ret else None
+        
+        if first_and_last:
+            # Get frame count and jump to last frame
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if frame_count > 1:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_count - 1)
+                
+            ret, last = cap.read()
+            last_frame = cv2.cvtColor(last, cv2.COLOR_BGR2RGB) if ret else None
+        else:
+            last_frame = None
+            
+        cap.release()
+        return first_frame, last_frame
+        
+    except Exception as e:
+        debug(f"Error extracting video frames: {e}")
+        return None, None
+
 # Step 1: Define the extract_frames_from_video function
 def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resolution=640):
     """
@@ -472,6 +533,17 @@ def worker(
     job_id = generate_timestamp()
     debug("worker(): started", mode, "job_id:", job_id)
 
+
+    # Start overall timing
+    t_start = time.time()
+    timings = {
+        "latent_encoding": 0,
+        "step_times": [],
+        "generation_time": 0,
+        "vae_decode_time": 0,
+        "total_time": 0
+    }
+    
     # --- DEFINE DEFAULT OUTPUT FILENAME ---
     output_filename = os.path.join(outputs_folder, f'{job_id}_final.mp4')
     debug(f"worker: Default output filename set to: {output_filename}")
@@ -525,9 +597,11 @@ def worker(
             end_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
             
             # --- VAE encode ---
+            t_encode_start = time.time()
             input_anchor_tensor = torch.from_numpy(input_anchor_np).float() / 127.5 - 1
             input_anchor_tensor = input_anchor_tensor.permute(2, 0, 1)[None, :, None].float()
             start_latent = vae_encode(input_anchor_tensor, vae.float())
+            timings["latent_encoding"] += time.time() - t_encode_start
             
             # --- End frame processing (no need to resize, use directly) ---
             end_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
@@ -624,7 +698,9 @@ def worker(
             inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = prepare_inputs(
                 input_image, prompt, n_prompt, cfg
             )
+            t_encode_start = time.time()
             start_latent = vae_encode(inp_tensor.float(), vae.float())
+            timings["latent_encoding"] += time.time() - t_encode_start
 
         debug("worker: VAE encoded")
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
@@ -728,8 +804,25 @@ def worker(
             transformer.initialize_teacache(enable_teacache=use_teacache, num_steps=steps if use_teacache else 0)
             debug("worker: teacache initialized", "use_teacache", use_teacache)
 
+
+            # Initialize callback step tracking
+            callback.step_start_time = 0
+            callback.last_step = -1
+            
             # --- Define the *callback adapted for the 'section' index* ---
             def callback(d):
+                # Track current step timing
+                current_step = d.get('i', 0)
+                if hasattr(callback, 'step_start_time') and current_step > callback.last_step:
+                    # End of previous step
+                    step_time = time.time() - callback.step_start_time
+                    timings["step_times"].append(step_time)
+                    timings["generation_time"] += step_time
+                
+                # Start timing this step
+                callback.step_start_time = time.time()
+                callback.last_step = current_step
+                
                 # Preview generation (Unchanged)
                 preview = d['denoised']
                 preview = vae_decode_fake(preview)
@@ -849,7 +942,10 @@ def worker(
             # Clear CUDA cache to reduce fragmentation
             torch.cuda.empty_cache()
             debug("Cleared CUDA cache before decoding")
-            
+
+            # Start VAE decode timing
+            t_vae_start = time.time()
+        
             # Calculate theoretical max overlap frames (keep this for reference)
             max_overlapped_frames = latent_window_size * 4 - 3
             debug(f"Theoretical max overlapped_frames={max_overlapped_frames}")
@@ -878,6 +974,9 @@ def worker(
                 debug(f"Successfully decoded in chunks: final shape {current_pixels.shape}")
                 del current_pixels_chunks
                 torch.cuda.empty_cache()
+
+                # End VAE decode timing
+                timings["vae_decode_time"] += time.time() - t_vae_start
                 
                 debug(f"Decoded newly generated latents to pixels with shape: {current_pixels.shape}")
                 
@@ -1192,11 +1291,29 @@ def worker(
         else:
             trimmed_frames = 0
             video_seconds = 0.0
+        
+        # Calculate final timings
+        timings["total_time"] = t_end - t_start
+        misc_time = timings["total_time"] - (timings["latent_encoding"] + timings["generation_time"] + timings["vae_decode_time"])
+        
+        # Calculate avg step time
+        avg_step_time = sum(timings["step_times"]) / len(timings["step_times"]) if timings["step_times"] else 0
+        
+        # Format timing display
+        minutes = int(timings["total_time"] // 60)
+        seconds = timings["total_time"] % 60
+        
         summary_string = (
             f"Finished!\n"
             f"Total generated frames: {trimmed_frames}, "
             f"Video length: {video_seconds:.2f} seconds (FPS-30), "
-            f"Time taken: {t_end - t_start:.2f}s."
+            f"Time taken: {minutes}m {seconds:.2f}s.\n\n"
+            f"⏱️ Performance Breakdown:\n"
+            f"• Latent encoding: {timings['latent_encoding']:.2f}s\n"
+            f"• Average step time: {avg_step_time:.2f}s\n"
+            f"• Active generation: {timings['generation_time']:.2f}s\n"
+            f"• VAE decoding: {timings['vae_decode_time']:.2f}s\n"
+            f"• Other processing: {misc_time:.2f}s"
         )
         stream.output_queue.push(('progress', (None, summary_string, "")))
         debug("worker: pushed final progress event")
@@ -1405,6 +1522,23 @@ def process(
                 gr.update(interactive=True),
                 gr.update()
             )
+        elif flag == 'file':
+            output_filename = data
+            # Extract first and last frames
+            first, last = extract_video_frames(output_filename)
+            yield (
+                gr.update(value=output_filename, visible=True),  # result_video
+                gr.update(visible=False),                       # result_image_html
+                gr.update(visible=False),                       # preview_image
+                gr.update(value="", visible=False),             # progress_desc
+                gr.update(value="", visible=False),             # progress_bar
+                gr.update(interactive=True, value="Start Generation", variant="primary"),  # start_button
+                gr.update(interactive=False, value="End Generation"),  # end_button
+                gr.update(),                                    # seed
+                gr.update(value=first, visible=True),           # first_frame
+                gr.update(value=last, visible=True),            # last_frame
+                gr.update(visible=True)                         # extend_button
+            )
         elif flag == 'file_img':
             (img_filename, html_link) = data
             debug("process: yielding file_img/single image output", img_filename)
@@ -1468,14 +1602,65 @@ def end_process():
         # First click: request graceful stop
         graceful_stop_requested = True
         stream.input_queue.push('graceful_end')
-        return gr.update(value="Force Stop Now", variant="stop")
+        return gr.update(value="Force Stop Now", variant="stop", elem_classes="end-button-warning")
     else:
         # Second click: force immediate stop
         graceful_stop_requested = False  # Reset for next time
         stream.input_queue.push('end')
-        return gr.update(value="End Generation", variant="secondary") 
+        return gr.update(value="End Generation", variant="stop", elem_classes="end-button-force")
 
 css = """
+.gr-box, .gr-image, .gr-video {
+    border: 2px solid orange !important;
+    border-radius: 8px !important;
+    margin-bottom: 16px;
+    background: #222 !important;
+}
+
+/* Mode Selector */
+.mode-selector label span {
+    font-size: 1.1em !important;
+    padding: 8px 12px !important;
+}
+
+/* Start/End Buttons */
+.start-button button {
+    width: 100% !important;
+    background-color: #4CAF50 !important;
+    border-color: #4CAF50 !important;
+    font-size: 1.2em !important;
+    padding: 10px !important;
+}
+.start-button button:disabled {
+    background-color: #2E7D32 !important; 
+    border-color: #2E7D32 !important;
+}
+
+.end-button button {
+    width: 100% !important;
+    background-color: #8B0000 !important; /* Dark red when disabled */
+    border-color: #8B0000 !important;
+    font-size: 1.2em !important;
+    padding: 10px !important;
+}
+.end-button button:enabled {
+    background-color: #FF0000 !important; /* Bright red when enabled */
+    border-color: #FF0000 !important;
+}
+.end-button-warning button {
+    background-color: #FFA500 !important; /* Yellow for graceful stop */
+    border-color: #FFA500 !important;
+}
+.end-button-force button {
+    background-color: #FF0000 !important; /* Bright red for force stop */
+    border-color: #FF0000 !important;
+}
+/* Frame Thumbnails */
+.frame-thumbnail img {
+    height: 256px !important;
+    width: 256px !important;
+    object-fit: cover !important;
+}
 .gr-box, .gr-image, .gr-video {
     border: 2px solid orange !important;
     border-radius: 8px !important;
@@ -1577,101 +1762,82 @@ css = """
 block = gr.Blocks(css=css).queue()
 with block:
     gr.Markdown('# FramePack Advanced Playground by SCG')
+    
+    # Mode selector across the top
     with gr.Row():
+        mode_selector = gr.Radio(
+            ["image2video", "text2video", "keyframes", "video_extension"],
+            value="image2video",
+            label="Mode",
+            elem_classes="mode-selector"
+        )
+    
+    with gr.Row():
+        # Left column for inputs
         with gr.Column(scale=2):
-            mode_selector = gr.Radio(
-                ["image2video", "text2video", "keyframes", "video_extension"],
-                value="image2video", 
-                label="Mode"
-            )
-            with gr.Row():
-                start_button = gr.Button(value="Start Generation")
-                end_button = gr.Button(value="End Generation", interactive=False)
-            input_image = gr.Image(sources='upload', type="numpy", label="Image", elem_classes="input-image-container")  # always present, sometimes hidden
-            start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)", elem_classes="keyframe-image-container", visible=False)
-            with gr.Group(visible=False) as keyframes_options:
-                    keyframe_weight = gr.Slider(label="Start Frame Influence", minimum=0.0, maximum=1.0, value=0.7, step=0.1, info="Higher values prioritize start frame characteristics (0 = end frame only, 1 = start frame only)")
-            end_frame = gr.Image(sources='upload', type="numpy", label="End Frame (Required)", elem_classes="keyframe-image-container", visible=False)
-            with gr.Group(visible=False) as video_extension_options:
-                input_video = gr.Video(
-                    label="Upload Video to Extend", 
-                    format="mp4",
-                    height=320,
-                    elem_classes="video-container"
-                )
-                extension_direction = gr.Radio(
-                    ["Forward", "Backward"], 
-                    label="Extension Direction",
-                    value="Forward",
-                    info="Forward extends the end, Backward extends the beginning"
-                )
-                extension_frames = gr.Slider(
-                    label="Context Frames", 
-                    minimum=1, 
-                    maximum=16, 
-                    value=0, 
-                    step=1,
-                    info="Number of frames to extract from video for continuity"
-                )
-            aspect_selector = gr.Dropdown(
-                ["16:9", "9:16", "1:1", "4:5", "3:2", "2:3", "21:9", "4:3", "Custom..."],
-                label="Aspect Ratio",
-                value="1:1",
-                visible=False
-            )
-            custom_w = gr.Number(label="Width", value=768, visible=False)
-            custom_h = gr.Number(label="Height", value=768, visible=False)
+            # Prompts at the top of left column
             prompt = gr.Textbox(label="Prompt", value='', lines=3)
             with gr.Accordion("Negative Prompt", open=False):
                 n_prompt = gr.Textbox(
-                    label="Negative Prompt - Requires CFG higher than 1.0 to take effect", 
-                    value="", 
+                    label="Negative Prompt - Requires CFG higher than 1.0 to take effect",
+                    value="",
                     lines=2
                 )
             
-            # Realtime calculation display
+            # Seed controls moved up
+            with gr.Row():
+                seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
+                lock_seed = gr.Checkbox(label="Lock Seed", value=False)
+            
+            # Input sections for different modes
+            input_image = gr.Image(sources='upload', type="numpy", label="Image", elem_classes="input-image-container")
+            start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)", elem_classes="keyframe-image-container", visible=False)
+            # ... other mode-specific inputs ...
+            
+            # Generation Parameters accordion
+            with gr.Accordion("Generation Parameters", open=True):
+                latent_window_size = gr.Slider(
+                    label="Latent Window Size",
+                    minimum=2, maximum=33, value=9, step=1
+                )
+                segment_count = gr.Slider(
+                    label="Number of Segments",
+                    minimum=1, maximum=50, value=5, step=1,
+                    info="More segments = longer video"
+                )
+                overlap_slider = gr.Slider(
+                    label="Frame Overlap",
+                    minimum=0, maximum=33, value=8, step=1,
+                    info="Controls how many frames overlap between sections"
+                )
+                trim_percentage = gr.Slider(
+                    label="Segment Trim Percentage",
+                    minimum=0.0, maximum=1.0, value=0.2, step=0.01,
+                    info="Percentage of frames to trim (0.0 = keep all, 1.0 = maximum trim)"
+                )
+                init_color = gr.ColorPicker(label="Initial Frame Color", value="#808080", visible=False)
+                with gr.Group():
+                    use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
+                    seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
+                    lock_seed = gr.Checkbox(label="Lock Seed", value=False)
+                    steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
+                    gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
+                    with gr.Row():
+                        unload_button = gr.Button(value="Unload All Models", variant="secondary")
+                        clear_cache_button = gr.Button(value="Clear CUDA Cache", variant="secondary")
+            
+            # Video stats display
             video_stats = gr.HTML(
-                value="<div class='stats-box'>Estimated video length: calculating...</div>",
+                value="<div class='stats-box'>Calculating...</div>",
                 label="Approximate Output Length"
             )
             
-            latent_window_size = gr.Slider(
-                label="Latent Window Size", 
-                minimum=2, 
-                maximum=33, 
-                value=9, 
-                step=1
-            )
-            
-            segment_count = gr.Slider(
-                label="Number of Segments", 
-                minimum=1, 
-                maximum=50, 
-                value=5, 
-                step=1,
-                info="More segments = longer video"
-            )
-            
-            overlap_slider = gr.Slider(
-                label="Frame Overlap",
-                minimum=0,
-                maximum=33,
-                value=8,
-                step=1,
-                info="Controls how many frames overlap between sections"
-            )
-            
-            trim_percentage = gr.Slider(
-                label="Segment Trim Percentage",
-                minimum=0.0,
-                maximum=1.0,
-                value=0.2,
-                step=0.01,
-                info="Percentage of frames to trim (0.0 = keep all, 1.0 = maximum trim)"
-            )
-            
-            # -- Add encoder weight controls --
+            # Advanced Model Parameters
             with gr.Accordion("Advanced Model Parameters", open=False):
+                use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
+                steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
+                gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", 
+                                                 minimum=6, maximum=128, value=6, step=0.1)
                 llm_encoder_weight = gr.Slider(
                     label="LLM Encoder Weight", 
                     minimum=0.0, 
@@ -1707,6 +1873,11 @@ with block:
                     value=0.0, 
                     step=0.01
                 )
+                # Memory management
+                    with gr.Row():
+                        unload_button = gr.Button(value="Unload All Models", variant="secondary")
+                        clear_cache_button = gr.Button(value="Clear CUDA Cache", variant="secondary")
+                    mem_status = gr.Markdown("")
             
             # -- Add Gaussian blur control --
             gaussian_blur = gr.Slider(
@@ -1715,36 +1886,44 @@ with block:
                 maximum=1.0, 
                 value=0.0, 
                 step=0.01, 
-                visible=False,
+                visible=True,
                 info="Apply blur to input images before processing"
             )
-            init_color = gr.ColorPicker(label="Initial Frame Color", value="#808080", visible=False)
-            with gr.Group():
-                use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
-                seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
-                lock_seed = gr.Checkbox(label="Lock Seed", value=False)
-                steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
-                gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
-                with gr.Row():
-                    unload_button = gr.Button(value="Unload All Models", variant="secondary")
-                    clear_cache_button = gr.Button(value="Clear CUDA Cache", variant="secondary")
+            
                 
                 mem_status = gr.Markdown("")
                 unload_button.click(fn=unload_all_models, outputs=mem_status)
                 clear_cache_button.click(fn=clear_cuda_cache, outputs=mem_status)
+        
+        # Right column for outputs
         with gr.Column(scale=2):
-            progress_bar = gr.HTML(visible=False)  # Start hidden
+            # Start/End buttons at top of right column
+            with gr.Row():
+                start_button = gr.Button(value="Start Generation", elem_classes="start-button")
+                
+            with gr.Row():
+                end_button = gr.Button(value="End Generation", interactive=False, elem_classes="end-button")
+            
+            # Progress indicators
+            progress_bar = gr.HTML(visible=False)
             progress_desc = gr.Markdown(visible=False)
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
-            result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, elem_classes="result-container", loop=True)
+            
+            # Results section
+            result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, 
+                                   elem_classes="result-container", loop=True)
+            
+            # First/Last frame displays
+            with gr.Row():
+                first_frame = gr.Image(label="First Frame", elem_classes="frame-thumbnail", visible=True)
+                last_frame = gr.Image(label="Last Frame", elem_classes="frame-thumbnail", visible=True)
+            
+            # Action buttons for output
+            extend_button = gr.Button(value="Extend This Video", visible=False)
+            
             result_image_html = gr.Image(label='Single Frame Image', elem_classes="result-container", visible=False)
             gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
-            progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
-            progress_bar = gr.HTML('', elem_classes='no-generating-animation')
            
-
-            
-
     # --- calllbacks ---
     def update_frame_dropdown(window):
         stops = get_valid_frame_stops(window)
