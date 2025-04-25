@@ -1,4 +1,5 @@
 # ui/callbacks.py
+import gradio as gr  # Add this import!
 import torch
 import random
 import time
