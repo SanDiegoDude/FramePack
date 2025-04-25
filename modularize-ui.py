@@ -2181,12 +2181,12 @@ with block:
     
     end_button.click(fn=end_process, outputs=[end_button])
 
-# Initialize the video stats on page load
-block.load(
-    fn=update_video_stats,
-    inputs=[latent_window_size, segment_count, overlap_slider],
-    outputs=[video_stats]
-)
+    # Initialize the video stats on page load
+    block.load(
+        fn=update_video_stats,
+        inputs=[latent_window_size, segment_count, overlap_slider],
+        outputs=[video_stats]
+    )
 
 block.launch(
     server_name=args.server,
