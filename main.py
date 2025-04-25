@@ -6,7 +6,6 @@ from core.generation import VideoGenerator
 from ui.interface import create_interface
 from utils.memory_utils import get_cuda_free_memory_gb, gpu
 from utils.common import debug, setup_debug
-from diffusers_helper.hf_login import login
 
 def main():
     # Parse command-line arguments
@@ -27,11 +26,11 @@ def main():
         os.path.join(os.path.dirname(__file__), './hf_download')))
     debug(f"HF_HOME set to: {os.environ['HF_HOME']}")
     
+    # HF login if needed
     try:
         from diffusers_helper.hf_login import login
         debug("Trying to login to Hugging Face...")
         # Check if HF_TOKEN environment variable is set
-        import os
         hf_token = os.environ.get('HF_TOKEN')
         if hf_token:
             login(hf_token)
