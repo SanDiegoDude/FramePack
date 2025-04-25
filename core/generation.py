@@ -80,7 +80,7 @@ class VideoGenerator:
         return 0.5, 0.5, 0.5
     
     def prepare_inputs(self, input_image, prompt, n_prompt, cfg, gaussian_blur_amount=0.0,
-                   llm_weight=1.0, clip_weight=1.0):
+                       llm_weight=1.0, clip_weight=1.0):
         """
         Prepare inputs for generation
         """
@@ -96,7 +96,7 @@ class VideoGenerator:
         else:
             raise ValueError("Input image is not a valid numpy array!")
         
-        # Use model manager to handle models
+        # CRITICAL MEMORY MANAGEMENT: First unload all models to clear GPU
         if not self.model_manager.high_vram:
             unload_complete_models(
                 self.model_manager.text_encoder, 
@@ -106,14 +106,11 @@ class VideoGenerator:
                 self.model_manager.transformer
             )
         
-        # Explicitly move text encoders to GPU before encoding
-        self.model_manager.text_encoder.to(gpu)  # Add this line
+        # Carefully load only the models needed for text encoding
         fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
-        self.model_manager.text_encoder_2.to(gpu)  # Add this line
-        load_model_as_complete(self.model_manager.text_encoder_2, target_device=gpu)
+        self.model_manager.text_encoder.to(gpu)  # Actually move it to GPU
         
-        debug(f"Text encoder device: {self.model_manager.text_encoder.device}")
-        debug(f"Text encoder 2 device: {self.model_manager.text_encoder_2.device}")
+        load_model_as_complete(self.model_manager.text_encoder_2, target_device=gpu)
         
         # Encode prompts
         llama_vec, clip_pool = encode_prompt_conds(
@@ -329,6 +326,7 @@ class VideoGenerator:
                 
                 # Text prompt encoding
                 if not self.model_manager.high_vram:
+                    # Clear GPU memory before loading transformer
                     unload_complete_models(
                         self.model_manager.text_encoder, 
                         self.model_manager.text_encoder_2, 
@@ -336,9 +334,23 @@ class VideoGenerator:
                         self.model_manager.vae, 
                         self.model_manager.transformer
                     )
+                    debug("explicitly unloaded all models (before sampling)")
+                    
+                    # Load only the transformer, with memory preservation
+                    move_model_to_device_with_memory_preservation(
+                        self.model_manager.transformer, 
+                        target_device=gpu, 
+                        preserved_memory_gb=gpu_memory_preservation
+                    )
+                    debug("moved transformer to gpu (memory preservation)")
                 
-                fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
-                load_model_as_complete(self.model_manager.text_encoder_2, target_device=gpu)
+                # Then do CLIP encoding
+                if mode == "text2video" or mode == "image2video":
+                    clip_output = hf_clip_vision_encode(
+                        inp_np, 
+                        self.model_manager.feature_extractor, 
+                        self.model_manager.image_encoder
+                    ).last_hidden_state
                 
                 lv, cp = encode_prompt_conds(
                     prompt, 
