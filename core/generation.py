@@ -10,7 +10,6 @@ from utils.video_utils import (
     save_bcthw_as_mp4, find_nearest_bucket, resize_and_center_crop,
     crop_or_pad_yield_mask, extract_frames_from_video, fix_video_compatibility
 )
-from diffusers_helper.thread_utils import AsyncStream
 
 class VideoGenerator:
     """Handles all video generation functionality"""
@@ -76,7 +75,7 @@ class VideoGenerator:
         return 0.5, 0.5, 0.5
     
     def prepare_inputs(self, input_image, prompt, n_prompt, cfg, gaussian_blur_amount=0.0,
-                     llm_weight=1.0, clip_weight=1.0):
+                       llm_weight=1.0, clip_weight=1.0):
         """
         Prepare inputs for generation
         
@@ -86,24 +85,63 @@ class VideoGenerator:
         return None
     
     def generate_video(self, config):
-    """
-    Main video generation function
+        """
+        Main video generation function
+        
+        Args:
+            config: Dictionary containing generation parameters
+        
+        Returns:
+            dict: Results and status information
+        """
+        # This is a placeholder for the worker function
+        # We'll implement the full functionality as we build out the module
+        
+        job_id = generate_timestamp()
+        debug(f"Starting video generation job {job_id}")
+        
+        # Eventually this will contain the logic from the worker function
+        return {
+            "job_id": job_id,
+            "status": "placeholder",
+            "message": "VideoGenerator.generate_video not yet implemented"
+        }
     
-    Args:
-        config: Dictionary containing generation parameters
-    
-    Returns:
-        dict: Results and status information
-    """
-    # This is a placeholder for the worker function
-    # We'll implement the full functionality as we build out the module
-    
-    job_id = generate_timestamp()
-    debug(f"Starting video generation job {job_id}")
-    
-    # Eventually this will contain the logic from the worker function
-    return {
-        "job_id": job_id,
-        "status": "placeholder",
-        "message": "VideoGenerator.generate_video not yet implemented"
-    }
+    def cleanup_temp_files(self, job_id, keep_final=True, final_output_path=None):
+        """Clean up temporary files created during generation"""
+        import glob
+        
+        debug(f"[CLEANUP] Starting cleanup for job {job_id}")
+        
+        # Find all preview videos for this job
+        preview_pattern = os.path.join(self.output_folder, f"{job_id}_preview_*.mp4")
+        preview_files = glob.glob(preview_pattern)
+        
+        # Find extension/temporary files
+        extension_file = os.path.join(self.output_folder, f"{job_id}_extension.mp4")
+        compat_files = glob.glob(os.path.join(self.output_folder, f"{job_id}_*_compat.mp4"))
+        filelist = os.path.join(self.output_folder, f"{job_id}_filelist.txt")
+        
+        # Delete preview videos
+        for f in preview_files:
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                    debug(f"[CLEANUP] Removed preview: {f}")
+                except Exception as e:
+                    debug(f"[CLEANUP] Failed to remove {f}: {e}")
+        
+        # Delete temporary files used for video concatenation
+        temp_files = compat_files + [filelist]
+        if not keep_final or final_output_path != extension_file:
+            temp_files.append(extension_file)
+        
+        for f in temp_files:
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                    debug(f"[CLEANUP] Removed temp file: {f}")
+                except Exception as e:
+                    debug(f"[CLEANUP] Failed to remove {f}: {e}")
+        
+        debug(f"[CLEANUP] Completed cleanup for job {job_id}")
