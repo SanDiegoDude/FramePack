@@ -27,8 +27,20 @@ def main():
         os.path.join(os.path.dirname(__file__), './hf_download')))
     debug(f"HF_HOME set to: {os.environ['HF_HOME']}")
     
-    # HF login if needed
-    login()
+    try:
+        from diffusers_helper.hf_login import login
+        debug("Trying to login to Hugging Face...")
+        # Check if HF_TOKEN environment variable is set
+        import os
+        hf_token = os.environ.get('HF_TOKEN')
+        if hf_token:
+            login(hf_token)
+            debug("Logged in to Hugging Face successfully")
+        else:
+            debug("No HF_TOKEN environment variable found, skipping login")
+    except Exception as e:
+        debug(f"Error during Hugging Face login: {e}")
+        debug("Continuing without login...")
     
     # Create output directory
     outputs_folder = './outputs/'
