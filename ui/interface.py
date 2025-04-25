@@ -379,13 +379,13 @@ def create_interface(model_manager, video_generator):
         
         prompt.submit(
             fn=process,
-            inputs=ips,
+            inputs=ips + [video_generator, model_manager],  # Add these
             outputs=output_list
         )
         
         start_button.click(
             fn=process,
-            inputs=ips,
+            inputs=ips + [video_generator, model_manager],  # Add these
             outputs=output_list
         )
         
