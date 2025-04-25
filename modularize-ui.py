@@ -1357,6 +1357,9 @@ def process(
                 gr.update(interactive=True),
                 gr.update(interactive=False),
                 gr.update()
+                gr.update(), # first_frame
+                gr.update(), # last_frame
+                gr.update()  # extend_button
             )
             return
             
@@ -1402,6 +1405,9 @@ def process(
             gr.update(interactive=True),
             gr.update(interactive=False),
             gr.update()
+            gr.update(), # first_frame
+            gr.update(), # last_frame
+            gr.update()  # extend_button
         )
         return
         
@@ -1414,6 +1420,9 @@ def process(
         gr.update(interactive=False),
         gr.update(interactive=True),
         gr.update(value=seed)
+        gr.update(), # first_frame
+        gr.update(), # last_frame
+        gr.update()  # extend_button
     )
     stream = AsyncStream()
     async_run(
