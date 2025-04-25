@@ -80,21 +80,9 @@ class VideoGenerator:
         return 0.5, 0.5, 0.5
     
     def prepare_inputs(self, input_image, prompt, n_prompt, cfg, gaussian_blur_amount=0.0,
-                       llm_weight=1.0, clip_weight=1.0):
+                   llm_weight=1.0, clip_weight=1.0):
         """
         Prepare inputs for generation
-        
-        Args:
-            input_image: Input image
-            prompt: Text prompt
-            n_prompt: Negative prompt
-            cfg: CFG scale
-            gaussian_blur_amount: Amount of blur to apply
-            llm_weight: Weight for LLM encoder
-            clip_weight: Weight for CLIP encoder
-            
-        Returns:
-            Tuple of prepared inputs
         """
         # Validate input image
         if input_image is None:
@@ -118,9 +106,14 @@ class VideoGenerator:
                 self.model_manager.transformer
             )
         
-        # Load models needed for prompt encoding
+        # Explicitly move text encoders to GPU before encoding
+        self.model_manager.text_encoder.to(gpu)  # Add this line
         fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
+        self.model_manager.text_encoder_2.to(gpu)  # Add this line
         load_model_as_complete(self.model_manager.text_encoder_2, target_device=gpu)
+        
+        debug(f"Text encoder device: {self.model_manager.text_encoder.device}")
+        debug(f"Text encoder 2 device: {self.model_manager.text_encoder_2.device}")
         
         # Encode prompts
         llama_vec, clip_pool = encode_prompt_conds(
