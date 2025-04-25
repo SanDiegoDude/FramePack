@@ -1,7 +1,6 @@
 # utils/memory_utils.py
 import torch
 import gc
-import os
 from utils.common import debug
 
 # Define device constants
@@ -33,88 +32,89 @@ def clear_cuda_cache():
 
 def move_model_to_device_with_memory_preservation(model, target_device, preserved_memory_gb=6):
     """
-    Move a model to a device while preserving a specified amount of memory
-    
-    This function moves a model to the target device (typically GPU) while ensuring 
-    that a minimum amount of memory is preserved for other operations.
+    Move a model to a device while ensuring a minimum amount of memory is preserved.
+    This is critical for low-VRAM operation.
     """
+    if model is None:
+        return None
+        
     if target_device == cpu:
         model.to(target_device)
         return model
     
-    # Check if we have enough memory
+    # Check available memory before moving
     free_mem = get_cuda_free_memory_gb(target_device)
     debug(f"Free memory before moving model: {free_mem:.2f} GB, preserving {preserved_memory_gb:.2f} GB")
     
-    # If we don't have enough preserved memory, clear cache
-    if free_mem < preserved_memory_gb + 1.0:  # Add 1GB buffer
-        debug("Not enough VRAM - clearing CUDA cache")
+    # Clear cache if we need more memory
+    if free_mem < preserved_memory_gb + 2.0:  # Add buffer
+        debug("Not enough memory - clearing CUDA cache")
         torch.cuda.empty_cache()
         gc.collect()
         free_mem = get_cuda_free_memory_gb(target_device)
-        debug(f"Free memory after clearing cache: {free_mem:.2f} GB")
-    
+        
     # Move model to device
-    debug(f"Moving {model.__class__.__name__} to {target_device}")
-    model.to(target_device)
-    
-    # Report memory usage
-    new_free_mem = get_cuda_free_memory_gb(target_device)
-    used_mem = free_mem - new_free_mem
-    debug(f"Model used {used_mem:.2f} GB, {new_free_mem:.2f} GB remaining")
-    
-    return model
+    try:
+        model.to(target_device)
+        debug(f"Moving {model.__class__.__name__} to {target_device}")
+        
+        # Check memory after moving
+        new_free_mem = get_cuda_free_memory_gb(target_device)
+        used_mem = free_mem - new_free_mem
+        debug(f"Model used {used_mem:.2f} GB, {new_free_mem:.2f} GB remaining")
+        
+        return model
+    except Exception as e:
+        debug(f"Error moving model to device: {e}")
+        model.to(cpu)  # Make sure it's on CPU if GPU failed
+        torch.cuda.empty_cache()
+        return model
 
-def offload_model_from_device_for_memory_preservation(model, target_device=None, preserved_memory_gb=6):
+def offload_model_from_device_for_memory_preservation(model, target_device, preserved_memory_gb=6):
     """
-    Offload a model from a device to CPU to preserve memory
-    
-    Args:
-        model: The model to offload
-        target_device: The original device to report memory for
-        preserved_memory_gb: Amount of memory to preserve after offload
+    Offload a model from GPU to CPU to preserve memory
     """
     if model is None:
         return None
     
-    if target_device is None:
-        target_device = gpu
-    
-    # Get memory before offload
-    free_mem_before = get_cuda_free_memory_gb(target_device)
+    # Monitor memory
+    free_mem_before = get_cuda_free_memory_gb(gpu)
     debug(f"Free memory before offloading {model.__class__.__name__}: {free_mem_before:.2f} GB")
     
     # Move to CPU
-    debug(f"Offloading {model.__class__.__name__} to CPU")
-    model.to(cpu)
-    
-    # Clear cache
-    torch.cuda.empty_cache()
-    gc.collect()
-    
-    # Get memory after offload
-    free_mem_after = get_cuda_free_memory_gb(target_device)
-    freed_mem = free_mem_after - free_mem_before
-    debug(f"Offloading freed {freed_mem:.2f} GB, now have {free_mem_after:.2f} GB free")
-    
-    return model
+    try:
+        model.to(cpu)
+        debug(f"Offloaded {model.__class__.__name__} to CPU")
+        
+        # Clean up GPU memory
+        torch.cuda.empty_cache()
+        
+        # Check memory again
+        free_mem_after = get_cuda_free_memory_gb(gpu)
+        debug(f"After offload: {free_mem_after:.2f} GB free ({free_mem_after - free_mem_before:.2f} GB freed)")
+        
+        return model
+    except Exception as e:
+        debug(f"Error offloading model: {e}")
+        return model
 
 def fake_diffusers_current_device(model, device):
     """
-    Helper to handle model device context issues with diffusers models
+    Special handling for HuggingFace models that track device separately from PyTorch
     
-    This doesn't move the entire model, but sets up device tracking
+    Note: This does NOT move the model to GPU, it just sets up tracking
     """
     if model is None:
         return None
     
+    # Don't actually move the model - just set device tracking
     try:
-        # Set up device tracking without necessarily moving the model
+        # Store target device for later use, without changing properties
         if not hasattr(model, '_target_device'):
-            object.__setattr__(model, '_target_device', device)
-        
-        # Use HuggingFace-specific methods if available
-        if hasattr(model, 'set_device') and callable(model.set_device):
+            setattr(model, '_target_device', device)
+            
+        # Use model's own device tracking if available
+        if hasattr(model, 'set_device') and callable(getattr(model, 'set_device')):
             model.set_device(device)
             
         debug(f"Set up device tracking for {model.__class__.__name__}")
@@ -125,27 +125,23 @@ def fake_diffusers_current_device(model, device):
 
 def unload_complete_models(*models):
     """
-    Completely unload models from memory (both CPU and GPU)
+    Unload multiple models from GPU to free memory
     
     Args:
         *models: Models to unload
     """
-    debug(f"Completely unloading {len(models)} models from memory")
+    debug(f"Unloading {len(models)} models from GPU")
     
-    # First move to CPU to free GPU memory
     for i, model in enumerate(models):
         if model is not None:
             try:
                 model.to(cpu)
-                debug(f"Moved model {i} to CPU")
+                debug(f"Moved {model.__class__.__name__} to CPU")
             except Exception as e:
                 debug(f"Error moving model {i} to CPU: {e}")
     
-    # Clear CUDA cache
+    # Clear cache
     torch.cuda.empty_cache()
-    
-    # Force garbage collection
-    import gc
     gc.collect()
     
     # Report free memory
@@ -156,67 +152,55 @@ def unload_complete_models(*models):
 
 def load_model_as_complete(model, target_device):
     """
-    Load model completely to the target device
+    Load a specific model to target device
     
-    Args:
-        model: Model to load
-        target_device: Target device (GPU or CPU)
+    This handles loading the model to device and reporting memory usage
     """
     if model is None:
-        debug("Cannot load None model")
         return None
     
-    # Check free memory before loading
+    # Check memory before loading if loading to GPU
     if target_device == gpu:
         free_mem_before = get_cuda_free_memory_gb(target_device)
         debug(f"Free memory before loading {model.__class__.__name__}: {free_mem_before:.2f} GB")
     
     # Move model to target device
-    model = model.to(target_device)
-    debug(f"Loaded {model.__class__.__name__} to {target_device}")
-    
-    # Report memory usage for GPU
-    if target_device == gpu:
-        free_mem_after = get_cuda_free_memory_gb(target_device)
-        used_mem = free_mem_before - free_mem_after
-        debug(f"Model used {used_mem:.2f} GB, {free_mem_after:.2f} GB remaining")
-    
-    return model
+    try:
+        model.to(target_device)
+        debug(f"Loaded {model.__class__.__name__} to {target_device}")
+        
+        # Report memory after loading
+        if target_device == gpu:
+            free_mem_after = get_cuda_free_memory_gb(target_device)
+            used_mem = free_mem_before - free_mem_after
+            debug(f"Model used {used_mem:.2f} GB, {free_mem_after:.2f} GB remaining")
+        
+        return model
+    except Exception as e:
+        debug(f"Error loading model: {e}")
+        model.to(cpu)  # Ensure it's on CPU if GPU failed
+        return model
 
 class DynamicSwapInstaller:
     """
-    Dynamic model swapping functionality for memory efficiency
+    Marks models for dynamic swapping without actually moving them to GPU
     """
     @staticmethod
     def install_model(model, device):
         """
         Install a model for dynamic swapping
         
-        Args:
-            model: The model to prepare for swapping
-            device: The target device (usually GPU)
+        Important: This does NOT actually move the model to GPU!
+        It just sets up bookkeeping for later dynamic loading.
         """
         debug(f"DynamicSwapInstaller: Model will be swapped as needed")
         
-        # Don't try to move the entire model to GPU - just set up tracking
-        # This is critical for low VRAM devices
         try:
-            # Only update tracking attributes, don't move the model
-            if hasattr(model, 'device'):
-                # Some models have a device property
-                if not hasattr(model, '_original_device'):
-                    model._original_device = model.device
-                # Don't actually set model.device - it's read-only
-            
-            # Tag the model with target device for later reference
-            object.__setattr__(model, '_target_device', device)
-            
-            # Free memory after tagging
-            torch.cuda.empty_cache()
-            
-            debug(f"Installed {model.__class__.__name__} for dynamic swapping")
+            # Just tag the model - don't actually move it to GPU yet
+            if not hasattr(model, '_dynamic_swap_target'):
+                setattr(model, '_dynamic_swap_target', device)
+                
             return model
-            
         except Exception as e:
             debug(f"Warning: Dynamic swapping setup failed: {e}")
             return model
