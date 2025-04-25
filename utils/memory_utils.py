@@ -1,6 +1,7 @@
 # utils/memory_utils.py
 # Memory management utilities
 import torch
+from utils.common import debug  # Add this import for debug function
 
 # Define device constants
 cpu = torch.device('cpu')
@@ -59,3 +60,14 @@ def unload_complete_models(*models):
 def load_model_as_complete(model, target_device):
     """Load model completely to the target device"""
     pass
+    
+class DynamicSwapInstaller:
+    """Dynamic model swap functionality"""
+    
+    @staticmethod
+    def install_model(model, device):
+        """Install a model for dynamic swapping"""
+        debug("DynamicSwapInstaller: Model will be swapped as needed")
+        # In the actual implementation, this would set up the model
+        # for memory-efficient operation
+        pass
