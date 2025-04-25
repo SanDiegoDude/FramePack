@@ -86,23 +86,24 @@ class VideoGenerator:
         return None
     
     def generate_video(self, config):
-        """
-        Main video generation function
-        
-        Args:
-            config: Dictionary containing generation parameters
-        
-        Returns:
-            dict: Results and status information
-        """
-        # This is a placeholder for the worker function
-        # We'll implement the full functionality as we build out the module
-        
-        job_id = generate_timestamp()
-        debug(f"Starting video generation job {job_id}")
-        
-        # Eventually this will contain the logic from the worker function
-        return {
-            "job_id": job_id,
-            "status": "placeholder",
-            "message": "VideoGenerator.generate_video not
+    """
+    Main video generation function
+    
+    Args:
+        config: Dictionary containing generation parameters
+    
+    Returns:
+        dict: Results and status information
+    """
+    # This is a placeholder for the worker function
+    # We'll implement the full functionality as we build out the module
+    
+    job_id = generate_timestamp()
+    debug(f"Starting video generation job {job_id}")
+    
+    # Eventually this will contain the logic from the worker function
+    return {
+        "job_id": job_id,
+        "status": "placeholder",
+        "message": "VideoGenerator.generate_video not yet implemented"
+    }
