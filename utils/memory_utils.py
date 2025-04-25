@@ -108,37 +108,48 @@ def fake_diffusers_current_device(model, device):
     if model is None:
         return None
     
-    # Save original device property if it exists
-    if hasattr(model, 'device'):
-        if not hasattr(model, '_original_device'):
-            model._original_device = model.device
-        model.device = device
-    
-    # Actually move the model to device
+    # First move the model to the device
     model = model.to(device)
     debug(f"Moved {model.__class__.__name__} to {device}")
+    
+    # For diffusers models, try to add device tracking safely
+    try:
+        # Instead of trying to set a read-only property, just store the target device
+        if not hasattr(model, '_target_device'):
+            object.__setattr__(model, '_target_device', device)
+            
+        # Some HuggingFace models have specific device methods
+        if hasattr(model, 'set_device') and callable(model.set_device):
+            model.set_device(device)
+    except Exception as e:
+        debug(f"Warning: Could not update device tracking for {model.__class__.__name__}: {e}")
+        # This is not critical - the model is already on the right device via .to()
     
     return model
 
 def unload_complete_models(*models):
     """
-    Unload all provided models from GPU to free memory
+    Completely unload models from memory (both CPU and GPU)
     
     Args:
         *models: Models to unload
     """
-    debug(f"Unloading {len(models)} models from GPU")
+    debug(f"Completely unloading {len(models)} models from memory")
     
-    for model in models:
+    # First move to CPU to free GPU memory
+    for i, model in enumerate(models):
         if model is not None:
             try:
                 model.to(cpu)
-                debug(f"Moved {model.__class__.__name__} to CPU")
+                debug(f"Moved model {i} to CPU")
             except Exception as e:
-                debug(f"Error moving model to CPU: {e}")
+                debug(f"Error moving model {i} to CPU: {e}")
     
-    # Clear cache
+    # Clear CUDA cache
     torch.cuda.empty_cache()
+    
+    # Force garbage collection
+    import gc
     gc.collect()
     
     # Report free memory
