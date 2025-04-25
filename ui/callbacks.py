@@ -1,46 +1,351 @@
 # ui/callbacks.py
-import gradio as gr  # Add this import!
+import gradio as gr
 import torch
 import random
 import time
 import numpy as np
 from utils.common import debug
 from ui.style import make_progress_bar_html
+from diffusers_helper.thread_utils import AsyncStream, async_run
 
-def process(*args):
+# Global stream for async communication
+stream = None
+graceful_stop_requested = False
+
+def process(
+    mode, input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h,
+    prompt, n_prompt, seed,
+    latent_window_size, segment_count,
+    steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color,
+    keyframe_weight,
+    input_video=None, extension_direction="Forward", extension_frames=8,
+    frame_overlap=0, trim_pct=0.2, gaussian_blur_amount=0.0,
+    llm_weight=1.0, clip_weight=1.0, clean_latent_weight=1.0,
+    video_generator=None, model_manager=None
+):
     """
     Main processing function for all generation modes
-    This is a placeholder that mimics the functionality without actual generation
+    
+    Args:
+        All UI parameters + video_generator and model_manager references
     """
-    debug("UI Process: Started (placeholder)")
+    global stream
     
-    # Extract parameters (partial list)
-    mode = args[0]
-    input_image = args[1]
-    start_frame = args[2]
-    end_frame = args[3]
+    debug(f"Process called with mode: {mode}")
+    assert mode in ['image2video', 'text2video', 'keyframes', 'video_extension'], "Invalid mode"
     
-    debug(f"Process mode: {mode}")
+    # Extract values from gradio components if needed
+    latent_window_size_val = latent_window_size if not hasattr(latent_window_size, 'value') else latent_window_size.value
+    segment_count_val = segment_count if not hasattr(segment_count, 'value') else segment_count.value
+    frame_overlap_val = frame_overlap if not hasattr(frame_overlap, 'value') else frame_overlap.value
     
-    # For now, just return some placeholder data
-    return (
-        gr.update(visible=False),                   # result_video
-        gr.update(visible=False),                   # result_image_html
-        gr.update(visible=False),                   # preview_image
-        "This is a placeholder UI. Actual generation not implemented yet.",  # progress_desc
-        gr.update(visible=False),                   # progress_bar
-        gr.update(interactive=True),                # start_button
-        gr.update(interactive=False),               # end_button
-        gr.update(),                                # seed
-        gr.update(),                                # first_frame
-        gr.update(),                                # last_frame
-        gr.update()                                 # extend_button
+    # Calculate frames per section (for selected_frames mapping)
+    frames_per_section = latent_window_size_val * 4 - 3
+    effective_frames = frames_per_section - min(frame_overlap_val, frames_per_section-1)
+    
+    # Map segment_count to appropriate parameter
+    adv_seconds = (segment_count_val * effective_frames) / 30.0
+    selected_frames = segment_count_val * effective_frames
+    
+    # Validate inputs based on mode
+    if mode == 'image2video' and input_image is None:
+        debug("Aborting early -- no input image for image2video")
+        return (
+            None, None, None,
+            "Please upload an input image!", None,
+            gr.update(interactive=True),
+            gr.update(interactive=False),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update()
+        )
+    
+    # Special handling for video_extension mode
+    original_mode = mode
+    original_video = input_video
+    
+    if mode == "video_extension":
+        if input_video is None:
+            debug("Aborting early -- no input video for video_extension")
+            return (
+                None, None, None,
+                "Please upload a video to extend!", None,
+                gr.update(interactive=True),
+                gr.update(interactive=False),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update()
+            )
+        try:
+            debug(f"Extracting frames from video for {extension_direction} extension")
+            # Extract frames from the video
+            extracted_frames, video_fps, _ = video_generator.extract_frames_from_video(
+                input_video,
+                num_frames=int(extension_frames),
+                from_end=(extension_direction == "Forward"),
+                max_resolution=640
+            )
+            
+            # Set input_image based on direction
+            if extension_direction == "Forward":
+                input_image = extracted_frames[-1]  # Use last frame
+                debug(f"Using last frame as input_image for forward extension")
+                mode = "image2video"  # Use image2video processing path
+            else:
+                # For backward extension, set up as keyframe generation
+                end_frame = extracted_frames[0]  # First frame becomes the target
+                start_frame = None  # No start frame needed (we're generating TO this frame)
+                mode = "keyframes"  # Use keyframes mode
+                debug(f"Setting up backward extension as keyframe targeting first frame of video")
+                
+        except Exception as e:
+            debug(f"Video frame extraction error: {str(e)}")
+            import traceback
+            debug(traceback.format_exc())
+            return (
+                None, None, None,
+                f"Error processing video: {str(e)}", None,
+                gr.update(interactive=True),
+                gr.update(interactive=False),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update()
+            )
+    
+    # Update seed if not locked
+    if not lock_seed:
+        seed = int(time.time()) % 2**32
+    
+    debug(f"Starting generation with seed: {seed}")
+    
+    # Initial UI update
+    yield (
+        None, None, None, '', gr.update(visible=False),  # Progress bar hidden at start
+        gr.update(interactive=False),
+        gr.update(interactive=True),
+        gr.update(value=seed),
+        gr.update(),
+        gr.update(),
+        gr.update()
     )
+    
+    # Setup async stream
+    stream = AsyncStream()
+    video_generator.stream = stream
+    
+    # Prepare config dictionary for the generator
+    config = {
+        'mode': mode,
+        'input_image': input_image,
+        'start_frame': start_frame,
+        'end_frame': end_frame,
+        'aspect': aspect_selector,
+        'custom_w': custom_w,
+        'custom_h': custom_h,
+        'prompt': prompt,
+        'n_prompt': n_prompt,
+        'seed': seed,
+        'use_adv': True,  # Always use advanced mode
+        'latent_window_size': latent_window_size_val,
+        'adv_seconds': adv_seconds,
+        'selected_frames': selected_frames,
+        'segment_count': segment_count_val,
+        'steps': steps,
+        'cfg': cfg,
+        'gs': gs,
+        'rs': rs,
+        'gpu_memory_preservation': gpu_memory_preservation,
+        'use_teacache': use_teacache,
+        'init_color': init_color,
+        'keyframe_weight': keyframe_weight,
+        'input_video': input_video,
+        'extension_direction': extension_direction,
+        'extension_frames': extension_frames,
+        'original_mode': original_mode,
+        'frame_overlap': frame_overlap_val,
+        'gaussian_blur_amount': gaussian_blur_amount,
+        'llm_weight': llm_weight,
+        'clip_weight': clip_weight,
+        'clean_latent_weight': clean_latent_weight
+    }
+    
+    # Launch async generation
+    async_run(video_generator.generate_video, config)
+    
+    # State tracking variables
+    output_filename = None
+    last_desc = ""
+    last_is_image = False
+    last_img_path = None
+    
+    # Process events from stream
+    while True:
+        flag, data = stream.output_queue.next()
+        debug(f"Process: got queue event: {flag}, type(data): {type(data)}")
+        
+        if flag == 'file':
+            output_filename = data
+            # Extract first and last frames
+            first_frame_img, last_frame_img = video_generator.extract_video_frames(output_filename)
+            
+            # Handle case where extraction fails
+            if first_frame_img is None:
+                first_frame_img = np.zeros((256, 256, 3), dtype=np.uint8)  # Black fallback image
+            if last_frame_img is None:
+                last_frame_img = np.zeros((256, 256, 3), dtype=np.uint8)  # Black fallback image
+            
+            yield (
+                gr.update(value=output_filename, visible=True),  # result_video
+                gr.update(visible=False),                       # result_image_html
+                gr.update(visible=False),                       # preview_image
+                gr.update(value="", visible=False),             # progress_desc
+                gr.update(value="", visible=False),             # progress_bar
+                gr.update(interactive=True, value="Start Generation", variant="primary"),  # start_button
+                gr.update(interactive=False, value="End Generation"),  # end_button
+                gr.update(),                                    # seed
+                gr.update(value=first_frame_img, visible=True), # first_frame - use extracted frames
+                gr.update(value=last_frame_img, visible=True),  # last_frame - use extracted frames
+                gr.update(visible=True)                         # extend_button
+            )
+            last_is_image = False
+            last_img_path = None
+            
+        elif flag == 'preview_video':
+            preview_filename = data
+            debug(f"[UI] Handling preview_video event for: {preview_filename}")
+            
+            # Verify file exists before setting in UI
+            if os.path.exists(preview_filename):
+                debug(f"[UI] Preview file exists, updating video display")
+                yield (
+                    gr.update(value=preview_filename, visible=True), # result_video
+                    gr.update(visible=False),                      # result_image_html
+                    gr.update(visible=False),                      # preview_image
+                    "Generating video...",                         # progress_desc
+                    gr.update(visible=True),                       # progress_bar
+                    gr.update(interactive=False),
+                    gr.update(interactive=True),
+                    gr.update(),                    # seed
+                    gr.update(),                    # first_frame
+                    gr.update(),                    # last_frame
+                    gr.update()                     # extend_button
+                )
+            else:
+                debug(f"[UI] Warning: Preview file not found: {preview_filename}")
+                
+        elif flag == 'progress':
+            preview, desc, html = data
+            if desc:
+                last_desc = desc
+            debug(f"Process: yielding progress output: desc={desc}")
+            
+            # Make sure to set visible=True for progress bar
+            yield (
+                gr.update(),                           # result_video
+                gr.update(),                           # result_image_html
+                gr.update(visible=True, value=preview), # preview_image
+                desc,                                  # progress_desc
+                gr.update(value=html, visible=True),   # progress_bar
+                gr.update(interactive=False),          # start_button
+                gr.update(interactive=True),           # end_button
+                gr.update(),                           # seed
+                gr.update(),                           # first_frame
+                gr.update(),                           # last_frame
+                gr.update()                            # extend_button
+            )
+            
+        elif flag == 'file_img':
+            (img_filename, html_link) = data
+            debug(f"Process: yielding file_img/single image output: {img_filename}")
+            yield (
+                gr.update(visible=False),                           # result_video
+                gr.update(value=img_filename, visible=True),        # result_image_html
+                gr.update(visible=False),                           # preview_image
+                f"Generated single image!<br>Saved as <code>{img_filename}</code>",  # progress_desc
+                gr.update(visible=False),                           # progress_bar
+                gr.update(interactive=True),                        # start_button
+                gr.update(interactive=False),                       # end_button
+                gr.update(),                                        # seed
+                gr.update(),                                        # first_frame
+                gr.update(),                                        # last_frame
+                gr.update()                                         # extend_button
+            )
+            last_is_image = True
+            last_img_path = img_filename
+            
+        elif flag == 'end':
+            debug(f"Process: yielding end event. output_filename = {output_filename}")
+            if data == "interrupted":
+                yield (
+                    gr.update(visible=False),       # result_video
+                    gr.update(visible=False),       # result_image_html
+                    gr.update(visible=False),       # preview_image
+                    "Generation stopped by user.",  # progress_desc
+                    gr.update(visible=False),       # progress_bar
+                    gr.update(interactive=True, value="Start Generation"),
+                    gr.update(interactive=False, value="End Generation"),
+                    gr.update(),                    # seed
+                    gr.update(),                    # first_frame
+                    gr.update(),                    # last_frame
+                    gr.update()                     # extend_button
+                )
+                
+            elif data == "img" or last_is_image:  # special image end
+                yield (
+                    gr.update(visible=False),               # result_video
+                    gr.update(visible=True),                # result_image_html (keep image visible)
+                    gr.update(visible=False),               # preview_image
+                    f"Generated single image!<br><a href=\"file/{last_img_path}\" target=\"_blank\">Click here to open full size in new tab.</a><br><code>{last_img_path}</code>",  # progress_desc
+                    gr.update(visible=False),               # progress_bar
+                    gr.update(interactive=True),
+                    gr.update(interactive=False),
+                    gr.update(),                    # seed
+                    gr.update(),                    # first_frame
+                    gr.update(),                    # last_frame
+                    gr.update()                     # extend_button
+                )
+                
+            else:
+                yield (
+                    gr.update(value=output_filename, visible=True), # result_video
+                    gr.update(visible=False),                       # result_image_html
+                    gr.update(visible=False),                       # preview_image
+                    gr.update(value=last_desc, visible=True),       # progress_desc
+                    gr.update(value="", visible=False),             # progress_bar
+                    gr.update(interactive=True),
+                    gr.update(interactive=False),
+                    gr.update(),                    # seed
+                    gr.update(),                    # first_frame
+                    gr.update(),                    # last_frame
+                    gr.update()                     # extend_button
+                )
+                
+            debug("Process: end event, breaking loop.")
+            break
+            
+        else:
+            last_is_image = False
+            last_img_path = None
 
 def end_process():
-    """Placeholder for the end_process function"""
-    debug("UI End Process: Called (placeholder)")
-    return gr.update(value="End Generation", variant="secondary")
+    """Stop the generation process"""
+    global graceful_stop_requested, stream
+    
+    if not graceful_stop_requested:
+        # First click: request graceful stop
+        graceful_stop_requested = True
+        if stream:
+            stream.input_queue.push('graceful_end')
+        return gr.update(value="Force Stop Now", variant="stop", elem_classes="end-button-warning")
+    else:
+        # Second click: force immediate stop
+        graceful_stop_requested = False  # Reset for next time
+        if stream:
+            stream.input_queue.push('end')
+        return gr.update(value="End Generation", variant="stop", elem_classes="end-button-force")
 
 def update_video_stats(window_size, segments, overlap):
     """Calculate and format video statistics based on current settings"""
