@@ -219,7 +219,8 @@ def create_interface(model_manager, video_generator):
                     label="Finished Frames", 
                     autoplay=True, 
                     show_share_button=False,
-                    elem_classes="result-container", 
+                    elem_classes="result-container",
+                    interactive=False,  # Add this line
                     loop=True
                 )
                 
