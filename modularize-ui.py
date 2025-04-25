@@ -540,10 +540,8 @@ def worker(
         latent_window_size = adv_window
         frames_per_section = latent_window_size * 4 - 3
         total_frames = int(round(adv_seconds * 30))
-        total_sections = math.ceil(total_frames / frames_per_section)
-        # Add this line to ensure we actually generate the requested number of segments
-        if total_sections < segment_count:
-            total_sections = segment_count
+        # Set total_sections directly to segment_count
+        total_sections = segment_count  
         debug(f"worker: Advanced mode | latent_window_size={latent_window_size} "
               f"| frames_per_section={frames_per_section} | total_frames={total_frames} | total_sections={total_sections}")
     else:
@@ -1366,14 +1364,12 @@ def process(
                     interactive=True, 
                     value="Start Generation", 
                     variant="primary", 
-                    elem_classes="start-button",
-                    style="background-color: #4CAF50 !important; border-color: #4CAF50 !important; color: white !important;"
+                    elem_classes="start-button"
                 ),  # start_button
                 gr.update(
                     interactive=False, 
                     value="End Generation", 
                     elem_classes="end-button",
-                    style="background-color: #9E9E9E !important; border-color: #9E9E9E !important; color: white !important;"
                 ),  # end_button
                 gr.update(),
                 gr.update(), # first_frame
@@ -1415,13 +1411,11 @@ def process(
                     value="Start Generation", 
                     variant="primary", 
                     elem_classes="start-button",
-                    style="background-color: #4CAF50 !important; border-color: #4CAF50 !important; color: white !important;"
                 ),  # start_button
                 gr.update(
                     interactive=False, 
                     value="End Generation", 
                     elem_classes="end-button",
-                    style="background-color: #9E9E9E !important; border-color: #9E9E9E !important; color: white !important;"
                 ),  # end_button
                 gr.update(),
                 gr.update(), # first_frame
@@ -1440,13 +1434,11 @@ def process(
                 value="Start Generation", 
                 variant="primary", 
                 elem_classes="start-button",
-                style="background-color: #4CAF50 !important; border-color: #4CAF50 !important; color: white !important;"
             ),  # start_button
             gr.update(
                 interactive=False, 
                 value="End Generation", 
                 elem_classes="end-button",
-                style="background-color: #9E9E9E !important; border-color: #9E9E9E !important; color: white !important;"
             ),  # end_button
             gr.update(),
             gr.update(), # first_frame
@@ -1466,13 +1458,11 @@ def process(
                 value="Start Generation", 
                 variant="primary", 
                 elem_classes="start-button",
-                style="background-color: #4CAF50 !important; border-color: #4CAF50 !important; color: white !important;"
             ),  # start_button
             gr.update(
                 interactive=False, 
                 value="End Generation", 
                 elem_classes="end-button",
-                style="background-color: #9E9E9E !important; border-color: #9E9E9E !important; color: white !important;"
             ),  # end_button
         gr.update(value=seed),
         gr.update(), # first_frame
@@ -1531,8 +1521,8 @@ def process(
                 gr.update(visible=False),                       # preview_image
                 gr.update(value="", visible=False),             # progress_desc
                 gr.update(value="", visible=False),             # progress_bar
-                gr.update(interactive=True, value="Start Generation", variant="primary", elem_classes="start-button", style="background-color: #4CAF50 !important; border-color: #4CAF50 !important; color: white !important;"),  # start_button
-                gr.update(interactive=False, value="End Generation", elem_classes="end-button", style="background-color: #9E9E9E !important; border-color: #9E9E9E !important; color: white !important;"),  # end_button
+                gr.update(interactive=True, value="Start Generation", variant="primary", elem_classes="start-button"),  # start_button
+                gr.update(interactive=False, value="End Generation", elem_classes="end-button"),  # end_button
                 gr.update(),                                    # seed
                 gr.update(value=first_frame_img, visible=True), # first_frame - use extracted frames
                 gr.update(value=last_frame_img, visible=True),  # last_frame - use extracted frames
@@ -1651,15 +1641,23 @@ def process(
 
 def end_process():
     global graceful_stop_requested, stream
+    
     if not graceful_stop_requested:
         # First click: request graceful stop
         graceful_stop_requested = True
         stream.input_queue.push('graceful_end')
         return gr.update(value="Force Stop Now", variant="stop", elem_classes="end-button-warning")
     else:
-        # Second click: force immediate stop
+        # Second click: force immediate stop - send multiple signals
         graceful_stop_requested = False  # Reset for next time
         stream.input_queue.push('end')
+        # Also try to send SIGINT to our process
+        try:
+            import signal
+            import os
+            os.kill(os.getpid(), signal.SIGINT)
+        except:
+            pass
         return gr.update(value="End Generation", variant="stop", elem_classes="end-button-force")
 
 def unload_all_models():
@@ -2012,7 +2010,6 @@ with block:
                     elem_id="start-button", 
                     variant="primary",
                     # Add inline style
-                    style="background-color: #4CAF50 !important; border-color: #4CAF50 !important; color: white !important;"
                 )
             with gr.Row():
                 end_button = gr.Button(
@@ -2021,7 +2018,6 @@ with block:
                     elem_classes="end-button",
                     elem_id="end-button",
                     # Add inline style
-                    style="background-color: #9E9E9E !important; border-color: #9E9E9E !important; color: white !important;"
                 )
                 
             # Progress indicators
