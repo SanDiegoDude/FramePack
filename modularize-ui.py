@@ -537,15 +537,15 @@ def worker(
     
     # -- section/frames logic
     if use_adv:
-    latent_window_size = adv_window
-    frames_per_section = latent_window_size * 4 - 3
-    total_frames = int(round(adv_seconds * 30))
-    total_sections = math.ceil(total_frames / frames_per_section)
-    # Add this line to ensure we actually generate the requested number of segments
-    if total_sections < segment_count:
-        total_sections = segment_count
-    debug(f"worker: Advanced mode | latent_window_size={latent_window_size} "
-          f"| frames_per_section={frames_per_section} | total_frames={total_frames} | total_sections={total_sections}")
+        latent_window_size = adv_window
+        frames_per_section = latent_window_size * 4 - 3
+        total_frames = int(round(adv_seconds * 30))
+        total_sections = math.ceil(total_frames / frames_per_section)
+        # Add this line to ensure we actually generate the requested number of segments
+        if total_sections < segment_count:
+            total_sections = segment_count
+        debug(f"worker: Advanced mode | latent_window_size={latent_window_size} "
+              f"| frames_per_section={frames_per_section} | total_frames={total_frames} | total_sections={total_sections}")
     else:
         latent_window_size = 9
         frames_per_section = latent_window_size * 4 - 3
