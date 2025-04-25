@@ -2214,7 +2214,7 @@ with block:
         outputs=[video_stats]
     )
     def init_empty_output():
-    return None
+        return None
 
     block.load(
         fn=init_empty_output,
