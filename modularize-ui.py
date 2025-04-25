@@ -784,64 +784,49 @@ def worker(
             
             # --- Define the *callback adapted for the 'section' index* ---
             def callback(d):
-                # Track current step timing
-                current_step = d.get('i', 0)
-                if hasattr(callback, 'step_start_time') and current_step > callback.last_step:
-                    # End of previous step
-                    step_time = time.time() - callback.step_start_time
-                    timings["step_times"].append(step_time)
-                    timings["generation_time"] += step_time
-
-
-                # nonlocal declaration
-                nonlocal graceful_stop
-                
-                # Start timing this step
-                callback.step_start_time = time.time()
-                callback.last_step = current_step
-                
-                # Preview generation (Unchanged)
+                # Preview generation first (more important than timing)
                 preview = d['denoised']
                 preview = vae_decode_fake(preview)
                 preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
                 preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
                 
+                # Check for stop conditions
                 if stream.input_queue.top() == 'end':
                     debug("worker: callback: received 'end', stopping generation.")
                     stream.output_queue.push(('end', None))
                     raise KeyboardInterrupt('User ends the task.')
-                    
+                
                 # Use nonlocal to correctly access the outer variable
                 nonlocal graceful_stop
                 if stream.input_queue.top() == 'graceful_end':
                     debug("worker: callback: received 'graceful_end', will stop after current section.")
                     graceful_stop = True
-                    # Continue processing current section
-    
-                # Section progress (Unchanged)
-                current_step = d['i'] + 1
-                section_percentage = int(100.0 * current_step / steps)
-    
-                # Overall progress (ADAPTED - FIX HERE)
-                # 'section' goes from total_sections-1 down to 0
-                # Use total_sections instead of local_total_sections
-                sections_completed = (total_sections - 1) - section # How many sections came *before* this one
-
-                # FIX HERE: Guard against division by zero if total_sections could potentially be 0
-                if total_sections > 0:
-                    overall_percentage = int(100.0 * (sections_completed + (current_step / steps)) / total_sections)
-                else:
-                    overall_percentage = 0 # Or handle as appropriate if total_sections is 0
                 
-                # Calculate actual frame count (Based on history_pixels, as before)
+                # Simple step timing - add minimal overhead
+                current_step = d['i'] + 1
+                if current_step > 1:  # Skip first step for timing (initialization can be slow)
+                    current_time = time.time()
+                    if hasattr(callback, 'last_time'):
+                        step_time = current_time - callback.last_time
+                        timings["step_times"].append(step_time)
+                        timings["generation_time"] += step_time
+                    callback.last_time = current_time
+                elif current_step == 1:
+                    callback.last_time = time.time()
+                    
+                # Progress calculations
+                section_percentage = int(100.0 * current_step / steps)
+                sections_completed = (total_sections - 1) - section
+                overall_percentage = int(100.0 * (sections_completed + (current_step / steps)) / total_sections) if total_sections > 0 else 0
+                
+                # Frame count
                 actual_pixel_frames = history_pixels.shape[2] if history_pixels is not None else 0
                 actual_seconds = actual_pixel_frames / 30.0
-
-                # FIX HERE: Use total_sections in the f-string
+                
                 hint = f'Section {sections_completed+1}/{total_sections} - Step {current_step}/{steps}'
                 desc = f'Pixel frames generated: {actual_pixel_frames}, Length: {actual_seconds:.2f}s (FPS-30)'
-    
-                # Create dual progress bar HTML (Unchanged - uses calculated percentages)
+                
+                # HTML progress display
                 progress_html = f"""
                 <div class="dual-progress-container">
                     <div class="progress-label">
@@ -851,7 +836,6 @@ def worker(
                     <div class="progress-bar-bg">
                         <div class="progress-bar-fg" style="width: {section_percentage}%"></div>
                     </div>
-    
                     <div class="progress-label">
                         <span>Overall Progress:</span>
                         <span>{overall_percentage}%</span>
@@ -859,12 +843,10 @@ def worker(
                     <div class="progress-bar-bg">
                         <div class="progress-bar-fg" style="width: {overall_percentage}%"></div>
                     </div>
-    
                     <div style="font-size:0.9em; opacity:0.8;">{hint}</div>
                 </div>
                 """
-    
-                # Debug message and pushing to queue (Unchanged)
+                
                 debug(f"worker: In callback, section: {section_percentage}%, overall: {overall_percentage}%")
                 stream.output_queue.push(('progress', (preview, desc, progress_html)))
             # --- End adapted callback definition ---
@@ -1528,25 +1510,6 @@ def process(
                 gr.update(),                           # last_frame
                 gr.update()                            # extend_button
             )
-        elif flag == 'file':
-            output_filename = data
-            # Extract first and last frames
-            first, last = extract_video_frames(output_filename)
-            yield (
-                gr.update(value=output_filename, visible=True),  # result_video
-                gr.update(visible=False),                       # result_image_html
-                gr.update(visible=False),                       # preview_image
-                gr.update(value="", visible=False),             # progress_desc
-                gr.update(value="", visible=False),             # progress_bar
-                gr.update(interactive=True, value="Start Generation", variant="primary"),  # start_button
-                gr.update(interactive=False, value="End Generation"),  # end_button
-                gr.update(),                                    # seed
-                gr.update(value=first, visible=True),           # first_frame
-                gr.update(value=last, visible=True),            # last_frame
-                gr.update(visible=True)                         # extend_button
-            )
-            last_is_image = False
-            last_img_path = None
         elif flag == 'file_img':
             (img_filename, html_link) = data
             debug("process: yielding file_img/single image output", img_filename)
