@@ -247,11 +247,11 @@ def create_interface(model_manager, video_generator):
         
         # Memory management functions
         def unload_all_models():
-            """Unload all models from GPU to free memory"""
+            """Unload all models completely from memory (CPU and GPU)"""
             try:
                 model_manager.unload_all_models()
                 free_mem = get_cuda_free_memory_gb(gpu)
-                return f"All models unloaded from GPU. Free VRAM: {free_mem:.1f} GB"
+                return f"All models completely unloaded from memory. Free VRAM: {free_mem:.1f} GB"
             except Exception as e:
                 return f"Error unloading models: {str(e)}"
         
