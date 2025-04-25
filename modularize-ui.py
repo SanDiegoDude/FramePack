@@ -312,29 +312,6 @@ def end_process():
         stream.input_queue.push('end')
         return gr.update(value="End Generation", variant="secondary") 
 
-def setup_for_extension(video_path):
-    """Setup UI for video extension"""
-    return [
-        gr.update(value="video_extension"),  # mode_selector
-        gr.update(value=video_path),         # input_video
-        gr.update(visible=False),            # input_image
-        gr.update(visible=False),            # start_frame
-        gr.update(visible=False),            # end_frame
-        gr.update(visible=True)              # video_extension_options
-    ]
-
-extend_button.click(
-    fn=setup_for_extension,
-    inputs=[result_video],
-    outputs=[
-        mode_selector,
-        input_video,
-        input_image,
-        start_frame, 
-        end_frame,
-        video_extension_options
-    ]
-)
 
 def extract_video_frames(video_path, first_and_last=True):
     """Extract first and/or last frame from a video file"""
@@ -2063,6 +2040,30 @@ with block:
         update_video_stats,
         inputs=[latent_window_size, segment_count, overlap_slider],
         outputs=[video_stats]
+    )
+    
+    def setup_for_extension(video_path):
+        """Setup UI for video extension"""
+        return [
+            gr.update(value="video_extension"),  # mode_selector
+            gr.update(value=video_path),         # input_video
+            gr.update(visible=False),            # input_image
+            gr.update(visible=False),            # start_frame
+            gr.update(visible=False),            # end_frame
+            gr.update(visible=True)              # video_extension_options
+        ]
+    
+    extend_button.click(
+        fn=setup_for_extension,
+        inputs=[result_video],
+        outputs=[
+            mode_selector,
+            input_video,
+            input_image,
+            start_frame, 
+            end_frame,
+            video_extension_options
+        ]
     )
     mode_selector.change(
         switch_mode,
