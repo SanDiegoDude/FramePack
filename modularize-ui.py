@@ -1316,15 +1316,20 @@ def process(
     
     # Map our new UI values to what the original worker expects
     use_adv = True  # Always use advanced mode
-    adv_window = latent_window_size
     
-    # Calculate frames per section (for selected_frames mapping)
-    frames_per_section = latent_window_size * 4 - 3
-    effective_frames = frames_per_section - min(frame_overlap, frames_per_section-1)
+    # Extract values from Gradio components
+    latent_window_size_value = latent_window_size if isinstance(latent_window_size, (int, float)) else latent_window_size.value
+    segment_count_value = segment_count if isinstance(segment_count, (int, float)) else segment_count.value
+    frame_overlap_value = overlap_slider if isinstance(overlap_slider, (int, float)) else overlap_slider.value
+    
+    # Now use these values in calculations
+    adv_window = latent_window_size_value
+    frames_per_section = latent_window_size_value * 4 - 3
+    effective_frames = frames_per_section - min(frame_overlap_value, frames_per_section-1)
     
     # Map segment_count to appropriate parameter
-    adv_seconds = (segment_count * effective_frames) / 30.0
-    selected_frames = segment_count * effective_frames
+    adv_seconds = (segment_count_value * effective_frames) / 30.0
+    selected_frames = segment_count_value * effective_frames
     
     # Create initial empty progress bars HTML
     empty_progress = """
@@ -1357,8 +1362,19 @@ def process(
             yield (
                 None, None, None,
                 "Please upload a video to extend!", None,
-                gr.update(interactive=True),
-                gr.update(interactive=False),
+                gr.update(
+                    interactive=True, 
+                    value="Start Generation", 
+                    variant="primary", 
+                    elem_classes="start-button",
+                    style="background-color: #4CAF50 !important; border-color: #4CAF50 !important; color: white !important;"
+                ),  # start_button
+                gr.update(
+                    interactive=False, 
+                    value="End Generation", 
+                    elem_classes="end-button",
+                    style="background-color: #9E9E9E !important; border-color: #9E9E9E !important; color: white !important;"
+                ),  # end_button
                 gr.update(),
                 gr.update(), # first_frame
                 gr.update(), # last_frame
@@ -1394,8 +1410,19 @@ def process(
             yield (
                 None, None, None,
                 f"Error processing video: {str(e)}", None,
-                gr.update(interactive=True),
-                gr.update(interactive=False),
+                gr.update(
+                    interactive=True, 
+                    value="Start Generation", 
+                    variant="primary", 
+                    elem_classes="start-button",
+                    style="background-color: #4CAF50 !important; border-color: #4CAF50 !important; color: white !important;"
+                ),  # start_button
+                gr.update(
+                    interactive=False, 
+                    value="End Generation", 
+                    elem_classes="end-button",
+                    style="background-color: #9E9E9E !important; border-color: #9E9E9E !important; color: white !important;"
+                ),  # end_button
                 gr.update(),
                 gr.update(), # first_frame
                 gr.update(), # last_frame
@@ -1408,8 +1435,19 @@ def process(
         yield (
             None, None, None,
             "Please upload an input image!", None,
-            gr.update(interactive=True),
-            gr.update(interactive=False),
+            gr.update(
+                interactive=True, 
+                value="Start Generation", 
+                variant="primary", 
+                elem_classes="start-button",
+                style="background-color: #4CAF50 !important; border-color: #4CAF50 !important; color: white !important;"
+            ),  # start_button
+            gr.update(
+                interactive=False, 
+                value="End Generation", 
+                elem_classes="end-button",
+                style="background-color: #9E9E9E !important; border-color: #9E9E9E !important; color: white !important;"
+            ),  # end_button
             gr.update(),
             gr.update(), # first_frame
             gr.update(), # last_frame
@@ -1423,8 +1461,19 @@ def process(
     
     yield (
         None, None, None, '', gr.update(visible=False),  # Progress bar hidden at start
-        gr.update(interactive=False),
-        gr.update(interactive=True),
+        gr.update(
+                interactive=True, 
+                value="Start Generation", 
+                variant="primary", 
+                elem_classes="start-button",
+                style="background-color: #4CAF50 !important; border-color: #4CAF50 !important; color: white !important;"
+            ),  # start_button
+            gr.update(
+                interactive=False, 
+                value="End Generation", 
+                elem_classes="end-button",
+                style="background-color: #9E9E9E !important; border-color: #9E9E9E !important; color: white !important;"
+            ),  # end_button
         gr.update(value=seed),
         gr.update(), # first_frame
         gr.update(), # last_frame
@@ -1482,8 +1531,8 @@ def process(
                 gr.update(visible=False),                       # preview_image
                 gr.update(value="", visible=False),             # progress_desc
                 gr.update(value="", visible=False),             # progress_bar
-                gr.update(interactive=True, value="Start Generation", variant="primary"),  # start_button
-                gr.update(interactive=False, value="End Generation"),  # end_button
+                gr.update(interactive=True, value="Start Generation", variant="primary", elem_classes="start-button", style="background-color: #4CAF50 !important; border-color: #4CAF50 !important; color: white !important;"),  # start_button
+                gr.update(interactive=False, value="End Generation", elem_classes="end-button", style="background-color: #9E9E9E !important; border-color: #9E9E9E !important; color: white !important;"),  # end_button
                 gr.update(),                                    # seed
                 gr.update(value=first_frame_img, visible=True), # first_frame - use extracted frames
                 gr.update(value=last_frame_img, visible=True),  # last_frame - use extracted frames
@@ -1681,37 +1730,42 @@ css = """
     font-size: 1.1em !important;
     padding: 8px 12px !important;
 }
-/* Start/End Buttons */
-.start-button button {
+/* Start/End Buttons - more specific selectors */
+.start-button button, button.start-button, .gradio-container .start-button button {
     width: 100% !important;
     background-color: #4CAF50 !important; /* Light green */
     border-color: #4CAF50 !important;
+    color: white !important;
     font-size: 1.2em !important;
     padding: 10px !important;
 }
-.start-button button:disabled {
+
+.start-button button:disabled, button.start-button:disabled, .gradio-container .start-button button:disabled {
     background-color: #1B5E20 !important; /* Dark forest green */
     border-color: #1B5E20 !important;
+    color: #DDDDDD !important;
+    opacity: 1 !important; /* Override default opacity */
 }
 
-.end-button button {
+.end-button button, button.end-button, .gradio-container .end-button button {
     width: 100% !important;
     background-color: #9E9E9E !important; /* Gray */
     border-color: #9E9E9E !important;
+    color: white !important;
     font-size: 1.2em !important;
     padding: 10px !important;
 }
-.end-button button:enabled {
-    background-color: #9E9E9E !important; /* Stay gray even when enabled */
-    border-color: #9E9E9E !important;
-}
-.end-button-warning button {
+
+.end-button-warning button, button.end-button-warning, .gradio-container .end-button-warning button {
     background-color: #FFA500 !important; /* Orange for graceful stop */
     border-color: #FFA500 !important;
+    color: white !important;
 }
-.end-button-force button {
+
+.end-button-force button, button.end-button-force, .gradio-container .end-button-force button {
     background-color: #FF0000 !important; /* Red for force stop */
     border-color: #FF0000 !important;
+    color: white !important;
 }
 /* Frame Thumbnails */
 .frame-thumbnail img {
@@ -1952,9 +2006,23 @@ with block:
         with gr.Column(scale=2):
             # Start/End buttons at top of right column
             with gr.Row():
-                start_button = gr.Button(value="Start Generation", elem_classes="start-button")
+                start_button = gr.Button(
+                    value="Start Generation", 
+                    elem_classes="start-button",
+                    elem_id="start-button", 
+                    variant="primary",
+                    # Add inline style
+                    style="background-color: #4CAF50 !important; border-color: #4CAF50 !important; color: white !important;"
+                )
             with gr.Row():
-                end_button = gr.Button(value="End Generation", interactive=False, elem_classes="end-button")
+                end_button = gr.Button(
+                    value="End Generation", 
+                    interactive=False, 
+                    elem_classes="end-button",
+                    elem_id="end-button",
+                    # Add inline style
+                    style="background-color: #9E9E9E !important; border-color: #9E9E9E !important; color: white !important;"
+                )
                 
             # Progress indicators
             progress_bar = gr.HTML(visible=False)
