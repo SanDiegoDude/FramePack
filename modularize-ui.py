@@ -781,10 +781,6 @@ def worker(
             transformer.initialize_teacache(enable_teacache=use_teacache, num_steps=steps if use_teacache else 0)
             debug("worker: teacache initialized", "use_teacache", use_teacache)
 
-
-            # Initialize callback step tracking
-            callback.step_start_time = 0
-            callback.last_step = -1
             
             # --- Define the *callback adapted for the 'section' index* ---
             def callback(d):
@@ -795,6 +791,10 @@ def worker(
                     step_time = time.time() - callback.step_start_time
                     timings["step_times"].append(step_time)
                     timings["generation_time"] += step_time
+
+
+                # nonlocal declaration
+                nonlocal graceful_stop
                 
                 # Start timing this step
                 callback.step_start_time = time.time()
@@ -805,13 +805,16 @@ def worker(
                 preview = vae_decode_fake(preview)
                 preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
                 preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
+                
                 if stream.input_queue.top() == 'end':
                     debug("worker: callback: received 'end', stopping generation.")
                     stream.output_queue.push(('end', None))
                     raise KeyboardInterrupt('User ends the task.')
-
+                    
+                # Use nonlocal to correctly access the outer variable
+                nonlocal graceful_stop
                 if stream.input_queue.top() == 'graceful_end':
-                    debug("worker: input_queue 'graceful_end' received. Will stop after current section.")
+                    debug("worker: callback: received 'graceful_end', will stop after current section.")
                     graceful_stop = True
                     # Continue processing current section
     
@@ -866,6 +869,11 @@ def worker(
                 stream.output_queue.push(('progress', (preview, desc, progress_html)))
             # --- End adapted callback definition ---
 
+
+            # Initialize callback attributes after defining it
+            callback.step_start_time = time.time()
+            callback.last_step = -1
+            
             # --- Run sampling (Passes the correct indices/latents based on padding_size) ---
             # The mode check here ensures correct arguments like image_embeddings are passed
             if mode == "keyframes":
@@ -1537,6 +1545,8 @@ def process(
                 gr.update(value=last, visible=True),            # last_frame
                 gr.update(visible=True)                         # extend_button
             )
+            last_is_image = False
+            last_img_path = None
         elif flag == 'file_img':
             (img_filename, html_link) = data
             debug("process: yielding file_img/single image output", img_filename)
