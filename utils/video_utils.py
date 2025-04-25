@@ -396,3 +396,69 @@ def make_mp4_faststart(mp4_path):
         debug(f"[FFMPEG] Faststart failed for {mp4_path}: {e}")
         if os.path.exists(tmpfile):
             os.remove(tmpfile)
+
+def apply_gaussian_blur(image_tensor, blur_amount):
+    """Apply gaussian blur to input tensor with specified amount (0.0-1.0)"""
+    if blur_amount <= 0.0:
+        return image_tensor
+    
+    # Try multiple methods to apply blur
+    try:
+        # Method 1: Try torchvision (most reliable)
+        import torchvision.transforms.functional as TF
+        kernel_size = int(blur_amount * 20) + 1
+        kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
+        sigma = [blur_amount * 3.0]
+        
+        if len(image_tensor.shape) == 5:  # [B,C,T,H,W]
+            b, c, t, h, w = image_tensor.shape
+            result = torch.zeros_like(image_tensor)
+            for bi in range(b):
+                for ti in range(t):
+                    frame = image_tensor[bi, :, ti]
+                    result[bi, :, ti] = TF.gaussian_blur(frame, kernel_size, sigma)
+            return result
+        else:
+            return TF.gaussian_blur(image_tensor, kernel_size, sigma)
+    
+    except (ImportError, AttributeError, ModuleNotFoundError):
+        # Method 2: Use OpenCV as fallback
+        try:
+            import cv2
+            import numpy as np
+            kernel_size = int(blur_amount * 20) + 1
+            kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
+            sigma = blur_amount * 3.0
+            
+            # We need to handle the numpy conversion
+            if len(image_tensor.shape) == 5:  # [B,C,T,H,W]
+                b, c, t, h, w = image_tensor.shape
+                result = torch.zeros_like(image_tensor)
+                for bi in range(b):
+                    for ti in range(t):
+                        # Get frame, convert to numpy, apply blur, convert back
+                        frame = image_tensor[bi, :, ti].cpu().numpy()  # C,H,W
+                        # OpenCV expects HWC format
+                        frame = np.transpose(frame, (1, 2, 0))  # H,W,C
+                        # Apply blur (make sure kernel size is odd)
+                        blurred = cv2.GaussianBlur(frame, (kernel_size, kernel_size), sigma)
+                        # Convert back to tensor format CHW
+                        blurred = np.transpose(blurred, (2, 0, 1))  # C,H,W
+                        result[bi, :, ti] = torch.from_numpy(blurred).to(image_tensor.device)
+                return result
+            else:
+                # Assume BCHW
+                b, c, h, w = image_tensor.shape
+                result = torch.zeros_like(image_tensor)
+                for bi in range(b):
+                    frame = image_tensor[bi].cpu().numpy()  # C,H,W
+                    frame = np.transpose(frame, (1, 2, 0))  # H,W,C
+                    blurred = cv2.GaussianBlur(frame, (kernel_size, kernel_size), sigma)
+                    blurred = np.transpose(blurred, (2, 0, 1))  # C,H,W
+                    result[bi] = torch.from_numpy(blurred).to(image_tensor.device)
+                return result
+        
+        except (ImportError, AttributeError, ModuleNotFoundError):
+            from utils.common import debug
+            debug("WARNING: Could not apply blur - no suitable method found. Returning original image.")
+            return image_tensor
