@@ -1356,7 +1356,7 @@ def process(
                 "Please upload a video to extend!", None,
                 gr.update(interactive=True),
                 gr.update(interactive=False),
-                gr.update()
+                gr.update(),
                 gr.update(), # first_frame
                 gr.update(), # last_frame
                 gr.update()  # extend_button
@@ -1404,7 +1404,7 @@ def process(
             "Please upload an input image!", None,
             gr.update(interactive=True),
             gr.update(interactive=False),
-            gr.update()
+            gr.update(),
             gr.update(), # first_frame
             gr.update(), # last_frame
             gr.update()  # extend_button
@@ -1419,7 +1419,7 @@ def process(
         None, None, None, '', gr.update(visible=False),  # Progress bar hidden at start
         gr.update(interactive=False),
         gr.update(interactive=True),
-        gr.update(value=seed)
+        gr.update(value=seed),
         gr.update(), # first_frame
         gr.update(), # last_frame
         gr.update()  # extend_button
