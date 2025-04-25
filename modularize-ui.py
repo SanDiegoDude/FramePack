@@ -1574,7 +1574,6 @@ def process(
 
 def end_process():
     global graceful_stop_requested, stream
-    
     if not graceful_stop_requested:
         # First click: request graceful stop
         graceful_stop_requested = True
@@ -1586,6 +1585,62 @@ def end_process():
         stream.input_queue.push('end')
         return gr.update(value="End Generation", variant="stop", elem_classes="end-button-force")
 
+def unload_all_models():
+    """Unload all models from GPU to free memory"""
+    try:
+        unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
+        torch.cuda.empty_cache()
+        free_mem = get_cuda_free_memory_gb(gpu)
+        return f"All models unloaded from GPU. Free VRAM: {free_mem:.1f} GB"
+    except Exception as e:
+        return f"Error unloading models: {str(e)}"
+
+def clear_cuda_cache():
+    """Clear CUDA cache to free fragmented memory"""
+    try:
+        torch.cuda.empty_cache()
+        free_mem = get_cuda_free_memory_gb(gpu)
+        return f"CUDA cache cleared. Free VRAM: {free_mem:.1f} GB"
+    except Exception as e:
+        return f"Error clearing CUDA cache: {str(e)}"
+
+def extract_video_frames(video_path, first_and_last=True):
+    """Extract first and/or last frame from a video file"""
+    try:
+        import cv2
+        debug(f"Extracting frames from {video_path}")
+        
+        if not os.path.exists(video_path):
+            debug(f"Video file not found: {video_path}")
+            return None, None
+            
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            debug(f"Could not open video: {video_path}")
+            return None, None
+            
+        # Get first frame
+        ret, first = cap.read()
+        first_frame = cv2.cvtColor(first, cv2.COLOR_BGR2RGB) if ret else None
+        
+        if first_and_last:
+            # Get frame count and jump to last frame
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if frame_count > 1:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_count - 1)
+                
+            ret, last = cap.read()
+            last_frame = cv2.cvtColor(last, cv2.COLOR_BGR2RGB) if ret else None
+        else:
+            last_frame = None
+            
+        cap.release()
+        return first_frame, last_frame
+        
+    except Exception as e:
+        debug(f"Error extracting video frames: {e}")
+        return None, None
+
 css = """
 .gr-box, .gr-image, .gr-video {
     border: 2px solid orange !important;
@@ -1593,13 +1648,11 @@ css = """
     margin-bottom: 16px;
     background: #222 !important;
 }
-
 /* Mode Selector */
 .mode-selector label span {
     font-size: 1.1em !important;
     padding: 8px 12px !important;
 }
-
 /* Start/End Buttons */
 .start-button button {
     width: 100% !important;
@@ -1609,10 +1662,9 @@ css = """
     padding: 10px !important;
 }
 .start-button button:disabled {
-    background-color: #2E7D32 !important; 
+    background-color: #2E7D32 !important;
     border-color: #2E7D32 !important;
 }
-
 .end-button button {
     width: 100% !important;
     background-color: #8B0000 !important; /* Dark red when disabled */
@@ -1638,25 +1690,17 @@ css = """
     width: 256px !important;
     object-fit: cover !important;
 }
-.gr-box, .gr-image, .gr-video {
-    border: 2px solid orange !important;
-    border-radius: 8px !important;
-    margin-bottom: 16px;
-    background: #222 !important;
-}
 /* Image and Video Container Styling */
 .input-image-container img {
     max-height: 512px !important;
     width: auto !important;
     object-fit: contain !important;
 }
-
 .keyframe-image-container img {
     max-height: 320px !important;
     width: auto !important;
     object-fit: contain !important;
 }
-
 .result-container img, .result-container video {
     max-height: 512px !important;
     width: auto !important;
@@ -1672,14 +1716,12 @@ css = """
     padding: 12px;
     margin-bottom: 16px;
 }
-
 .progress-label {
     font-weight: bold;
     margin-bottom: 4px;
     display: flex;
     justify-content: space-between;
 }
-
 .progress-bar-bg {
     background: #333;
     border-radius: 4px;
@@ -1687,34 +1729,12 @@ css = """
     overflow: hidden;
     margin-bottom: 12px;
 }
-
 .progress-bar-fg {
     height: 100%;
     background: linear-gradient(90deg, #ff8800, #ff2200);
     border-radius: 4px;
     transition: width 0.3s ease;
 }
-
-.stats-box {
-    background: #333;
-    border: 2px solid orange;
-    border-radius: 8px;
-    padding: 12px;
-    margin-bottom: 16px;
-}
-
-.stats-box table {
-    width: 100%;
-}
-
-.stats-box td {
-    padding: 4px 8px;
-}
-
-.stats-box td:first-child {
-    width: 40%;
-}
-
 .stats-box {
     background: #222;
     border: 2px solid orange;
@@ -1722,15 +1742,12 @@ css = """
     padding: 12px;
     margin-bottom: 16px;
 }
-
 .stats-box table {
     width: 100%;
 }
-
 .stats-box td {
     padding: 4px 8px;
 }
-
 .stats-box td:first-child {
     width: 40%;
 }
@@ -1748,7 +1765,7 @@ with block:
             label="Mode",
             elem_classes="mode-selector"
         )
-    
+        
     with gr.Row():
         # Left column for inputs
         with gr.Column(scale=2):
@@ -1760,16 +1777,74 @@ with block:
                     value="",
                     lines=2
                 )
-            
+                
             # Seed controls moved up
             with gr.Row():
                 seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
                 lock_seed = gr.Checkbox(label="Lock Seed", value=False)
-            
+                
             # Input sections for different modes
             input_image = gr.Image(sources='upload', type="numpy", label="Image", elem_classes="input-image-container")
-            start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)", elem_classes="keyframe-image-container", visible=False)
-            # ... other mode-specific inputs ...
+            
+            # Keyframes mode controls
+            start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)", 
+                                 elem_classes="keyframe-image-container", visible=False)
+            
+            with gr.Group(visible=False) as keyframes_options:
+                keyframe_weight = gr.Slider(
+                    label="Start Frame Influence", 
+                    minimum=0.0, maximum=1.0, value=0.7, step=0.1, 
+                    info="Higher values prioritize start frame characteristics"
+                )
+                
+            end_frame = gr.Image(sources='upload', type="numpy", label="End Frame (Required)", 
+                               elem_classes="keyframe-image-container", visible=False)
+                
+            # Video extension mode controls
+            with gr.Group(visible=False) as video_extension_options:
+                input_video = gr.Video(
+                    label="Upload Video to Extend",
+                    format="mp4",
+                    height=320,
+                    elem_classes="video-container"
+                )
+                extension_direction = gr.Radio(
+                    ["Forward", "Backward"],
+                    label="Extension Direction",
+                    value="Forward",
+                    info="Forward extends the end, Backward extends the beginning"
+                )
+                extension_frames = gr.Slider(
+                    label="Context Frames",
+                    minimum=1,
+                    maximum=16,
+                    value=8,
+                    step=1,
+                    info="Number of frames to extract from video for continuity"
+                )
+                
+            # Text2video specific controls
+            aspect_selector = gr.Dropdown(
+                ["16:9", "9:16", "1:1", "4:5", "3:2", "2:3", "21:9", "4:3", "Custom..."],
+                label="Aspect Ratio",
+                value="1:1",
+                visible=False
+            )
+            
+            custom_w = gr.Number(label="Width", value=768, visible=False)
+            custom_h = gr.Number(label="Height", value=768, visible=False)
+            init_color = gr.ColorPicker(label="Initial Frame Color", value="#808080", visible=False)
+            
+            # Blur control
+            gaussian_blur = gr.Slider(
+                label="Gaussian Blur",
+                minimum=0.0,
+                maximum=1.0,
+                value=0.0,
+                step=0.01,
+                visible=True,
+                info="Apply blur to input images before processing"
+            )
             
             # Generation Parameters accordion
             with gr.Accordion("Generation Parameters", open=True):
@@ -1792,16 +1867,6 @@ with block:
                     minimum=0.0, maximum=1.0, value=0.2, step=0.01,
                     info="Percentage of frames to trim (0.0 = keep all, 1.0 = maximum trim)"
                 )
-                init_color = gr.ColorPicker(label="Initial Frame Color", value="#808080", visible=False)
-                with gr.Group():
-                    use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
-                    seed = gr.Number(label="Seed", value=random.randint(0, 2**32-1), precision=0)
-                    lock_seed = gr.Checkbox(label="Lock Seed", value=False)
-                    steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
-                    gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", minimum=6, maximum=128, value=6, step=0.1)
-                    with gr.Row():
-                        unload_button = gr.Button(value="Unload All Models", variant="secondary")
-                        clear_cache_button = gr.Button(value="Clear CUDA Cache", variant="secondary")
             
             # Video stats display
             video_stats = gr.HTML(
@@ -1813,93 +1878,79 @@ with block:
             with gr.Accordion("Advanced Model Parameters", open=False):
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1)
-                gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)", 
+                gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB)",
                                                  minimum=6, maximum=128, value=6, step=0.1)
+                
                 llm_encoder_weight = gr.Slider(
-                    label="LLM Encoder Weight", 
-                    minimum=0.0, 
-                    maximum=5.0, 
-                    value=1.0, 
+                    label="LLM Encoder Weight",
+                    minimum=0.0,
+                    maximum=5.0,
+                    value=1.0,
                     step=0.1,
                     info="0.0 to disable LLM encoder"
                 )
-                
                 clip_encoder_weight = gr.Slider(
-                    label="CLIP Encoder Weight", 
-                    minimum=0.0, 
-                    maximum=5.0, 
-                    value=1.0, 
+                    label="CLIP Encoder Weight",
+                    minimum=0.0,
+                    maximum=5.0,
+                    value=1.0,
                     step=0.1,
                     info="0.0 to disable CLIP encoder"
                 )
-                
                 clean_latent_weight = gr.Slider(
-                    label="Clean Latent Weight", 
-                    minimum=0.0, 
-                    maximum=2.0, 
-                    value=1.0, 
+                    label="Clean Latent Weight",
+                    minimum=0.0,
+                    maximum=2.0,
+                    value=1.0,
                     step=0.01,
                     info="Controls influence of anchor/initial frame"
                 )
-                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, info="Must be >1.0 for negative prompts to work")
+                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, 
+                              info="Must be >1.0 for negative prompts to work")
                 gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01)
                 rs = gr.Slider(
-                    label="CFG Re-Scale", 
-                    minimum=0.0, 
-                    maximum=1.0, 
-                    value=0.0, 
+                    label="CFG Re-Scale",
+                    minimum=0.0,
+                    maximum=1.0,
+                    value=0.0,
                     step=0.01
                 )
-                # Memory management
-                with gr.Row():
-                    unload_button = gr.Button(value="Unload All Models", variant="secondary")
-                    clear_cache_button = gr.Button(value="Clear CUDA Cache", variant="secondary")
-                mem_status = gr.Markdown("")
-                mem_status = gr.Markdown("")
-                unload_button.click(fn=unload_all_models, outputs=mem_status)
-                clear_cache_button.click(fn=clear_cuda_cache, outputs=mem_status)
                 
-            # -- Add Gaussian blur control --
-            gaussian_blur = gr.Slider(
-                label="Gaussian Blur", 
-                minimum=0.0, 
-                maximum=1.0, 
-                value=0.0, 
-                step=0.01, 
-                visible=True,
-                info="Apply blur to input images before processing"
-            )
-        
+            # Memory management
+            with gr.Row():
+                unload_button = gr.Button(value="Unload All Models", variant="secondary")
+                clear_cache_button = gr.Button(value="Clear CUDA Cache", variant="secondary")
+            mem_status = gr.Markdown("")
+            
         # Right column for outputs
         with gr.Column(scale=2):
             # Start/End buttons at top of right column
             with gr.Row():
                 start_button = gr.Button(value="Start Generation", elem_classes="start-button")
-                
             with gr.Row():
                 end_button = gr.Button(value="End Generation", interactive=False, elem_classes="end-button")
-            
+                
             # Progress indicators
             progress_bar = gr.HTML(visible=False)
             progress_desc = gr.Markdown(visible=False)
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
             
             # Results section
-            result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, 
+            result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False,
                                    elem_classes="result-container", loop=True)
-            
+                                   
             # First/Last frame displays
             with gr.Row():
                 first_frame = gr.Image(label="First Frame", elem_classes="frame-thumbnail", visible=True)
                 last_frame = gr.Image(label="Last Frame", elem_classes="frame-thumbnail", visible=True)
-            
+                
             # Action buttons for output
             extend_button = gr.Button(value="Extend This Video", visible=False)
             
             result_image_html = gr.Image(label='Single Frame Image', elem_classes="result-container", visible=False)
             gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling.')
-           
-    # --- calllbacks ---
+            
+    # --- callbacks ---
     def update_frame_dropdown(window):
         stops = get_valid_frame_stops(window)
         # Only let user select from valid numbers of frames
@@ -1907,21 +1958,18 @@ with block:
             return gr.update(choices=[str(x) for x in stops], value=str(stops[0]))
         else:
             return gr.update(choices=[''], value='')
-
-
+            
     # Add new function to update overlap slider maximum
     def update_overlap_slider(window_size):
         """Update maximum overlap based on window size"""
         # Convert input to value if it's a Gradio component
         window_size_val = window_size if not hasattr(window_size, 'value') else window_size.value
         window_size_val = float(window_size_val)
-        
         # Calculate max overlap
         frames_per_section = int(window_size_val * 4 - 3)
         max_overlap = max(0, frames_per_section - 1)
-        
         return gr.update(maximum=max_overlap)
-    
+        
     # Add function to calculate and display video stats
     def update_video_stats(window_size, segments, overlap):
         """Calculate and format video statistics based on current settings"""
@@ -1929,24 +1977,20 @@ with block:
         window_size_val = window_size if not hasattr(window_size, 'value') else window_size.value
         segments_val = segments if not hasattr(segments, 'value') else segments.value
         overlap_val = overlap if not hasattr(overlap, 'value') else overlap.value
-        
         # Ensure we're working with numbers
         window_size_val = float(window_size_val)
         segments_val = float(segments_val)
         overlap_val = float(overlap_val)
-        
         # Calculate frames
         frames_per_section = int(window_size_val * 4 - 3)
         max_overlap = max(0, frames_per_section - 1)
         actual_overlap = min(overlap_val, max_overlap)
         effective_frames = frames_per_section - actual_overlap
         total_frames = segments_val * effective_frames
-        
         # Calculate time (at 30fps)
         seconds = total_frames / 30.0
         minutes = int(seconds // 60)
         remaining_seconds = seconds % 60
-        
         # Format the output
         stats_html = f"""
         <div class="stats-box">
@@ -1967,6 +2011,43 @@ with block:
         </div>
         """
         return stats_html
+        
+    def switch_mode(mode):
+        is_img2vid = mode == "image2video"
+        is_txt2vid = mode == "text2video"
+        is_keyframes = mode == "keyframes"
+        is_video_ext = mode == "video_extension"
+        # Show blur for img2vid, keyframes, and extend video
+        show_blur = is_img2vid or is_keyframes or is_video_ext
+        return (
+            gr.update(visible=is_img2vid),  # input_image
+            gr.update(visible=is_keyframes),  # start_frame
+            gr.update(visible=is_keyframes),  # end_frame
+            gr.update(visible=is_txt2vid),  # aspect_selector
+            gr.update(visible=(is_txt2vid and aspect_selector.value == "Custom...")),  # custom_w
+            gr.update(visible=(is_txt2vid and aspect_selector.value == "Custom...")),  # custom_h
+            gr.update(visible=is_keyframes),  # keyframes_options
+            gr.update(visible=is_video_ext),  # video_extension_options
+            gr.update(visible=show_blur)  # gaussian_blur
+        )
+        
+    def show_custom(aspect):
+        show = aspect == "Custom..."
+        return gr.update(visible=show), gr.update(visible=show)
+    
+    def show_init_color(mode):
+        return gr.update(visible=(mode == "text2video"))
+        
+    def setup_for_extension(video_path):
+        """Setup UI for video extension"""
+        return [
+            gr.update(value="video_extension"),  # mode_selector
+            gr.update(value=video_path),         # input_video
+            gr.update(visible=False),            # input_image
+            gr.update(visible=False),            # start_frame
+            gr.update(visible=False),            # end_frame
+            gr.update(visible=True)              # video_extension_options
+        ]
     
     # Connect callbacks
     latent_window_size.change(
@@ -1992,79 +2073,7 @@ with block:
         inputs=[latent_window_size, segment_count, overlap_slider],
         outputs=[video_stats]
     )
-        
-    def switch_mode(mode):
-        is_img2vid = mode == "image2video"
-        is_txt2vid = mode == "text2video"
-        is_keyframes = mode == "keyframes"
-        is_video_ext = mode == "video_extension"
-        
-        # Show blur for img2vid, keyframes, and extend video
-        show_blur = is_img2vid or is_keyframes or is_video_ext
-        
-        return (
-            gr.update(visible=is_img2vid),  # input_image
-            gr.update(visible=is_keyframes),  # start_frame
-            gr.update(visible=is_keyframes),  # end_frame
-            gr.update(visible=is_txt2vid),  # aspect_selector
-            gr.update(visible=(is_txt2vid and aspect_selector.value == "Custom...")),  # custom_w
-            gr.update(visible=(is_txt2vid and aspect_selector.value == "Custom...")),  # custom_h
-            gr.update(visible=is_keyframes),  # keyframes_options
-            gr.update(visible=is_video_ext),  # video_extension_options
-            gr.update(visible=show_blur)  # gaussian_blur
-        )
-    def show_custom(aspect):
-        show = aspect == "Custom..."
-        return gr.update(visible=show), gr.update(visible=show)
     
-    
-    latent_window_size.change(
-        update_overlap_slider,
-        inputs=[latent_window_size],
-        outputs=[overlap_slider]
-    )
-    
-    latent_window_size.change(
-        update_video_stats,
-        inputs=[latent_window_size, segment_count, overlap_slider],
-        outputs=[video_stats]
-    )
-    
-    segment_count.change(
-        update_video_stats,
-        inputs=[latent_window_size, segment_count, overlap_slider],
-        outputs=[video_stats]
-    )
-    
-    overlap_slider.change(
-        update_video_stats,
-        inputs=[latent_window_size, segment_count, overlap_slider],
-        outputs=[video_stats]
-    )
-    
-    def setup_for_extension(video_path):
-        """Setup UI for video extension"""
-        return [
-            gr.update(value="video_extension"),  # mode_selector
-            gr.update(value=video_path),         # input_video
-            gr.update(visible=False),            # input_image
-            gr.update(visible=False),            # start_frame
-            gr.update(visible=False),            # end_frame
-            gr.update(visible=True)              # video_extension_options
-        ]
-    
-    extend_button.click(
-        fn=setup_for_extension,
-        inputs=[result_video],
-        outputs=[
-            mode_selector,
-            input_video,
-            input_image,
-            start_frame, 
-            end_frame,
-            video_extension_options
-        ]
-    )
     mode_selector.change(
         switch_mode,
         inputs=[mode_selector],
@@ -2077,23 +2086,39 @@ with block:
             custom_h,
             keyframes_options,
             video_extension_options,
-            gaussian_blur  # Add this output
+            gaussian_blur
         ]
     )
-    def show_init_color(mode):
-        return gr.update(visible=(mode == "text2video"))
-
-        
+    
     mode_selector.change(
         show_init_color,
         inputs=[mode_selector],
         outputs=[init_color]
     )
+    
     aspect_selector.change(
         show_custom,
         inputs=[aspect_selector],
         outputs=[custom_w, custom_h],
     )
+    
+    extend_button.click(
+        fn=setup_for_extension,
+        inputs=[result_video],
+        outputs=[
+            mode_selector,
+            input_video,
+            input_image,
+            start_frame,
+            end_frame,
+            video_extension_options
+        ]
+    )
+    
+    unload_button.click(fn=unload_all_models, outputs=mem_status)
+    clear_cache_button.click(fn=clear_cuda_cache, outputs=mem_status)
+    
+    # Setup process inputs
     ips = [
         mode_selector,
         input_image,
@@ -2105,10 +2130,8 @@ with block:
         prompt,
         n_prompt,
         seed,
-        # No advanced_mode
         latent_window_size,
-        segment_count,  # Replace adv_seconds
-        # No total_frames_dropdown
+        segment_count,
         steps,
         cfg,
         gs,
@@ -2121,7 +2144,6 @@ with block:
         input_video,
         extension_direction,
         extension_frames,
-        # Add new parameters:
         overlap_slider,
         trim_percentage,
         gaussian_blur,
@@ -2129,37 +2151,43 @@ with block:
         clip_encoder_weight,
         clean_latent_weight,
     ]
+    
+    # Define output list including first/last frame images
+    output_list = [
+        result_video,      # 0
+        result_image_html, # 1
+        preview_image,     # 2
+        progress_desc,     # 3
+        progress_bar,      # 4
+        start_button,      # 5
+        end_button,        # 6
+        seed,              # 7
+        first_frame,       # 8 - Add first frame to outputs
+        last_frame,        # 9 - Add last frame to outputs
+        extend_button      # 10 - Add extend button visibility control
+    ]
+    
     prompt.submit(
         fn=process,
         inputs=ips,
-        outputs=[
-            result_video,
-            result_image_html,
-            preview_image,
-            progress_desc,
-            progress_bar,
-            start_button,
-            end_button,
-            seed
-        ]
+        outputs=output_list
     )
-
-      
+    
     start_button.click(
         fn=process,
         inputs=ips,
-        outputs=[
-            result_video,      # 0
-            result_image_html, # 1 (HTML for clickable img)
-            preview_image,     # 2
-            progress_desc,     # 3
-            progress_bar,      # 4
-            start_button,      # 5
-            end_button,        # 6
-            seed               # 7
-        ]
+        outputs=output_list
     )
+    
     end_button.click(fn=end_process, outputs=[end_button])
+
+# Initialize the video stats on page load
+block.load(
+    fn=update_video_stats,
+    inputs=[latent_window_size, segment_count, overlap_slider],
+    outputs=[video_stats]
+)
+
 block.launch(
     server_name=args.server,
     server_port=args.port,
