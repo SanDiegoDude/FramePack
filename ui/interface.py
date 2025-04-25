@@ -18,7 +18,9 @@ def create_interface(model_manager, video_generator):
     
     # Create a wrapper function that has access to the model_manager and video_generator
     def process_wrapper(*args):
-        return process(*args, video_generator=video_generator, model_manager=model_manager)
+        # This needs to be a generator function too
+        for values in process(*args, video_generator=video_generator, model_manager=model_manager):
+            yield values
     
     block = gr.Blocks(css=get_css()).queue()
     
