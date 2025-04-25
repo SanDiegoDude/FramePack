@@ -1874,10 +1874,10 @@ with block:
                     step=0.01
                 )
                 # Memory management
-                    with gr.Row():
-                        unload_button = gr.Button(value="Unload All Models", variant="secondary")
-                        clear_cache_button = gr.Button(value="Clear CUDA Cache", variant="secondary")
-                    mem_status = gr.Markdown("")
+                with gr.Row():
+                    unload_button = gr.Button(value="Unload All Models", variant="secondary")
+                    clear_cache_button = gr.Button(value="Clear CUDA Cache", variant="secondary")
+                mem_status = gr.Markdown("")
             
             # -- Add Gaussian blur control --
             gaussian_blur = gr.Slider(
