@@ -16,6 +16,10 @@ def create_interface(model_manager, video_generator):
     
     debug("Creating UI interface")
     
+    # Create a wrapper function that has access to the model_manager and video_generator
+    def process_wrapper(*args):
+        return process(*args, video_generator=video_generator, model_manager=model_manager)
+    
     block = gr.Blocks(css=get_css()).queue()
     
     with block:
@@ -378,14 +382,14 @@ def create_interface(model_manager, video_generator):
         ]
         
         prompt.submit(
-            fn=process,
-            inputs=ips + [video_generator, model_manager],  # Add these
+            fn=process_wrapper,
+            inputs=ips,  # No need to add video_generator, model_manager
             outputs=output_list
         )
         
         start_button.click(
-            fn=process,
-            inputs=ips + [video_generator, model_manager],  # Add these
+            fn=process_wrapper,
+            inputs=ips,  # No need to add video_generator, model_manager
             outputs=output_list
         )
         
