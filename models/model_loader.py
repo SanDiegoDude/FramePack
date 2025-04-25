@@ -93,30 +93,18 @@ class ModelManager:
                 if m is not None:
                     m.eval()
             
-            # Configure VAE for low VRAM if needed
-            if not self.high_vram:
-                self.vae.enable_slicing()
-                self.vae.enable_tiling()
-            
-            # Configure transformer for high quality output
-            self.transformer.high_quality_fp32_output_for_inference = True
-            debug('transformer.high_quality_fp32_output_for_inference = True')
-            
-            # Set model dtypes
-            for m, dtype in zip(
-                [self.transformer, self.vae, self.image_encoder, self.text_encoder, self.text_encoder_2], 
-                [torch.bfloat16, torch.float16, torch.float16, torch.float16, torch.float16]
-            ):
-                if m is not None:
-                    m.to(dtype=dtype)
-                    m.requires_grad_(False)
-            
             # Handle device placement based on VRAM
             if not self.high_vram:
                 debug("Low VRAM mode: Using dynamic swapping")
                 try:
+                    # Don't try to move models to GPU yet - just set up for swapping
                     DynamicSwapInstaller.install_model(self.transformer, device=gpu)
                     DynamicSwapInstaller.install_model(self.text_encoder, device=gpu)
+                    
+                    # Make sure all other models are on CPU
+                    self.text_encoder_2.to(cpu)
+                    self.image_encoder.to(cpu)
+                    self.vae.to(cpu)
                 except Exception as e:
                     debug(f"Warning: Dynamic swapping setup failed: {e}")
                     debug("Falling back to standard CPU/GPU transfers")
