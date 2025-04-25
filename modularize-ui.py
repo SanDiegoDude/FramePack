@@ -1,4 +1,5 @@
 from diffusers_helper.hf_login import login
+import threading
 import os
 import time
 os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
@@ -305,13 +306,22 @@ def end_process():
         # First click: request graceful stop
         graceful_stop_requested = True
         stream.input_queue.push('graceful_end')
-        return gr.update(value="Force Stop Now", variant="stop")
+        return gr.update(value="Force Stop Now", variant="stop", elem_classes="end-button-warning")
     else:
-        # Second click: force immediate stop
+        # Second click: force immediate stop - send BOTH signals
         graceful_stop_requested = False  # Reset for next time
         stream.input_queue.push('end')
-        return gr.update(value="End Generation", variant="secondary") 
-
+        # Also manually raise a KeyboardInterrupt in the worker thread
+        for thread in threading.enumerate():
+            if thread.name == "GradioProgress":
+                # Force worker to terminate (raises KeyboardInterrupt in the worker thread)
+                trace_threads = []
+                for tr in threading.enumerate():
+                    trace_threads.append(f"{tr.name} ({tr.ident})")
+                debug(f"Forcefully terminating threads: {trace_threads}")
+                os._exit(1)  # This is drastic but will ensure everything stops 
+        
+        return gr.update(value="End Generation", variant="stop", elem_classes="end-button-force")
 
 def extract_video_frames(video_path, first_and_last=True):
     """Extract first and/or last frame from a video file"""
@@ -527,12 +537,15 @@ def worker(
     
     # -- section/frames logic
     if use_adv:
-        latent_window_size = adv_window
-        frames_per_section = latent_window_size * 4 - 3
-        total_frames = int(round(adv_seconds * 30))
-        total_sections = math.ceil(total_frames / frames_per_section)
-        debug(f"worker: Advanced mode | latent_window_size={latent_window_size} "
-              f"| frames_per_section={frames_per_section} | total_frames={total_frames} | total_sections={total_sections}")
+    latent_window_size = adv_window
+    frames_per_section = latent_window_size * 4 - 3
+    total_frames = int(round(adv_seconds * 30))
+    total_sections = math.ceil(total_frames / frames_per_section)
+    # Add this line to ensure we actually generate the requested number of segments
+    if total_sections < segment_count:
+        total_sections = segment_count
+    debug(f"worker: Advanced mode | latent_window_size={latent_window_size} "
+          f"| frames_per_section={frames_per_section} | total_frames={total_frames} | total_sections={total_sections}")
     else:
         latent_window_size = 9
         frames_per_section = latent_window_size * 4 - 3
@@ -1671,32 +1684,33 @@ css = """
 /* Start/End Buttons */
 .start-button button {
     width: 100% !important;
-    background-color: #4CAF50 !important;
+    background-color: #4CAF50 !important; /* Light green */
     border-color: #4CAF50 !important;
     font-size: 1.2em !important;
     padding: 10px !important;
 }
 .start-button button:disabled {
-    background-color: #2E7D32 !important;
-    border-color: #2E7D32 !important;
+    background-color: #1B5E20 !important; /* Dark forest green */
+    border-color: #1B5E20 !important;
 }
+
 .end-button button {
     width: 100% !important;
-    background-color: #8B0000 !important; /* Dark red when disabled */
-    border-color: #8B0000 !important;
+    background-color: #9E9E9E !important; /* Gray */
+    border-color: #9E9E9E !important;
     font-size: 1.2em !important;
     padding: 10px !important;
 }
 .end-button button:enabled {
-    background-color: #FF0000 !important; /* Bright red when enabled */
-    border-color: #FF0000 !important;
+    background-color: #9E9E9E !important; /* Stay gray even when enabled */
+    border-color: #9E9E9E !important;
 }
 .end-button-warning button {
-    background-color: #FFA500 !important; /* Yellow for graceful stop */
+    background-color: #FFA500 !important; /* Orange for graceful stop */
     border-color: #FFA500 !important;
 }
 .end-button-force button {
-    background-color: #FF0000 !important; /* Bright red for force stop */
+    background-color: #FF0000 !important; /* Red for force stop */
     border-color: #FF0000 !important;
 }
 /* Frame Thumbnails */
@@ -1862,7 +1876,7 @@ with block:
                 )
                 segment_count = gr.Slider(
                     label="Number of Segments",
-                    minimum=1, maximum=50, value=5, step=1,
+                    minimum=1, maximum=50, value=6, step=1,
                     info="More segments = longer video"
                 )
                 overlap_slider = gr.Slider(
@@ -1949,7 +1963,7 @@ with block:
             
             # Results section
             result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False,
-                                   elem_classes="result-container", loop=True)
+                                   interactive=False, elem_classes="result-container", loop=True)
                                    
             # First/Last frame displays
             with gr.Row():
@@ -2198,6 +2212,14 @@ with block:
         fn=update_video_stats,
         inputs=[latent_window_size, segment_count, overlap_slider],
         outputs=[video_stats]
+    )
+    def init_empty_output():
+    return None
+
+    block.load(
+        fn=init_empty_output,
+        inputs=None,
+        outputs=[result_video]
     )
 
 block.launch(
