@@ -113,9 +113,20 @@ def get_css():
         width: 40%;
     }
     /* Video container with extra space for trimming UI */
+    /* Add to style.py */
     .video-container {
-        margin-bottom: 180px !important; /* Extra space for trim controls */
-        z-index: 100; /* Ensure it stays on top */
+        position: relative !important;
+        z-index: 10000 !important; /* Extremely high z-index */
+    }
+    
+    /* Give space for the trim tools to appear */
+    .video-container .video-wrap {
+        margin-bottom: 50px !important;
+    }
+    
+    /* Fix stacking context to make sure the video is on top */
+    .gradio-container {
+        position: relative !important;
     }
     /* Better formatting for generation stats */
     #generation_stats {
