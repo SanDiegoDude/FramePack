@@ -774,7 +774,7 @@ class VideoGenerator:
                         prompt_poolers=cp,
                         negative_prompt_embeds=lv_n,
                         negative_prompt_embeds_mask=m_n,
-                        negative_prompt_poolers=cp_n
+                        negative_prompt_poolers=cp_n,
                         device=gpu,
                         dtype=torch.bfloat16,
                         image_embeddings=clip_output,
@@ -804,7 +804,7 @@ class VideoGenerator:
                         prompt_poolers=cp,
                         negative_prompt_embeds=lv_n,
                         negative_prompt_embeds_mask=m_n,
-                        negative_prompt_poolers=cp_n
+                        negative_prompt_poolers=cp_n,
                         device=gpu,
                         dtype=torch.bfloat16,
                         image_embeddings=clip_output,
