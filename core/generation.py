@@ -17,14 +17,16 @@ from utils.memory_utils import (
 )
 from utils.video_utils import (
     save_bcthw_as_mp4, find_nearest_bucket, resize_and_center_crop,
-    crop_or_pad_yield_mask, extract_frames_from_video, fix_video_compatibility,
-    make_mp4_faststart, apply_gaussian_blur
+    crop_or_pad_yield_mask, # Make sure this is the CORRECT version from the demo
+    extract_frames_from_video, fix_video_compatibility,
+    make_mp4_faststart, apply_gaussian_blur, extract_video_frames
 )
 from diffusers_helper.thread_utils import AsyncStream
 from diffusers_helper.hunyuan import encode_prompt_conds, vae_decode, vae_encode, vae_decode_fake
 from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
 from ui.style import make_progress_bar_html
+
 class VideoGenerator:
     """Handles all video generation functionality"""
     def __init__(self, model_manager, outputs_folder='./outputs/'):
@@ -34,10 +36,12 @@ class VideoGenerator:
         self.stream = None
         self.graceful_stop_requested = False
         debug(f"VideoGenerator initialized with output folder: {outputs_folder}")
+
     def setup_stream(self):
         """Initialize async stream for generation"""
         self.stream = AsyncStream()
         return self.stream
+
     def get_dims_from_aspect(self, aspect, custom_w, custom_h):
         """Calculate dimensions based on aspect ratio"""
         presets = {
@@ -50,15 +54,18 @@ class VideoGenerator:
             width, height = int(custom_w), int(custom_h)
         else:
             width, height = presets.get(aspect, (768, 768))
+
         max_pixels = 1024 * 1024
         px = width * height
         if px > max_pixels:
             scale = math.sqrt(max_pixels / px)
             width = int(width * scale)
             height = int(height * scale)
+
         width = (width // 8) * 8
         height = (height // 8) * 8
         return width, height
+
     def parse_hex_color(self, hexcode):
         """Parse hex color code to RGB values"""
         hexcode = hexcode.lstrip('#')
@@ -69,19 +76,18 @@ class VideoGenerator:
             return r, g, b
         # fallback to gray
         return 0.5, 0.5, 0.5
+
     def prepare_inputs(self, input_image, prompt, n_prompt, cfg, gaussian_blur_amount=0.0,
                       llm_weight=1.0, clip_weight=1.0):
-        """Prepare inputs for generation"""
+        """Prepare text embeddings, poolers, masks, and image tensors"""
         if input_image is None:
-            raise ValueError(
-                "No input image provided! For text2video, a blank will be created in worker -- "
-                "but for image2video, you must upload an image."
-            )
-        if hasattr(input_image, 'shape'):
-            H, W, C = input_image.shape
-        else:
+            raise ValueError("Input image required for this mode.")
+        if not hasattr(input_image, 'shape'):
             raise ValueError("Input image is not a valid numpy array!")
-        # Clear GPU first
+
+        H, W, C = input_image.shape
+
+        # --- Memory Management: Offload everything ---
         if not self.model_manager.high_vram:
             unload_complete_models(
                 self.model_manager.text_encoder,
@@ -90,10 +96,12 @@ class VideoGenerator:
                 self.model_manager.vae,
                 self.model_manager.transformer
             )
-        # Load only text encoders for prompt processing
-        fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
-        load_model_as_complete(self.model_manager.text_encoder_2, target_device=gpu)
-        # Encode prompts
+
+        # --- Text Encoding ---
+        if not self.model_manager.high_vram:
+            fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
+            load_model_as_complete(self.model_manager.text_encoder_2, target_device=gpu)
+
         lv, cp = encode_prompt_conds(
             prompt,
             self.model_manager.text_encoder,
@@ -101,7 +109,7 @@ class VideoGenerator:
             self.model_manager.tokenizer,
             self.model_manager.tokenizer_2
         )
-        # Create negative prompts
+
         if cfg == 1:
             lv_n, cp_n = torch.zeros_like(lv), torch.zeros_like(cp)
         else:
@@ -112,84 +120,79 @@ class VideoGenerator:
                 self.model_manager.tokenizer,
                 self.model_manager.tokenizer_2
             )
-        # Process masks
+
+        # --- Mask Generation (using the *correct* crop_or_pad_yield_mask) ---
+        # This function should return lv/lv_n with shape [B, 512, D]
+        # and m/m_n with shape [B, 512] and dtype torch.bool
         lv, m = crop_or_pad_yield_mask(lv, 512)
         lv_n, m_n = crop_or_pad_yield_mask(lv_n, 512)
-        # Apply weights
+        debug(f"After crop_or_pad - lv: {lv.shape} ({lv.dtype}), m: {m.shape} ({m.dtype})")
+
+        # --- Apply Weights ---
         if llm_weight != 1.0:
             lv = lv * llm_weight
             lv_n = lv_n * llm_weight
         if clip_weight != 1.0:
             cp = cp * clip_weight
             cp_n = cp_n * clip_weight
-        # Process image
+
+        # --- Image Processing ---
         h, w = find_nearest_bucket(H, W, resolution=640)
         input_np = resize_and_center_crop(input_image, target_width=w, target_height=h)
-        # Save a copy
-        Image.fromarray(input_np).save(os.path.join(self.output_folder, f'{generate_timestamp()}.png'))
-        # Convert to tensor
-        input_tensor = torch.from_numpy(input_np).float() / 127.5 - 1
-        input_tensor = input_tensor.permute(2, 0, 1)[None, :, None]
-        # Apply blur if needed
+        Image.fromarray(input_np).save(os.path.join(self.output_folder, f'{generate_timestamp()}_prep.png'))
+
+        input_tensor = torch.from_numpy(input_np).float() / 127.5 - 1.0
+        input_tensor = input_tensor.permute(2, 0, 1)[None, :, None] # Add Batch and Time dims
+
+        # --- Gaussian Blur ---
         if gaussian_blur_amount > 0.0:
             input_tensor = apply_gaussian_blur(input_tensor, gaussian_blur_amount)
+
         return input_np, input_tensor, lv, cp, lv_n, cp_n, m, m_n, h, w
+
     def cleanup_temp_files(self, job_id, keep_final=True, final_output_path=None):
         """Clean up temporary files created during generation"""
         import glob
         debug(f"[CLEANUP] Starting cleanup for job {job_id}")
-        # Find all preview videos for this job
         preview_pattern = os.path.join(self.output_folder, f"{job_id}_preview_*.mp4")
         preview_files = glob.glob(preview_pattern)
-        # Find extension/temporary files
         extension_file = os.path.join(self.output_folder, f"{job_id}_extension.mp4")
         compat_files = glob.glob(os.path.join(self.output_folder, f"{job_id}_*_compat.mp4"))
         filelist = os.path.join(self.output_folder, f"{job_id}_filelist.txt")
-        # Delete preview videos
+
         for f in preview_files:
             if os.path.exists(f):
-                try:
-                    os.remove(f)
-                    debug(f"[CLEANUP] Removed preview: {f}")
-                except Exception as e:
-                    debug(f"[CLEANUP] Failed to remove {f}: {e}")
-        # Delete temporary files used for video concatenation
+                try: os.remove(f); debug(f"[CLEANUP] Removed preview: {f}")
+                except Exception as e: debug(f"[CLEANUP] Failed to remove {f}: {e}")
+
         temp_files = compat_files + [filelist]
         if not keep_final or final_output_path != extension_file:
             temp_files.append(extension_file)
+
         for f in temp_files:
             if os.path.exists(f):
-                try:
-                    os.remove(f)
-                    debug(f"[CLEANUP] Removed temp file: {f}")
-                except Exception as e:
-                    debug(f"[CLEANUP] Failed to remove {f}: {e}")
+                try: os.remove(f); debug(f"[CLEANUP] Removed temp file: {f}")
+                except Exception as e: debug(f"[CLEANUP] Failed to remove {f}: {e}")
         debug(f"[CLEANUP] Completed cleanup for job {job_id}")
+
     @torch.no_grad()
     def generate_video(self, config):
-        """
-        Main video generation function - this is the new worker function
-        Args:
-            config: Dictionary containing all generation parameters
-        Returns:
-            str: Output filename
-        """
+        """Main video generation function"""
         # Extract parameters
         mode = config['mode']
-        input_image = config['input_image']
-        start_frame = config['start_frame']
-        end_frame = config['end_frame']
-        aspect = config['aspect']
-        custom_w = config['custom_w']
-        custom_h = config['custom_h']
+        input_image = config.get('input_image', None) # Can be None for text2video
+        start_frame = config.get('start_frame', None)
+        end_frame = config.get('end_frame', None)
+        aspect = config.get('aspect', '1:1')
+        custom_w = config.get('custom_w', 768)
+        custom_h = config.get('custom_h', 768)
         prompt = config['prompt']
         n_prompt = config['n_prompt']
         seed = config['seed']
-        use_adv = config.get('use_adv', True)  # Default to True
         adv_window = config['latent_window_size']
-        adv_seconds = config.get('adv_seconds', 0)
-        selected_frames = config.get('selected_frames', 0)
         segment_count = config.get('segment_count', 1)
+        adv_seconds = config.get('adv_seconds', 0) # Calculated in process callback
+        selected_frames = config.get('selected_frames', 0) # Calculated in process callback
         steps = config['steps']
         cfg = config['cfg']
         gs = config['gs']
@@ -201,377 +204,210 @@ class VideoGenerator:
         input_video = config.get('input_video', None)
         extension_direction = config.get('extension_direction', "Forward")
         extension_frames = config.get('extension_frames', 8)
-        original_mode = config.get('original_mode', None)
-        frame_overlap = config.get('frame_overlap', 0)
+        original_mode = config.get('original_mode', None) # Keep track if it was video_extension
         gaussian_blur_amount = config.get('gaussian_blur_amount', 0.0)
         llm_weight = config.get('llm_weight', 1.0)
         clip_weight = config.get('clip_weight', 1.0)
-        # Create job ID and setup
+
         job_id = generate_timestamp()
         debug(f"generate_video(): started {mode}, job_id: {job_id}")
-        # Setup output filename
         output_filename = os.path.join(self.output_folder, f'{job_id}_final.mp4')
         debug(f"Default output filename set to: {output_filename}")
-        # Initialize timing statistics
+
         t_start = time.time()
-        timings = {
-            "latent_encoding": 0,
-            "step_times": [],
-            "generation_time": 0,
-            "vae_decode_time": 0,
-            "total_time": 0
-        }
-        # Setup section/frames logic - PRESERVING ORIGINAL CALCULATIONS
+        timings = {"latent_encoding": 0, "step_times": [], "generation_time": 0, "vae_decode_time": 0, "total_time": 0}
+
+        # Calculate sections based on calculated seconds/frames
+        # NOTE: Assuming adv_seconds/selected_frames are correctly calculated in ui.callbacks.process
+        use_adv = True # Always use "advanced" calculations now
         if use_adv:
             latent_window_size = adv_window
             frames_per_section = latent_window_size * 4 - 3
             total_frames = int(round(adv_seconds * 30))
-            # Ensure we generate the exact number of requested segments
             total_sections = int(segment_count) if segment_count is not None else math.ceil(total_frames / frames_per_section)
-            debug(f"Advanced mode | latent_window_size={latent_window_size} "
-                  f"| frames_per_section={frames_per_section} | total_frames={total_frames} | total_sections={total_sections}")
-        else:
+            debug(f"Gen Params | window={latent_window_size} | frames/sec={frames_per_section} | total_frames={total_frames} | sections={total_sections}")
+        else: # Fallback, should not happen with current UI
             latent_window_size = 9
-            frames_per_section = latent_window_size * 4 - 3
+            frames_per_section = 33
             total_frames = int(selected_frames)
             total_sections = total_frames // frames_per_section
-            debug(f"Simple mode | latent_window_size=9 | frames_per_section=33 | "
-                  f"total_frames={total_frames} | total_sections={total_sections}")
-        # Initialize stream queue progress
+            debug(f"Simple Mode | window=9 | frames/sec=33 | total_frames={total_frames} | sections={total_sections}")
+
         if self.stream:
             self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
+
         try:
-            #----------- Mode and input setup & prompts -------------
-            clip_output = None  # Initialize clip_output
+            # ============ Input Preparation ============
+            clip_output = None
+            lv, cp, lv_n, cp_n, m, m_n = None, None, None, None, None, None
+            start_latent = None
+            end_latent = None # Only for keyframes
+            height, width = 0, 0
+
             if mode == "keyframes":
-                # Keyframes mode processing
-                if end_frame is None:
-                    raise ValueError("Keyframes mode requires End Frame to be set!")
-                # Get original dimensions and find bucket size
-                end_H, end_W, end_C = end_frame.shape
+                if end_frame is None: raise ValueError("Keyframes mode requires End Frame.")
+
+                end_H, end_W, _ = end_frame.shape
                 height, width = find_nearest_bucket(end_H, end_W, resolution=640)
-                debug(f"Using bucket dimensions for keyframe mode: {width}x{height} (from original {end_W}x{end_H})")
-                # Process start frame
+                debug(f"Keyframes: Bucket={width}x{height}")
+
                 if start_frame is not None:
-                    debug(f"Resizing start frame from {start_frame.shape[1]}x{start_frame.shape[0]} to bucket size {width}x{height}")
-                    s_np = resize_and_center_crop(start_frame, target_width=width, target_height=height)
-                    input_anchor_np = s_np
+                    s_np = resize_and_center_crop(start_frame, width, height)
+                    anchor_np = s_np
                 else:
-                    # Use gray color with bucket dimensions
-                    input_anchor_np = np.ones((height, width, 3), dtype=np.uint8) * 128
-                    debug(f"Created gray start frame with bucket dimensions {width}x{height}")
-                # Process end frame
-                end_np = resize_and_center_crop(end_frame, target_width=width, target_height=height)
-                # VAE encode start frame
-                t_encode_start = time.time()
-                input_anchor_tensor = torch.from_numpy(input_anchor_np).float() / 127.5 - 1
-                input_anchor_tensor = input_anchor_tensor.permute(2, 0, 1)[None, :, None].float()
-                start_latent = vae_encode(input_anchor_tensor, self.model_manager.vae.float())
-                timings["latent_encoding"] += time.time() - t_encode_start
-                # VAE encode end frame
-                end_tensor = torch.from_numpy(end_np).float() / 127.5 - 1
-                end_tensor = end_tensor.permute(2, 0, 1)[None, :, None].float()
-                end_latent = vae_encode(end_tensor, self.model_manager.vae.float())
-                # Text prompt encoding
+                    anchor_np = np.ones((height, width, 3), dtype=np.uint8) * 128 # Gray
+                end_np = resize_and_center_crop(end_frame, width, height)
+
+                # --- Memory: Offload ---
+                if not self.model_manager.high_vram: unload_complete_models(...) # Unload all
+
+                # --- VAE Encode Start/End ---
+                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.vae, gpu)
+                t_vae_start = time.time()
+                anchor_tensor = (torch.from_numpy(anchor_np).float()/127.5 - 1.0).permute(2,0,1)[None,:,None]
+                start_latent = vae_encode(anchor_tensor, self.model_manager.vae)
+                end_tensor = (torch.from_numpy(end_np).float()/127.5 - 1.0).permute(2,0,1)[None,:,None]
+                end_latent = vae_encode(end_tensor, self.model_manager.vae)
+                timings["latent_encoding"] += time.time() - t_vae_start
+                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.vae)
+
+                # --- Text Encoding ---
                 if not self.model_manager.high_vram:
-                    # Clear GPU memory before loading transformer
-                    unload_complete_models(
-                        self.model_manager.text_encoder,
-                        self.model_manager.text_encoder_2,
-                        self.model_manager.image_encoder,
-                        self.model_manager.vae,
-                        self.model_manager.transformer
-                    )
-                    debug("explicitly unloaded all models (before sampling)")
-                    # Load only the transformer, with memory preservation
-                    move_model_to_device_with_memory_preservation(
-                        self.model_manager.transformer,
-                        target_device=gpu,
-                        preserved_memory_gb=gpu_memory_preservation
-                    )
-                    debug("moved transformer to gpu (memory preservation)")
-                # Then do CLIP encoding
-                if mode == "text2video" or mode == "image2video":
-                    clip_output = hf_clip_vision_encode(
-                        inp_np,
-                        self.model_manager.feature_extractor,
-                        self.model_manager.image_encoder
-                    ).last_hidden_state
-                lv, cp = encode_prompt_conds(
-                    prompt,
-                    self.model_manager.text_encoder,
-                    self.model_manager.text_encoder_2,
-                    self.model_manager.tokenizer,
-                    self.model_manager.tokenizer_2
-                )
-                lv, mask = crop_or_pad_yield_mask(lv, 512)
-                lv_n, cp_n = encode_prompt_conds(
-                    n_prompt,
-                    self.model_manager.text_encoder,
-                    self.model_manager.text_encoder_2,
-                    self.model_manager.tokenizer,
-                    self.model_manager.tokenizer_2
-                )
-                lv_n, mask_n = crop_or_pad_yield_mask(lv_n, 512)
-                m = mask
-                m_n = mask_n
-                # CLIP Vision feature extraction
-                # ---- Unload all models before sampling
-                if not self.model_manager.high_vram:
-                    debug("------ MEMORY DEBUG BEFORE TRANSFORMER LOAD ------")
-                    debug(f"Section {section}/{total_sections}, preparing to load transformer")
-                    # Clear GPU memory
-                    debug("Clearing CUDA cache multiple times")
-                    for _ in range(5):
-                        torch.cuda.empty_cache()
-                    # Force garbage collection
-                    gc.collect()
-                    # Print detailed memory stats
-                    debug(f"CUDA memory allocated: {torch.cuda.memory_allocated() / (1024**3):.2f} GB")
-                    debug(f"CUDA memory reserved: {torch.cuda.memory_reserved() / (1024**3):.2f} GB")
-                    debug(f"Free memory: {get_cuda_free_memory_gb(gpu):.2f} GB")
-                    # Try to diagnose if any tensors are leaking
-                    tensor_sizes = {}
-                    for obj in gc.get_objects():
-                        try:
-                            if torch.is_tensor(obj) and obj.device.type == 'cuda':
-                                size_mb = obj.nelement() * obj.element_size() / (1024 * 1024)
-                                if size_mb > 10:  # Only log large tensors
-                                    shape_key = str(tuple(obj.shape))
-                                    if shape_key not in tensor_sizes:
-                                        tensor_sizes[shape_key] = 0
-                                    tensor_sizes[shape_key] += size_mb
-                        except:
-                            pass
-                    if tensor_sizes:
-                        debug("Large tensors still in CUDA memory:")
-                        for shape, size_mb in sorted(tensor_sizes.items(), key=lambda x: x[1], reverse=True):
-                            debug(f"  Shape {shape}: {size_mb:.1f} MB")
-                    unload_complete_models(
-                        self.model_manager.text_encoder,
-                        self.model_manager.text_encoder_2,
-                        self.model_manager.image_encoder,
-                        self.model_manager.vae,
-                        self.model_manager.transformer
-                    )
-                    debug("explicitly unloaded all models (before sampling)")
-                    # Load only the transformer, with memory preservation
-                    debug("------ ATTEMPTING TO LOAD TRANSFORMER ------")
-                    try:
-                        move_model_to_device_with_memory_preservation(
-                            self.model_manager.transformer,
-                            target_device=gpu,
-                            preserved_memory_gb=gpu_memory_preservation
-                        )
-                        debug("moved transformer to gpu (memory preservation)")
-                    except Exception as e:
-                        debug(f"CRITICAL ERROR loading transformer: {e}")
-                        debug("Attempting emergency memory cleanup...")
-                        # Emergency cleanup
-                        torch.cuda.empty_cache()
-                        gc.collect()
-                        # Try to diagnose
-                        debug(f"After error: Free memory: {get_cuda_free_memory_gb(gpu):.2f} GB")
-                        # Try less memory-intensive approach
-                        if get_cuda_free_memory_gb(gpu) > 2.0:
-                            debug("Trying alternative approach with less memory")
-                            # Continue with CPU processing or smaller batch
-                # Set up teacache
-                self.model_manager.initialize_teacache(enable_teacache=use_teacache, num_steps=steps if use_teacache else 0)
-                # Process end frame with CLIP
-                end_clip_output = hf_clip_vision_encode(
-                    end_np,
-                    self.model_manager.feature_extractor,
-                    self.model_manager.image_encoder
-                ).last_hidden_state
+                    fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
+                    load_model_as_complete(self.model_manager.text_encoder_2, gpu)
+                lv, cp = encode_prompt_conds(prompt, ...)
+                lv_n, cp_n = encode_prompt_conds(n_prompt, ...) if cfg > 1 else (torch.zeros_like(lv), torch.zeros_like(cp))
+                lv, m = crop_or_pad_yield_mask(lv, 512)
+                lv_n, m_n = crop_or_pad_yield_mask(lv_n, 512)
+                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.text_encoder, self.model_manager.text_encoder_2)
+
+                # --- CLIP Vision Encoding ---
+                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.image_encoder, gpu)
+                end_clip = hf_clip_vision_encode(end_np, ...).last_hidden_state
                 if start_frame is not None:
-                    # Process start frame with CLIP
-                    start_clip_output = hf_clip_vision_encode(
-                        input_anchor_np,
-                        self.model_manager.feature_extractor,
-                        self.model_manager.image_encoder
-                    ).last_hidden_state
-                    # Use weighted combination based on slider value
-                    clip_output = (keyframe_weight _start_clip_output + (1.0 - keyframe_weight)_ end_clip_output)
-                    debug(f"Using weighted combination: {keyframe_weight:.1f} start frame, {1.0-keyframe_weight:.1f} end frame")
+                    start_clip = hf_clip_vision_encode(anchor_np, ...).last_hidden_state
+                    clip_output = (keyframe_weight * start_clip + (1.0 - keyframe_weight) * end_clip)
                 else:
-                    # No start frame provided - use 100% end frame embedding
-                    clip_output = end_clip_output
-                    debug("No start frame provided - using 100% end frame embedding")
+                    clip_output = end_clip
+                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.image_encoder)
+
             elif mode == "text2video":
-                # Text2video mode processing
                 width, height = self.get_dims_from_aspect(aspect, custom_w, custom_h)
-                if init_color is not None:
+                debug(f"Text2Video: Target dims={width}x{height}")
+                if init_color:
                     r, g, b = self.parse_hex_color(init_color)
-                    debug(f"Using color picker value {init_color} -> RGB {r},{g},{b}")
-                    input_image_arr = np.zeros((height, width, 3), dtype=np.uint8)
-                    input_image_arr[:, :, 0] = int(r * 255)
-                    input_image_arr[:, :, 1] = int(g * 255)
-                    input_image_arr[:, :, 2] = int(b * 255)
+                    anchor_np = np.zeros((height, width, 3), dtype=np.uint8)
+                    anchor_np[:, :, 0] = int(r * 255); anchor_np[:, :, 1] = int(g * 255); anchor_np[:, :, 2] = int(b * 255)
                 else:
-                    input_image_arr = np.zeros((height, width, 3), dtype=np.uint8)
-                    debug("No color provided, defaulting to black")
-                input_image = input_image_arr
-                # Continue with general image preparation below
-            # Handle video extension mode
-            if mode == "video_extension":
-                if input_video is None:
-                    raise ValueError("Video extension mode requires a video to be uploaded!")
-                debug(f"Processing video extension: direction={extension_direction}")
-                # Extract frames from the video
-                extracted_frames, video_fps, original_dims = extract_frames_from_video(
-                    input_video,
-                    num_frames=int(extension_frames),
-                    from_end=(extension_direction == "Forward"),
-                    max_resolution=640
+                    anchor_np = np.zeros((height, width, 3), dtype=np.uint8) # Black
+
+                # --- Prepare inputs using common function ---
+                # Note: input_image is the generated color/black frame here
+                _, input_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = self.prepare_inputs(
+                    anchor_np, prompt, n_prompt, cfg, gaussian_blur_amount, llm_weight, clip_weight
                 )
-                if len(extracted_frames) == 0:
-                    raise ValueError("Failed to extract frames from the input video")
-                # Set input_image based on direction
-                if extension_direction == "Forward":
-                    # Use last frame as input for forward extension
-                    input_image = extracted_frames[-1]
-                    debug(f"Using last frame as input_image for forward extension")
-                else:
-                    # Use first frame as input for backward extension
-                    input_image = extracted_frames[0]
-                    debug(f"Using first frame as input_image for backward extension")
-                # Store the extracted frames for later use in video stitching
-                all_extracted_frames = extracted_frames
-                # Redirect to use image2video processing path
-                mode = "image2video"
-                debug(f"Redirecting to image2video path with selected frame as input")
-            # General preparation for image2video or text2video
-            if mode != "keyframes":
-                debug("Preparing inputs")
-                if self.stream:
-                    self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Text encoding ...'))))
-                # Use prepare_inputs for standard processing
-                inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = self.prepare_inputs(
-                    input_image, prompt, n_prompt, cfg,
-                    gaussian_blur_amount=gaussian_blur_amount,
-                    llm_weight=llm_weight,
-                    clip_weight=clip_weight
+
+                # --- VAE Encode ---
+                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.vae, gpu)
+                t_vae_start = time.time()
+                start_latent = vae_encode(input_tensor, self.model_manager.vae)
+                timings["latent_encoding"] += time.time() - t_vae_start
+                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.vae)
+
+                # --- CLIP Vision (Encode the blank/color frame) ---
+                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.image_encoder, gpu)
+                clip_output = hf_clip_vision_encode(anchor_np, ...).last_hidden_state
+                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.image_encoder)
+
+            elif mode == "image2video" or original_mode == "video_extension": # Includes redirected extension
+                if input_image is None: raise ValueError("Image input required for image2video/video_extension")
+                debug(f"Image2Video/Extension: Processing input image")
+
+                # --- Prepare inputs using common function ---
+                inp_np, input_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = self.prepare_inputs(
+                    input_image, prompt, n_prompt, cfg, gaussian_blur_amount, llm_weight, clip_weight
                 )
-                # VAE encode
-                t_encode_start = time.time()
-                start_latent = vae_encode(inp_tensor.float(), self.model_manager.vae.float())
-                timings["latent_encoding"] += time.time() - t_encode_start
+
+                # --- VAE Encode ---
+                if self.stream: self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE encoding ...'))))
+                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.vae, gpu)
+                t_vae_start = time.time()
+                start_latent = vae_encode(input_tensor, self.model_manager.vae)
+                timings["latent_encoding"] += time.time() - t_vae_start
+                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.vae)
                 debug("VAE encoded")
-                if self.stream:
-                    self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
-                # CLIP vision encoding for image2video and text2video
-                if not self.model_manager.high_vram:
-                    # Offload transformer
-                    offload_model_from_device_for_memory_preservation(
-                        self.model_manager.transformer,
-                        target_device=gpu,
-                        preserved_memory_gb=8
-                    )
-                    # Load VAE for decoding
-                    load_model_as_complete(self.model_manager.vae, target_device=gpu)
-                    debug("loaded vae to gpu")
-                # CLIP Vision encoding
-                if self.stream:
-                    self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
-                if not self.model_manager.high_vram:
-                    # Load image encoder explicitly to GPU
-                    load_model_as_complete(self.model_manager.image_encoder, target_device=gpu)
-                    debug("loaded image_encoder to gpu")
-                if mode "text2video" or mode "image2video":
-                    # Get full output first, then extract last_hidden_state
-                    image_encoder_output = hf_clip_vision_encode(
-                        inp_np,
-                        self.model_manager.feature_extractor,
-                        self.model_manager.image_encoder
-                    )
-                    clip_output = image_encoder_output.last_hidden_state
-                    debug("Got CLIP output last_hidden_state")
-            # Convert tensors to proper dtype
-            lv = lv.to(self.model_manager.transformer.dtype)
-            lv_n = lv_n.to(self.model_manager.transformer.dtype)
-            cp = cp.to(self.model_manager.transformer.dtype)
-            cp_n = cp_n.to(self.model_manager.transformer.dtype)
-            if clip_output is not None:
-                clip_output = clip_output.to(self.model_manager.transformer.dtype)
-            if self.stream:
-                self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Start sampling ...'))))
-            # Setup generator for reproducibility
+
+                # --- CLIP Vision ---
+                if self.stream: self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
+                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.image_encoder, gpu)
+                clip_output = hf_clip_vision_encode(inp_np, ...).last_hidden_state
+                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.image_encoder)
+                debug("CLIP Vision encoded")
+
+            # ============ Dtype Conversion ============
+            target_dtype = self.model_manager.transformer.dtype # Should be torch.bfloat16
+
+            if lv is not None: lv = lv.to(target_dtype)
+            if lv_n is not None: lv_n = lv_n.to(target_dtype)
+            if cp is not None: cp = cp.to(target_dtype)
+            if cp_n is not None: cp_n = cp_n.to(target_dtype)
+            if clip_output is not None: clip_output = clip_output.to(target_dtype)
+
+            # Masks (m, m_n) should be torch.bool and shape [B, 512], NO dtype conversion needed.
+            debug(f"Final Dtypes - lv: {lv.dtype}, cp: {cp.dtype}, m: {m.dtype if m is not None else 'None'}, clip: {clip_output.dtype if clip_output is not None else 'None'}")
+
+            # ============ Sampling Setup ============
+            if self.stream: self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Start sampling ...'))))
             rnd = torch.Generator("cpu").manual_seed(seed)
-            # Initialize history tensors
-            history_latents = torch.zeros(
-                size=(1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32
-            ).cpu()
+            history_latents = torch.zeros((1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32).cpu()
             history_pixels = None
-            # Calculate latent paddings list for info - PRESERVING ORIGINAL LOGIC
-            if total_sections > 4:
-                latent_paddings_list_for_info = [3] + [2] * (total_sections - 3) + [1, 0]
-                debug(f"Calculated padding list {latent_paddings_list_for_info} for info (len={len(latent_paddings_list_for_info)})")
-            else:
-                latent_paddings_list_for_info = list(reversed(range(total_sections)))
-                debug(f"Calculated standard padding list {latent_paddings_list_for_info} for info (len={len(latent_paddings_list_for_info)})")
-            # Use the original iteration scheme - CRITICAL
-            debug(f"[TESTING] Forcing old iteration scheme: reversed(range(total_sections={total_sections}))")
+
             loop_iterator = reversed(range(total_sections))
             graceful_stop = False
-            # Process each section - PRESERVING ORIGINAL SECTION LOOP
-            for section in loop_iterator:  # Iterates from total_sections-1 down to 0
-                # Determine section properties (Unchanged)
+
+            # ============ Main Generation Loop ============
+            for section in loop_iterator:
                 is_last_section = section == 0
                 latent_padding_size = section * latent_window_size
                 is_first_iteration = (section == total_sections - 1)
-                debug(f'section = {section}, latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}')
-                # Check for graceful stop
-                if self.stream and self.stream.input_queue.top() == 'graceful_end':
-                    debug("input_queue 'graceful_end' received. Will stop after current section.")
-                    graceful_stop = True
-                # Check at end of loop too
-                if graceful_stop:
-                    debug("graceful stop requested, ending generation after completing section.")
-                    break
-                # Setup indices and clean latents - PRESERVING ORIGINAL LOGIC
+                debug(f'Section {section}/{total_sections-1}, padding={latent_padding_size}, last={is_last_section}, first={is_first_iteration}')
+
+                if self.stream and self.stream.input_queue.top() == 'graceful_end': graceful_stop = True; debug("Graceful stop requested.")
+                if graceful_stop and not is_last_section: debug("Stopping before next section."); break # Allow last section to finish
+
+                # --- Prepare Indices and Clean Latents ---
                 split_sizes = [1, latent_padding_size, latent_window_size, 1, 2, 16]
                 total_indices = sum(split_sizes)
                 indices = torch.arange(total_indices).unsqueeze(0)
-                clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split(split_sizes, dim=1)
+                clean_latent_indices_pre, _, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split(split_sizes, dim=1)
                 clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
-                # Setup the clean latents for ALL modes first
+
                 clean_latents_pre = start_latent.to(history_latents.device, dtype=history_latents.dtype)
                 clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
                 clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
-                # Special handling for keyframes mode
+
                 if mode == "keyframes" and is_first_iteration:
-                    debug("Keyframes mode: Overriding clean_latents_post with end_latent for first iteration.")
-                    clean_latents_post = end_latent.to(history_latents.device, dtype=history_latents.dtype)
-                    clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
-                # Mask fallback safeguard (Unchanged)
-                m = m if m is not None else torch.ones_like(lv)
-                m_n = m_n if m_n is not None else torch.ones_like(lv_n)
-                # Memory management before sampling
+                    debug("Keyframes: Using end_latent for first iteration's clean_latents_post.")
+                    clean_latents_post_override = end_latent.to(history_latents.device, dtype=history_latents.dtype)
+                    clean_latents = torch.cat([clean_latents_pre, clean_latents_post_override], dim=2)
+
+                # --- Mask Fallback (Correct Shape/Dtype) ---
+                current_m = m if m is not None else torch.ones((lv.shape[0], lv.shape[1]), dtype=torch.bool, device=lv.device)
+                current_m_n = m_n if m_n is not None else torch.ones((lv_n.shape[0], lv_n.shape[1]), dtype=torch.bool, device=lv_n.device)
+                debug(f"Loop {section} - Using mask m: {current_m.shape} ({current_m.dtype})")
+
+                # --- Memory: Load Transformer ---
                 if not self.model_manager.high_vram:
-                    unload_complete_models(
-                        self.model_manager.text_encoder,
-                        self.model_manager.text_encoder_2,
-                        self.model_manager.image_encoder,
-                        self.model_manager.vae,
-                        self.model_manager.transformer
-                    )
-                    debug("explicitly unloaded all models (before sampling)")
-                    move_model_to_device_with_memory_preservation(
-                        self.model_manager.transformer,
-                        target_device=gpu,
-                        preserved_memory_gb=gpu_memory_preservation
-                    )
-                    debug("moved transformer to gpu (memory preservation)")
-                # Initialize TeaCache
-                self.model_manager.initialize_teacache(
-                    enable_teacache=use_teacache,
-                    num_steps=steps if use_teacache else 0
-                )
-                debug("teacache initialized", "use_teacache", use_teacache)
-                # Define callback function for this section
+                    unload_complete_models() # Clear space first
+                    move_model_to_device_with_memory_preservation(self.model_manager.transformer, gpu, gpu_memory_preservation)
+
+                # --- Initialize TeaCache ---
+                self.model_manager.initialize_teacache(use_teacache, steps if use_teacache else 0)
+                debug(f"TeaCache initialized: {use_teacache}")
+
+                # --- Callback Definition ---
                 def callback(d):
-                    nonlocal graceful_stop
+                    nonlocal graceful_stop # Allow modification
                     # Preview generation
                     preview = d['denoised']
                     preview = vae_decode_fake(preview)
