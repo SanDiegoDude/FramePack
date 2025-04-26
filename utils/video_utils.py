@@ -128,54 +128,41 @@ def fix_video_compatibility(video_path, fps=30):
 
 def crop_or_pad_yield_mask(tensor, target_length):
     """
-    Crop or pad a tensor's sequence dimension (dim=1) to target length
-    and yield a 2D attention mask [batch, target_length].
-    Assumes input tensor shape [batch, sequence_length, embedding_dim].
+    Crop or pad a tensor to target length and yield a mask
+    Args:
+        tensor: Input tensor of shape [B, L, D]
+        target_length: Target length for the L dimension
+    Returns:
+        tuple: (cropped_or_padded_tensor, mask of shape [B, target_length])
     """
     current_length = tensor.shape[1]
-    batch_size = tensor.shape[0]
-    embedding_dim = tensor.shape[2] # Keep track of the embedding dimension
-    device = tensor.device
-    # Use boolean for mask, it's common and efficient
-    # Convert to float later if needed by the model part
-    mask_dtype = torch.bool
 
     if current_length == target_length:
-        output_tensor = tensor
-        # Create 2D mask [batch, target_length]
-        mask = torch.ones((batch_size, target_length), dtype=mask_dtype, device=device)
+        mask = torch.ones_like(tensor[:, :, 0], dtype=torch.bool) # Shape [B, L], dtype bool
+        return tensor, mask
 
-    elif current_length > target_length:
-        # Crop tensor
+    if current_length > target_length:
+        # Crop
         diff = current_length - target_length
         start = diff // 2
-        output_tensor = tensor[:, start:start + target_length]
-        # Create 2D mask [batch, target_length]
-        mask = torch.ones((batch_size, target_length), dtype=mask_dtype, device=device)
+        cropped = tensor[:, start:start + target_length]
+        mask = torch.ones_like(cropped[:, :, 0], dtype=torch.bool) # Shape [B, target_length], dtype bool
+        return cropped, mask
 
-    else: # current_length < target_length
-        # Pad tensor
+    if current_length < target_length:
+        # Pad
         diff = target_length - current_length
         pad_left = diff // 2
         pad_right = diff - pad_left
-
-        # Create padded tensor [batch, target_length, embedding_dim]
-        output_tensor = torch.zeros(
-            (batch_size, target_length, embedding_dim),
-            dtype=tensor.dtype, device=device
+        padded = torch.zeros(
+            (tensor.shape[0], target_length, tensor.shape[2]),
+            dtype=tensor.dtype, device=tensor.device
         )
-        output_tensor[:, pad_left:pad_left + current_length] = tensor
-
-        # Create 2D mask [batch, target_length]
-        mask = torch.zeros((batch_size, target_length), dtype=mask_dtype, device=device)
-        # Set the valid (non-padded) token positions to True (or 1.0)
-        mask[:, pad_left:pad_left + current_length] = True
-
-    # Ensure the mask is returned as float, as expected by some downstream ops
-    # The model itself converts it: mask_float = attention_mask.float().unsqueeze(-1)
-    # So returning bool is fine here. Let's keep bool for clarity.
-    # return output_tensor, mask.float()
-    return output_tensor, mask
+        padded[:, pad_left:pad_left+current_length] = tensor
+        # Create boolean mask of target shape [B, target_length]
+        mask = torch.zeros((tensor.shape[0], target_length), dtype=torch.bool, device=tensor.device)
+        mask[:, pad_left:pad_left+current_length] = True
+        return padded, mask
 
 def extract_video_frames(video_path, first_and_last=True):
     """Extract first and/or last frame from a video file"""
