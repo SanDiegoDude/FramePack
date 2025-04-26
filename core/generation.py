@@ -129,9 +129,13 @@ class VideoGenerator:
             )
         
         # Process masks
-        llama_vec, llama_attention_mask = crop_or_pad_yield_mask(llama_vec, 512)
-        llama_vec_n, llama_attention_mask_n = crop_or_pad_yield_mask(llama_vec_n, 512)
-        
+        lv, mask = crop_or_pad_yield_mask(llama_vec, 512)
+        lv_n, mask_n = crop_or_pad_yield_mask(llama_vec_n, 512)
+
+
+        m = mask
+        m_n = mask_n                          
+                          
         # Apply weights
         if llm_weight != 1.0:
             llama_vec = llama_vec * llm_weight
@@ -347,23 +351,23 @@ class VideoGenerator:
                         self.model_manager.image_encoder
                     ).last_hidden_state
                 
-                llama_vec, clip_l_pooler = encode_prompt_conds(
+                lv, cp = encode_prompt_conds(
                     prompt, 
                     self.model_manager.text_encoder, 
                     self.model_manager.text_encoder_2, 
                     self.model_manager.tokenizer, 
                     self.model_manager.tokenizer_2
                 )
-                llama_vec, llama_attention_mask = crop_or_pad_yield_mask(lv, 512)
+                lv, mask = crop_or_pad_yield_mask(lv, 512)
                 
-                llama_vec_n, clip_l_pooler_n = encode_prompt_conds(
+                lv_n, cp_n = encode_prompt_conds(
                     n_prompt,
                     self.model_manager.text_encoder, 
                     self.model_manager.text_encoder_2, 
                     self.model_manager.tokenizer, 
                     self.model_manager.tokenizer_2
                 )
-                llama_vec_n, llama_attention_mask_n = crop_or_pad_yield_mask(lv_n, 512)
+                lv_n, mask_n = crop_or_pad_yield_mask(lv_n, 512)
                          
                 # CLIP Vision feature extraction
                 # ---- Unload all models before sampling
@@ -640,8 +644,8 @@ class VideoGenerator:
                     clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
                 
                 # Mask fallback safeguard (Unchanged)
-                llama_attention_mask = llama_attention_mask if llama_attention_mask is not None else torch.ones_like(llama_vec)
-                llama_attention_mask_n = llama_attention_mask_n if llama_attention_mask_n is not None else torch.ones_like(llama_vec_n)
+                m = m if m is not None else torch.ones_like(lv)
+                m_n = m_n if m_n is not None else torch.ones_like(lv_n)
                 
                 # Memory management before sampling
                 if not self.model_manager.high_vram:
@@ -765,12 +769,12 @@ class VideoGenerator:
                         guidance_rescale=rs,
                         num_inference_steps=steps,
                         generator=rnd,
-                        prompt_embeds=llama_vec,
-                        prompt_embeds_mask=llama_attention_mask,
-                        prompt_poolers=clip_l_pooler,
-                        negative_prompt_embeds=llama_vec_n,
-                        negative_prompt_embeds_mask=llama_attention_mask_n,
-                        negative_prompt_poolers=clip_l_pooler_n,
+                        prompt_embeds=lv,
+                        prompt_embeds_mask=m,
+                        prompt_poolers=cp,
+                        negative_prompt_embeds=lv_n,
+                        negative_prompt_embeds_mask=m_n,
+                        negative_prompt_poolers=cp_n
                         device=gpu,
                         dtype=torch.bfloat16,
                         image_embeddings=clip_output,
@@ -795,12 +799,12 @@ class VideoGenerator:
                         guidance_rescale=rs,
                         num_inference_steps=steps,
                         generator=rnd,
-                        prompt_embeds=llama_vec,
-                        prompt_embeds_mask=llama_attention_mask,
-                        prompt_poolers=clip_l_pooler,
-                        negative_prompt_embeds=llama_vec_n,
-                        negative_prompt_embeds_mask=llama_attention_mask_n,
-                        negative_prompt_poolers=clip_l_pooler_n,
+                        prompt_embeds=lv,
+                        prompt_embeds_mask=m,
+                        prompt_poolers=cp,
+                        negative_prompt_embeds=lv_n,
+                        negative_prompt_embeds_mask=m_n,
+                        negative_prompt_poolers=cp_n
                         device=gpu,
                         dtype=torch.bfloat16,
                         image_embeddings=clip_output,
