@@ -71,7 +71,11 @@ def create_interface(model_manager, video_generator):
                         label="Upload Video to Extend",
                         format="mp4",
                         height=320,
-                        elem_classes="video-container"
+                        elem_classes="video-container",
+                        include_audio=False,  # No audio needed
+                        interactive=True,     # Allow interaction
+                        show_share_button=False,
+                        show_download_button=True
                     )
                     extension_direction = gr.Radio(
                         ["Forward", "Backward"],
@@ -232,8 +236,8 @@ def create_interface(model_manager, video_generator):
                 
                 # First/Last frame displays
                 with gr.Row():
-                    first_frame = gr.Image(label="First Frame", elem_classes="frame-thumbnail", visible=True)
-                    last_frame = gr.Image(label="Last Frame", elem_classes="frame-thumbnail", visible=True)
+                    first_frame = gr.Image(label="First Frame", elem_classes="frame-thumbnail", visible=False)
+                    last_frame = gr.Image(label="Last Frame", elem_classes="frame-thumbnail", visible=False)
                 
                 # Action buttons for output
                 extend_button = gr.Button(value="Extend This Video", visible=False)
@@ -320,6 +324,12 @@ def create_interface(model_manager, video_generator):
             inputs=[aspect_selector],
             outputs=[custom_w, custom_h],
         )
+
+        extension_direction.change(
+            fn=toggle_init_color_for_backward,
+            inputs=[extension_direction, mode_selector],
+            outputs=[init_color]
+        )
         
         extend_button.click(
             fn=setup_for_extension,
@@ -385,14 +395,16 @@ def create_interface(model_manager, video_generator):
         
         prompt.submit(
             fn=process_wrapper,
-            inputs=ips,  # No need to add video_generator, model_manager
-            outputs=output_list
+            inputs=ips,
+            outputs=output_list,
+            _js="function() { document.querySelector('.frame-thumbnail').style.display = 'none'; return []; }"
         )
         
         start_button.click(
             fn=process_wrapper,
-            inputs=ips,  # No need to add video_generator, model_manager
-            outputs=output_list
+            inputs=ips,
+            outputs=output_list,
+            _js="function() { document.querySelector('.frame-thumbnail').style.display = 'none'; return []; }"
         )
         
         end_button.click(fn=end_process, outputs=[end_button])
