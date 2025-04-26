@@ -50,6 +50,7 @@ def sample_hunyuan(
         dtype=torch.bfloat16,
         device=None,
         negative_kwargs=None,
+        text_len=None,  # Add this parameter
         callback=None,
         **kwargs,
 ):
