@@ -112,21 +112,28 @@ def get_css():
     .stats-box td:first-child {
         width: 40%;
     }
-    /* Video container with extra space for trimming UI */
-    /* Add to style.py */
+    
+    /* Create a scrollable container for the video component */
+    .video-container-wrapper {
+        max-height: 400px;           /* Fixed height for container */
+        overflow-y: auto;            /* Enable vertical scrolling */
+        overflow-x: hidden;          /* Prevent horizontal scrolling */
+        padding-bottom: 20px;        /* Space at bottom */
+        margin-bottom: 20px;         /* Space below container */
+        position: relative;          /* Establish position context */
+        border: 1px solid #444;      /* Light border to see the container */
+        border-radius: 8px;          /* Rounded corners */
+    }
+    
+    /* Keep video on top within the scrollable area */
     .video-container {
         position: relative !important;
-        z-index: 10000 !important; /* Extremely high z-index */
+        z-index: 10000 !important;   /* Extremely high z-index */
     }
     
-    /* Give space for the trim tools to appear */
-    .video-container .video-wrap {
-        margin-bottom: 50px !important;
-    }
-    
-    /* Fix stacking context to make sure the video is on top */
-    .gradio-container {
-        position: relative !important;
+    /* Special handling for when trim UI is active */
+    .video-container.editing {
+        padding-bottom: 180px;       /* Extra space when editing */
     }
     /* Better formatting for generation stats */
     #generation_stats {
