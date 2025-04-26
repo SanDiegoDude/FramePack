@@ -232,7 +232,8 @@ def create_interface(model_manager, video_generator):
                     show_share_button=False,
                     elem_classes="result-container",
                     interactive=False,  # Add this line
-                    loop=True
+                    loop=True,
+                    visible=False # Hide on startup
                 )
                 
                 # First/Last frame displays
@@ -248,7 +249,16 @@ def create_interface(model_manager, video_generator):
                     visible=False
                 )
                 
-                gr.Markdown('Note: The ending actions will be generated before the starting actions due to the inverted sampling.')
+                note_message = gr.Markdown(
+                    value="", 
+                    visible=False,
+                    elem_id="sampling_note"
+                )
+                generation_stats = gr.Markdown(
+                    value="",
+                    visible=False,
+                    elem_id="generation_stats"
+                )
         
         # Memory management functions
         def unload_all_models():
