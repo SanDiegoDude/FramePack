@@ -335,7 +335,7 @@ class VideoGenerator:
                     for obj in gc.get_objects():
                         try:
                             if torch.is_tensor(obj) and obj.device.type == 'cuda':
-                                size_mb = obj.nelement() _obj.element_size() / (1024_ 1024)
+                                size_mb = obj.nelement() * obj.element_size() / (1024 * 1024)
                                 if size_mb > 10:  # Only log large tensors
                                     shape_key = str(tuple(obj.shape))
                                     if shape_key not in tensor_sizes:
