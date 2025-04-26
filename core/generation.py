@@ -141,13 +141,13 @@ class VideoGenerator:
         debug(f"cp_n mean: {cp_n.mean():.4f}, std: {cp_n.std():.4f}, isfinite: {torch.isfinite(cp_n).all()}")
         
                           
-        # --- Apply Weights ---
-        #if llm_weight != 1.0:
-        #    lv = lv * llm_weight
-        #    lv_n = lv_n * llm_weight
-        #if clip_weight != 1.0:
-        #    cp = cp * clip_weight
-        #    cp_n = cp_n * clip_weight
+         --- Apply Weights ---
+        if llm_weight != 1.0:
+            lv = lv * llm_weight
+            lv_n = lv_n * llm_weight
+        if clip_weight != 1.0:
+            cp = cp * clip_weight
+            cp_n = cp_n * clip_weight
 
         # --- Image Processing ---
         h, w = find_nearest_bucket(H, W, resolution=640)
