@@ -538,13 +538,15 @@ class VideoGenerator:
                     clip_output = image_encoder_output.last_hidden_state
                     debug("Got CLIP output last_hidden_state")
             
-            # Convert tensors to proper dtype
+            # In generation.py, after preparing inputs but before sampling
             lv = lv.to(self.model_manager.transformer.dtype)
             lv_n = lv_n.to(self.model_manager.transformer.dtype)
             cp = cp.to(self.model_manager.transformer.dtype)
             cp_n = cp_n.to(self.model_manager.transformer.dtype)
             if clip_output is not None:
                 clip_output = clip_output.to(self.model_manager.transformer.dtype)
+            
+            # DO NOT add any conversion for m or m_n here
             
             if self.stream:
                 self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Start sampling ...'))))
@@ -705,15 +707,6 @@ class VideoGenerator:
                     debug(f"In callback, section: {section_percentage}%, overall: {overall_percentage}%")
                     if self.stream:
                         self.stream.output_queue.push(('progress', (preview, desc, progress_html)))
-
-
-                # Ensure masks match embedding dtype
-                m = m.to(dtype=lv.dtype, device=lv.device)
-                m_n = m_n.to(dtype=lv_n.dtype, device=lv_n.device)
-
-                debug(f"lv shape: {lv.shape}, m shape: {m.shape}")
-                debug(f"lv dtype: {lv.dtype}, m dtype: {m.dtype}")
-
                 
                 # Run sampling based on mode
                 if mode == "keyframes":
