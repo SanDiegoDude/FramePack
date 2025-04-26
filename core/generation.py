@@ -252,7 +252,8 @@ class VideoGenerator:
         gaussian_blur_amount = config.get('gaussian_blur_amount', 0.0)
         llm_weight = config.get('llm_weight', 1.0)
         clip_weight = config.get('clip_weight', 1.0)
-
+        trim_percentage = config.get('trim_percentage', 0.2)  # Default to 0.2 if not provided
+        
         job_id = generate_timestamp()
         debug(f"[Generator] Received prompt: '{prompt}'")
         debug(f"[Generator] Received negative prompt: '{n_prompt}'")
@@ -794,8 +795,9 @@ class VideoGenerator:
                     drop_n = int(N_actual * 0.5)
                     debug(f"special trim for 4: dropping first {drop_n} frames of {N_actual}")
                 else:
-                    drop_n = math.floor(N_actual * 0.2)
-                    debug(f"normal trim: dropping first {drop_n} of {N_actual}")
+                    # Only modify this line to use trim_percentage instead of hardcoded 0.2
+                    drop_n = math.floor(N_actual * trim_percentage)
+                    debug(f"normal trim: dropping first {drop_n} frames ({trim_percentage*100:.1f}%) of {N_actual}")
                 history_pixels = history_pixels[:, :, drop_n:, :, :]
                 N_after = history_pixels.shape[2]
                 debug(f"Final video after trim for txt2vid, {N_after} frames left")
@@ -830,8 +832,9 @@ class VideoGenerator:
                     drop_n = int(N_actual * 0.5)
                     debug(f"keyframe special trim for 4: dropping first {drop_n} frames of {N_actual}")
                 else:
-                    drop_n = math.floor(N_actual * 0.2)  # Default to 20% trim
-                    debug(f"keyframe normal trim: dropping first {drop_n} of {N_actual}")
+                    # Only modify this line to use trim_percentage instead of hardcoded 0.2
+                    drop_n = math.floor(N_actual * trim_percentage)
+                    debug(f"keyframe normal trim: dropping first {drop_n} frames ({trim_percentage*100:.1f}%) of {N_actual}")
                 history_pixels = history_pixels[:, :, drop_n:, :, :]
                 N_after = history_pixels.shape[2]
                 debug(f"Final video after trim for keyframe (no start frame), {N_after} frames left")
