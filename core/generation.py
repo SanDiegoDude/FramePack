@@ -552,20 +552,30 @@ class VideoGenerator:
                     load_model_as_complete(self.model_manager.vae, target_device=gpu)
                     debug("loaded vae to gpu")
                 
-                if mode == "text2video" or mode == "image2video":
-                    clip_output = hf_clip_vision_encode(
-                        inp_np, 
-                        self.model_manager.feature_extractor, 
-                        self.model_manager.image_encoder
-                    ).last_hidden_state
+                # CLIP Vision encoding
+                if self.stream:
+                    self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
                 
-                debug("Got CLIP output last_hidden_state")
+                if not self.model_manager.high_vram:
+                    # Load image encoder explicitly to GPU
+                    load_model_as_complete(self.model_manager.image_encoder, target_device=gpu)
+                    debug("loaded image_encoder to gpu")
+                
+                if mode == "text2video" or mode == "image2video":
+                    # Get full output first, then extract last_hidden_state
+                    image_encoder_output = hf_clip_vision_encode(
+                        inp_np,
+                        self.model_manager.feature_extractor,
+                        self.model_manager.image_encoder
+                    )
+                    clip_output = image_encoder_output.last_hidden_state
+                    debug("Got CLIP output last_hidden_state")
             
             # Convert tensors to proper dtype
-            lv = lv.to(self.model_manager.transformer.dtype)
-            lv_n = lv_n.to(self.model_manager.transformer.dtype)
-            cp = cp.to(self.model_manager.transformer.dtype)
-            cp_n = cp_n.to(self.model_manager.transformer.dtype)
+            llama_vec = llama_vec.to(self.model_manager.transformer.dtype)
+            llama_vec_n = llama_vec_n.to(self.model_manager.transformer.dtype)
+            clip_l_pooler = clip_l_pooler.to(self.model_manager.transformer.dtype)
+            clip_l_pooler_n = clip_l_pooler_n.to(self.model_manager.transformer.dtype)
             
             if clip_output is not None:
                 clip_output = clip_output.to(self.model_manager.transformer.dtype)
@@ -788,12 +798,12 @@ class VideoGenerator:
                         guidance_rescale=rs,
                         num_inference_steps=steps,
                         generator=rnd,
-                        prompt_embeds=lv,
-                        prompt_embeds_mask=m,
-                        prompt_poolers=cp,
-                        negative_prompt_embeds=lv_n,
-                        negative_prompt_embeds_mask=m_n,
-                        negative_prompt_poolers=cp_n,
+                        prompt_embeds=llama_vec,
+                        prompt_embeds_mask=llama_attention_mask,
+                        prompt_poolers=clip_l_pooler,
+                        negative_prompt_embeds=llama_vec_n,
+                        negative_prompt_embeds_mask=llama_attention_mask_n,
+                        negative_prompt_poolers=clip_l_pooler_n,
                         device=gpu,
                         dtype=torch.bfloat16,
                         image_embeddings=clip_output,
