@@ -705,6 +705,10 @@ class VideoGenerator:
                     debug(f"In callback, section: {section_percentage}%, overall: {overall_percentage}%")
                     if self.stream:
                         self.stream.output_queue.push(('progress', (preview, desc, progress_html)))
+
+                debug(f"lv shape: {lv.shape}, m shape: {m.shape}")
+                debug(f"lv dtype: {lv.dtype}, m dtype: {m.dtype}")
+
                 
                 # Run sampling based on mode
                 if mode == "keyframes":
