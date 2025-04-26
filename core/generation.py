@@ -78,6 +78,15 @@ class VideoGenerator:
         # fallback to gray
         return 0.5, 0.5, 0.5
 
+    def extract_frames_from_video(self, video_path, num_frames=8, from_end=True, max_resolution=640):
+        """
+        Extract frames from a video file
+        
+        This is a wrapper around the utility function to maintain API compatibility
+        """
+        from utils.video_utils import extract_frames_from_video as extract_frames
+        return extract_frames(video_path, num_frames, from_end, max_resolution)
+        
     def prepare_inputs(self, input_image, prompt, n_prompt, cfg, gaussian_blur_amount=0.0,
                       llm_weight=1.0, clip_weight=1.0):
         """Prepare text embeddings, poolers, masks, and image tensors"""
