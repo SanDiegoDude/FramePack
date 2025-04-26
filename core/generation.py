@@ -706,6 +706,11 @@ class VideoGenerator:
                     if self.stream:
                         self.stream.output_queue.push(('progress', (preview, desc, progress_html)))
 
+
+                # Ensure masks match embedding dtype
+                m = m.to(dtype=lv.dtype, device=lv.device)
+                m_n = m_n.to(dtype=lv_n.dtype, device=lv_n.device)
+
                 debug(f"lv shape: {lv.shape}, m shape: {m.shape}")
                 debug(f"lv dtype: {lv.dtype}, m dtype: {m.dtype}")
 
