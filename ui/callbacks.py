@@ -32,6 +32,8 @@ def process(
         All UI parameters + video_generator and model_manager references
     """
     global stream
+    output_filename = None
+    final_output_path = None
     
     debug(f"Process called with mode: {mode}")
     assert mode in ['image2video', 'text2video', 'keyframes', 'video_extension'], "Invalid mode"
