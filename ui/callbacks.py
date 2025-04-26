@@ -122,6 +122,10 @@ def process(
         seed = int(time.time()) % 2**32
     
     debug(f"Starting generation with seed: {seed}")
+    debug(f"[UI Callback] Prompt received: '{prompt}'")
+    debug(f"[UI Callback] Negative Prompt received: '{n_prompt}'")
+    
+
     
     # Initial UI update
     yield (
