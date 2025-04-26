@@ -1,115 +1,222 @@
 # utils/memory_utils.py
 import torch
 import gc
+import time
 from utils.common import debug
+
+# Import original memory functions
 from diffusers_helper.memory import (
-    cpu, gpu, get_cuda_free_memory_gb, move_model_to_device_with_memory_preservation,
-    offload_model_from_device_for_memory_preservation, fake_diffusers_current_device,
-    DynamicSwapInstaller, unload_complete_models, load_model_as_complete
+    cpu, gpu, get_cuda_free_memory_gb as _original_get_cuda_free_memory_gb,
+    move_model_to_device_with_memory_preservation as _original_move_model_to_device_with_memory_preservation,
+    offload_model_from_device_for_memory_preservation as _original_offload_model_from_device_for_memory_preservation,
+    fake_diffusers_current_device as _original_fake_diffusers_current_device,
+    DynamicSwapInstaller, unload_complete_models as _original_unload_complete_models, 
+    load_model_as_complete as _original_load_model_as_complete
 )
 
-# We'll import and re-export the original functions from diffusers_helper.memory
-# This maintains compatibility while allowing us to add debug statements or customizations
-
-def clear_cuda_cache():
-    """Clear CUDA cache to free fragmented memory"""
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        free_mem = get_cuda_free_memory_gb(gpu)
-        return free_mem
-    return 0
-
-# Define device constants
-cpu = torch.device('cpu')
-gpu = torch.device('cuda')
-
 def get_cuda_free_memory_gb(device=None):
-    """Get the amount of free CUDA memory in GB"""
-    if device is None:
-        device = gpu
-    
-    if not torch.cuda.is_available():
-        return 0
-    
-    try:
-        free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
-        return free_memory / (1024 ** 3)
-    except Exception as e:
-        debug(f"Error getting CUDA memory: {e}")
-        return 0
+    """Get the amount of free CUDA memory in GB with enhanced debugging"""
+    result = _original_get_cuda_free_memory_gb(device)
+    debug(f"MEMORY: Free CUDA memory: {result:.2f} GB")
+    return result
 
 def clear_cuda_cache():
-    """Clear CUDA cache to free fragmented memory"""
+    """Clear CUDA cache with memory tracking"""
+    before = get_cuda_free_memory_gb(gpu)
+    debug(f"MEMORY: Before clear_cache: {before:.2f} GB free")
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        free_mem = get_cuda_free_memory_gb(gpu)
-        return free_mem
+        after = _original_get_cuda_free_memory_gb(gpu)
+        debug(f"MEMORY: After clear_cache: {after:.2f} GB free (freed {after-before:.2f} GB)")
+        return after
     return 0
 
 def move_model_to_device_with_memory_preservation(model, target_device, preserved_memory_gb=6):
-    """Move a model to device while preserving memory"""
+    """Move a model to device with detailed memory tracking"""
     if model is None:
+        debug("MEMORY: Attempted to move None model")
         return None
     
-    free_mem = get_cuda_free_memory_gb(target_device)
-    debug(f"Free memory before moving model: {free_mem:.2f} GB, preserving {preserved_memory_gb:.2f} GB")
+    model_name = model.__class__.__name__
+    debug(f"MEMORY: ===== MOVING {model_name} TO {target_device} =====")
     
+    # Get memory stats before
+    free_mem_before = get_cuda_free_memory_gb(target_device)
+    debug(f"MEMORY: Before moving {model_name}: {free_mem_before:.2f} GB free, preserving {preserved_memory_gb:.2f} GB")
+    
+    # Clear cache
+    debug(f"MEMORY: Clearing cache before moving {model_name}")
     torch.cuda.empty_cache()
+    gc.collect()
     
-    model = model.to(target_device)
-    debug(f"Moving {model.__class__.__name__} to {target_device}")
+    # Get memory after clearing
+    free_mem_after_clear = get_cuda_free_memory_gb(target_device)
+    debug(f"MEMORY: After clearing cache: {free_mem_after_clear:.2f} GB free (freed {free_mem_after_clear-free_mem_before:.2f} GB)")
     
-    return model
+    # Track timing
+    start_time = time.time()
+    
+    try:
+        # Use original implementation
+        debug(f"MEMORY: Calling original move_model_to_device for {model_name}")
+        model = _original_move_model_to_device_with_memory_preservation(
+            model, target_device, preserved_memory_gb
+        )
+        
+        # Get memory after moving
+        free_mem_after_move = get_cuda_free_memory_gb(target_device)
+        used_mem = free_mem_after_clear - free_mem_after_move
+        
+        elapsed = time.time() - start_time
+        debug(f"MEMORY: Moved {model_name} in {elapsed:.2f}s, used {used_mem:.2f} GB, {free_mem_after_move:.2f} GB remaining")
+        
+        # Check for potential memory leak
+        if used_mem > 20:  # Unusually high memory usage
+            debug(f"MEMORY: WARNING - High memory usage ({used_mem:.2f} GB) for {model_name}")
+        
+        return model
+    except Exception as e:
+        debug(f"MEMORY: ERROR moving {model_name} to {target_device}: {e}")
+        # Try to diagnose
+        debug(f"MEMORY: Attempting to diagnose OOM for {model_name}")
+        debug(f"MEMORY: Model size estimate: {sum(p.numel() * p.element_size() for p in model.parameters()) / (1024**3):.2f} GB")
+        debug(f"MEMORY: CUDA Memory allocated: {torch.cuda.memory_allocated() / (1024**3):.2f} GB")
+        debug(f"MEMORY: CUDA Memory reserved: {torch.cuda.memory_reserved() / (1024**3):.2f} GB")
+        
+        # Try to recover
+        try:
+            debug(f"MEMORY: Attempting to return model to CPU")
+            model = model.to(cpu)
+        except:
+            debug(f"MEMORY: Failed to return model to CPU")
+        
+        # Clear cache
+        torch.cuda.empty_cache()
+        gc.collect()
+        
+        raise
 
 def offload_model_from_device_for_memory_preservation(model, target_device, preserved_memory_gb=6):
-    """Offload a model to CPU"""
+    """Offload a model with detailed memory tracking"""
     if model is None:
+        debug("MEMORY: Attempted to offload None model")
         return None
     
-    model = model.to(cpu)
-    debug(f"Offloaded {model.__class__.__name__} to CPU")
+    model_name = model.__class__.__name__
+    debug(f"MEMORY: ===== OFFLOADING {model_name} FROM GPU =====")
     
-    torch.cuda.empty_cache()
+    # Get memory before offload
+    free_mem_before = get_cuda_free_memory_gb(gpu)
+    debug(f"MEMORY: Before offloading {model_name}: {free_mem_before:.2f} GB free")
     
-    return model
+    # Track timing
+    start_time = time.time()
+    
+    try:
+        # Use original implementation
+        model = _original_offload_model_from_device_for_memory_preservation(
+            model, target_device, preserved_memory_gb
+        )
+        
+        # Get memory after offload
+        free_mem_after = get_cuda_free_memory_gb(gpu)
+        freed_mem = free_mem_after - free_mem_before
+        
+        elapsed = time.time() - start_time
+        debug(f"MEMORY: Offloaded {model_name} in {elapsed:.2f}s, freed {freed_mem:.2f} GB, now {free_mem_after:.2f} GB free")
+        
+        return model
+    except Exception as e:
+        debug(f"MEMORY: ERROR offloading {model_name}: {e}")
+        torch.cuda.empty_cache()
+        gc.collect()
+        raise
 
 def fake_diffusers_current_device(model, device):
-    """Handle device for diffusers models"""
+    """Handle device for diffusers models with detailed tracking"""
     if model is None:
+        debug("MEMORY: Attempted to set device for None model")
         return None
     
-    model = model.to(device)
-    debug(f"Set up device tracking for {model.__class__.__name__}")
+    model_name = model.__class__.__name__
+    debug(f"MEMORY: Setting up device tracking for {model_name} to {device}")
     
-    return model
+    try:
+        # Use original implementation
+        model = _original_fake_diffusers_current_device(model, device)
+        debug(f"MEMORY: Successfully set up device tracking for {model_name}")
+        return model
+    except Exception as e:
+        debug(f"MEMORY: ERROR setting device for {model_name}: {e}")
+        raise
 
 def unload_complete_models(*models):
-    """Unload models from GPU"""
-    for model in models:
+    """Unload models with detailed memory tracking"""
+    debug(f"MEMORY: ===== UNLOADING {len(models)} MODELS =====")
+    
+    # Get memory before unload
+    free_mem_before = get_cuda_free_memory_gb(gpu)
+    debug(f"MEMORY: Before unloading: {free_mem_before:.2f} GB free")
+    
+    # Track each model
+    for i, model in enumerate(models):
         if model is not None:
-            model.to(cpu)
+            model_name = model.__class__.__name__
+            debug(f"MEMORY: Unloading model {i+1}/{len(models)}: {model_name}")
     
-    torch.cuda.empty_cache()
-    
-    return get_cuda_free_memory_gb(gpu)
+    try:
+        # Use original implementation
+        _original_unload_complete_models(*models)
+        
+        # Get memory after unload
+        free_mem_after = get_cuda_free_memory_gb(gpu)
+        freed_mem = free_mem_after - free_mem_before
+        
+        debug(f"MEMORY: Unloaded {len(models)} models, freed {freed_mem:.2f} GB, now {free_mem_after:.2f} GB free")
+        return free_mem_after
+    except Exception as e:
+        debug(f"MEMORY: ERROR unloading models: {e}")
+        torch.cuda.empty_cache()
+        raise
 
 def load_model_as_complete(model, target_device):
-    """Load a model to target device"""
+    """Load a model with detailed memory tracking"""
     if model is None:
+        debug("MEMORY: Attempted to load None model")
         return None
     
-    free_mem_before = get_cuda_free_memory_gb(target_device)
-    debug(f"Free memory before loading {model.__class__.__name__}: {free_mem_before:.2f} GB")
+    model_name = model.__class__.__name__
+    debug(f"MEMORY: ===== LOADING {model_name} TO {target_device} =====")
     
-    model = model.to(target_device)
-    debug(f"Loaded {model.__class__.__name__} to {target_device}")
+    # Get memory before loading
+    if target_device == gpu:
+        free_mem_before = get_cuda_free_memory_gb(target_device)
+        debug(f"MEMORY: Before loading {model_name}: {free_mem_before:.2f} GB free")
     
-    return model
-
-class DynamicSwapInstaller:
-    """Set up dynamic model swapping"""
-    @staticmethod
-    def install_model(model, device):
-        # This doesn't actually move the model to GPU
-        debug(f"DynamicSwapInstaller: Model will be swapped as needed")
+    # Track timing
+    start_time = time.time()
+    
+    try:
+        # Use original implementation
+        model = _original_load_model_as_complete(model, target_device)
+        
+        # Get memory after loading
+        if target_device == gpu:
+            free_mem_after = get_cuda_free_memory_gb(target_device)
+            used_mem = free_mem_before - free_mem_after
+            
+            elapsed = time.time() - start_time
+            debug(f"MEMORY: Loaded {model_name} in {elapsed:.2f}s, used {used_mem:.2f} GB, {free_mem_after:.2f} GB remaining")
+            
+            # Check for potential memory leak
+            if used_mem > 20:  # Unusually high memory usage
+                debug(f"MEMORY: WARNING - High memory usage ({used_mem:.2f} GB) for {model_name}")
+        else:
+            elapsed = time.time() - start_time
+            debug(f"MEMORY: Loaded {model_name} to {target_device} in {elapsed:.2f}s")
+        
         return model
+    except Exception as e:
+        debug(f"MEMORY: ERROR loading {model_name} to {target_device}: {e}")
+        torch.cuda.empty_cache()
+        raise
