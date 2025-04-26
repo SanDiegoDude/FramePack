@@ -398,14 +398,12 @@ def create_interface(model_manager, video_generator):
             fn=process_wrapper,
             inputs=ips,
             outputs=output_list,
-            _js="function() { document.querySelector('.frame-thumbnail').style.display = 'none'; return []; }"
         )
         
         start_button.click(
             fn=process_wrapper,
             inputs=ips,
             outputs=output_list,
-            _js="function() { document.querySelector('.frame-thumbnail').style.display = 'none'; return []; }"
         )
         
         end_button.click(fn=end_process, outputs=[end_button])
