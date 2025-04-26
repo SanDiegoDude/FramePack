@@ -347,27 +347,24 @@ class VideoGenerator:
                         self.model_manager.image_encoder
                     ).last_hidden_state
                 
-                lv, cp = encode_prompt_conds(
+                llama_vec, clip_l_pooler = encode_prompt_conds(
                     prompt, 
                     self.model_manager.text_encoder, 
                     self.model_manager.text_encoder_2, 
                     self.model_manager.tokenizer, 
                     self.model_manager.tokenizer_2
                 )
-                lv, mask = crop_or_pad_yield_mask(lv, 512)
+                llama_vec, llama_attention_mask = crop_or_pad_yield_mask(lv, 512)
                 
-                lv_n, cp_n = encode_prompt_conds(
+                llama_vec_n, clip_l_pooler_n = encode_prompt_conds(
                     n_prompt,
                     self.model_manager.text_encoder, 
                     self.model_manager.text_encoder_2, 
                     self.model_manager.tokenizer, 
                     self.model_manager.tokenizer_2
                 )
-                lv_n, mask_n = crop_or_pad_yield_mask(lv_n, 512)
-                
-                m = mask
-                m_n = mask_n
-                
+                llama_vec_n, llama_attention_mask_n = crop_or_pad_yield_mask(lv_n, 512)
+                         
                 # CLIP Vision feature extraction
                 # ---- Unload all models before sampling
                 if not self.model_manager.high_vram:
@@ -643,8 +640,8 @@ class VideoGenerator:
                     clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
                 
                 # Mask fallback safeguard (Unchanged)
-                m = m if m is not None else torch.ones_like(lv)
-                m_n = m_n if m_n is not None else torch.ones_like(lv_n)
+                llama_attention_mask = llama_attention_mask if llama_attention_mask is not None else torch.ones_like(llama_vec)
+                llama_attention_mask_n = llama_attention_mask_n if llama_attention_mask_n is not None else torch.ones_like(llama_vec_n)
                 
                 # Memory management before sampling
                 if not self.model_manager.high_vram:
