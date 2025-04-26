@@ -98,10 +98,15 @@ class VideoGenerator:
             )
 
         # --- Text Encoding ---
+        debug(f"[Prepare Inputs] Encoding prompt: '{prompt}'")
+        debug(f"[Prepare Inputs] Encoding negative prompt: '{n_prompt}'")
         if not self.model_manager.high_vram:
             fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
             load_model_as_complete(self.model_manager.text_encoder_2, target_device=gpu)
 
+
+        debug(f"[Prepare Inputs] Text Encoder device: {self.model_manager.text_encoder.device if self.model_manager.text_encoder else 'None'}")
+        debug(f"[Prepare Inputs] Text Encoder 2 device: {self.model_manager.text_encoder_2.device if self.model_manager.text_encoder_2 else 'None'}")                          
         lv, cp = encode_prompt_conds(
             prompt,
             self.model_manager.text_encoder,
@@ -110,6 +115,9 @@ class VideoGenerator:
             self.model_manager.tokenizer_2
         )
 
+
+        debug(f"[Prepare Inputs] Neg Text Encoder device: {self.model_manager.text_encoder.device if self.model_manager.text_encoder else 'None'}")
+        debug(f"[Prepare Inputs] Neg Text Encoder 2 device: {self.model_manager.text_encoder_2.device if self.model_manager.text_encoder_2 else 'None'}")
         if cfg == 1:
             lv_n, cp_n = torch.zeros_like(lv), torch.zeros_like(cp)
         else:
@@ -127,7 +135,10 @@ class VideoGenerator:
         lv, m = crop_or_pad_yield_mask(lv, 512)
         lv_n, m_n = crop_or_pad_yield_mask(lv_n, 512)
         debug(f"After crop_or_pad - lv: {lv.shape} ({lv.dtype}), m: {m.shape} ({m.dtype})")
-
+        debug(f"lv mean: {lv.mean():.4f}, std: {lv.std():.4f}, isfinite: {torch.isfinite(lv).all()}")
+        debug(f"cp mean: {cp.mean():.4f}, std: {cp.std():.4f}, isfinite: {torch.isfinite(cp).all()}")
+        debug(f"lv_n mean: {lv_n.mean():.4f}, std: {lv_n.std():.4f}, isfinite: {torch.isfinite(lv_n).all()}")
+        debug(f"cp_n mean: {cp_n.mean():.4f}, std: {cp_n.std():.4f}, isfinite: {torch.isfinite(cp_n).all()}")
         # --- Apply Weights ---
         if llm_weight != 1.0:
             lv = lv * llm_weight
@@ -210,6 +221,8 @@ class VideoGenerator:
         clip_weight = config.get('clip_weight', 1.0)
 
         job_id = generate_timestamp()
+        debug(f"[Generator] Received prompt: '{prompt}'")
+        debug(f"[Generator] Received negative prompt: '{n_prompt}'")
         debug(f"generate_video(): started {mode}, job_id: {job_id}")
         output_filename = os.path.join(self.output_folder, f'{job_id}_final.mp4')
         debug(f"Default output filename set to: {output_filename}")
@@ -486,6 +499,21 @@ class VideoGenerator:
                     debug(f"In callback, section: {section_percentage}%, overall: {overall_percentage}%")
                     if self.stream:
                         self.stream.output_queue.push(('progress', (preview, desc, progress_html)))
+
+                # DEBUG PROMPT HANDLING
+                debug(f"Loop {section} - Calling sample_hunyuan...")
+                debug(f"  prompt_embeds=lv: {lv.shape} ({lv.dtype}), mean: {lv.mean():.4f}")
+                debug(f"  prompt_embeds_mask=current_m: {current_m.shape} ({current_m.dtype})")
+                debug(f"  prompt_poolers=cp: {cp.shape} ({cp.dtype}), mean: {cp.mean():.4f}")
+                debug(f"  neg_prompt_embeds=lv_n: {lv_n.shape} ({lv_n.dtype}), mean: {lv_n.mean():.4f}")
+                debug(f"  neg_prompt_embeds_mask=current_m_n: {current_m_n.shape} ({current_m_n.dtype})")
+                debug(f"  neg_prompt_poolers=cp_n: {cp_n.shape} ({cp_n.dtype}), mean: {cp_n.mean():.4f}")
+                if clip_output is not None:
+                    debug(f"  image_embeddings=clip_output: {clip_output.shape} ({clip_output.dtype}), mean: {clip_output.mean():.4f}")
+                else:
+                    debug(f"  image_embeddings=clip_output: None")
+                debug(f"  CFG scales: cfg={cfg}, gs={gs}, rs={rs}")
+                
                 # Run sampling based on mode
                 if mode == "keyframes":
                     generated_latents = sample_hunyuan(
