@@ -189,9 +189,9 @@ def process(
         debug(f"Process: got queue event: {flag}, type(data): {type(data)}")
         
         if flag == 'file':
-            output_filename = data
-            # Extract first and last frames
-            first_frame_img, last_frame_img = extract_video_frames(final_output_path)
+            output_filename = data # Use a local variable for clarity in this block
+            final_output_path = output_filename # Update the outer scope variable too
+            debug(f"[UI] Received final file: {output_filename}")
             
             # Handle case where extraction fails
             if first_frame_img is None:
@@ -200,7 +200,7 @@ def process(
                 last_frame_img = np.zeros((256, 256, 3), dtype=np.uint8)  # Black fallback image
             
             yield (
-                gr.update(value=output_filename, visible=True),  # result_video
+                gr.update(value=output_filename, visible=True), # result_video
                 gr.update(visible=False),                       # result_image_html
                 gr.update(visible=False),                       # preview_image
                 gr.update(value="", visible=False),             # progress_desc
