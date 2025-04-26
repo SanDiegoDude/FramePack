@@ -159,7 +159,14 @@ class VideoGenerator:
             lv = lv * llm_weight
             lv_n = lv_n * llm_weight
             debug(f"[Prepare Inputs] Applied LLM weight: {llm_weight}")
-        if clip_weight != 1.0:
+        
+        # Even with zero weight, preserve tensor structure
+        if clip_weight == 0.0:
+            # Use a tiny value instead of true zero
+            cp = cp * 1e-7  # Small enough to have negligible impact
+            cp_n = cp_n * 1e-7
+            debug(f"[Prepare Inputs] Applied near-zero CLIP weight (1e-7)")
+        elif clip_weight != 1.0:
             cp = cp * clip_weight
             cp_n = cp_n * clip_weight
             debug(f"[Prepare Inputs] Applied CLIP weight: {clip_weight}")
