@@ -408,7 +408,9 @@ def create_interface(model_manager, video_generator):
             seed,              # 7
             first_frame,       # 8
             last_frame,        # 9
-            extend_button      # 10
+            extend_button,     # 10
+            note_message,      # 11 (new)
+            generation_stats   # 12 (new)
         ]
         
         prompt.submit(
