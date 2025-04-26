@@ -11,7 +11,8 @@ def create_interface(model_manager, video_generator):
     from ui.callbacks import (
         process, end_process, update_video_stats, 
         switch_mode, show_custom, show_init_color,
-        update_overlap_slider, setup_for_extension
+        update_overlap_slider, setup_for_extension,
+        toggle_init_color_for_backward 
     )
     
     debug("Creating UI interface")
