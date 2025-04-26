@@ -611,6 +611,36 @@ class VideoGenerator:
                 # Mask fallback safeguard (Unchanged)
                 m = m if m is not None else torch.ones_like(lv)
                 m_n = m_n if m_n is not None else torch.ones_like(lv_n)
+
+
+                # Add this after m = m if m is not None else torch.ones_like(lv) in your code 
+                # Debug print shapes
+                debug(f"Shape check before sampling - lv: {lv.shape}, m: {m.shape}")
+                
+                # Ensure masks have correct shape and type
+                if m is not None and m.shape[1] != lv.shape[1]:
+                    debug(f"WARNING: Reshaping mask from {m.shape} to match embedding length {lv.shape[1]}")
+                    # Resize mask to match embedding sequence length
+                    if m.shape[1] > lv.shape[1]:
+                        m = m[:, :lv.shape[1]]  # Truncate if longer
+                    else:
+                        # Pad with ones if shorter
+                        pad_length = lv.shape[1] - m.shape[1]
+                        pad = torch.ones((m.shape[0], pad_length), dtype=m.dtype, device=m.device)
+                        m = torch.cat([m, pad], dim=1)
+                
+                # Also check negative mask
+                if m_n is not None and m_n.shape[1] != lv_n.shape[1]:
+                    debug(f"WARNING: Reshaping negative mask from {m_n.shape} to match negative embedding length {lv_n.shape[1]}")
+                    if m_n.shape[1] > lv_n.shape[1]:
+                        m_n = m_n[:, :lv_n.shape[1]]
+                    else:
+                        pad_length = lv_n.shape[1] - m_n.shape[1]
+                        pad = torch.ones((m_n.shape[0], pad_length), dtype=m_n.dtype, device=m_n.device)
+                        m_n = torch.cat([m_n, pad], dim=1)
+                
+                # Final shape check
+                debug(f"After adjustment - lv: {lv.shape}, m: {m.shape}")
                 
                 # Memory management before sampling
                 if not self.model_manager.high_vram:
