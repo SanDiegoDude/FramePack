@@ -3,7 +3,7 @@ import torch
 from utils.common import debug
 from utils.memory_utils import (
     cpu, gpu, unload_complete_models, load_model_as_complete,
-    DynamicSwapInstaller, fake_diffusers_current_device
+    DynamicSwapInstaller, fake_diffusers_current_device, get_cuda_free_memory_gb
 )
 
 class ModelManager:
