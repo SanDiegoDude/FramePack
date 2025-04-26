@@ -745,20 +745,30 @@ class VideoGenerator:
                 debug(f"prompt_embeds_mask type: {type(m)}, dtype: {m.dtype}")
                 debug(f"prompt_poolers shape: {cp.shape if cp is not None else 'None'}")
                 
-                # Examine the actual contents of the mask
-                if m is not None:
-                    debug(f"Mask min: {m.min().item()}, max: {m.max().item()}, mean: {m.float().mean().item()}")
-                    # Check if mask is all ones (which would be unusual for attention mask)
-                    debug(f"Is mask all ones? {(m == 1.0).all().item()}")
+                # Fix the attention mask issue - Critical!
+                if m is not None and len(m.shape) == 3:
+                    # Get text_len from the attention mask (count of non-zero values in each sequence)
+                    text_len = m.sum(dim=2).bool().sum(dim=1).int()  # This calculates effective sequence length
+                    debug(f"Calculated text_len from mask: {text_len.tolist()}")
                     
-                    # Add a key fix attempt - try transposing dimensions if needed
-                    if len(m.shape) == 3 and m.shape[2] == 4096:
-                        debug("Trying to fix mask dimension by reshaping...")
-                        # Experiment with different ways to fix the mask
-                        # Option 1: Generate a new mask ignoring the last dimension
-                        fixed_mask = torch.ones((m.shape[0], m.shape[1]), dtype=m.dtype, device=m.device)
-                        debug(f"Created simple binary mask with shape {fixed_mask.shape}")
-                        m = fixed_mask
+                    # Create a new 2D binary mask
+                    m_2d = torch.ones((m.shape[0], m.shape[1]), dtype=torch.bool, device=m.device)
+                    # Convert to same dtype as prompt_embeds
+                    m_2d = m_2d.to(dtype=lv.dtype)
+                    m = m_2d
+                    
+                    # CRITICAL: Add the text_len as a property of the mask tensor
+                    # This is how the model will access it during forward pass
+                    m.text_len = text_len[0].item()  # Add this property to the tensor
+                    debug(f"Added text_len={m.text_len} as property to mask tensor")
+                
+                # Do the same for negative prompt
+                if m_n is not None and len(m_n.shape) == 3:
+                    text_len_n = m_n.sum(dim=2).bool().sum(dim=1).int()
+                    m_n_2d = torch.ones((m_n.shape[0], m_n.shape[1]), dtype=torch.bool, device=m_n.device)
+                    m_n_2d = m_n_2d.to(dtype=lv_n.dtype)
+                    m_n = m_n_2d
+                    m_n.text_len = text_len_n[0].item()
 
                 
                 # Run sampling based on mode
@@ -790,6 +800,7 @@ class VideoGenerator:
                         clean_latent_2x_indices=clean_latent_2x_indices,
                         clean_latents_4x=clean_latents_4x,
                         clean_latent_4x_indices=clean_latent_4x_indices,
+                        text_len=m.text_len if hasattr(m, 'text_len') else 512,  # Add this line!
                         callback=callback,
                     )
                 else:  # image2video, text2video, video_extension (redirected to image2video)
@@ -820,6 +831,7 @@ class VideoGenerator:
                         clean_latent_2x_indices=clean_latent_2x_indices,
                         clean_latents_4x=clean_latents_4x,
                         clean_latent_4x_indices=clean_latent_4x_indices,
+                        text_len=m.text_len if hasattr(m, 'text_len') else 512,  # Add this line!
                         callback=callback
                     )
                 
