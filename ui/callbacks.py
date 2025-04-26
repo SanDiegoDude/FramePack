@@ -135,11 +135,10 @@ def process(
         gr.update(interactive=False),
         gr.update(interactive=True),
         gr.update(value=seed),
-        gr.update(),
-        gr.update(),
-        gr.update()
+        gr.update(visible=False),  # first_frame - explicitly hide
+        gr.update(visible=False),  # last_frame - explicitly hide
+        gr.update(visible=False)   # extend_button - explicitly hide
     )
-    
     # Setup async stream
     stream = AsyncStream()
     video_generator.stream = stream
@@ -369,6 +368,12 @@ def end_process():
         if stream:
             stream.input_queue.push('end')
         return gr.update(value="End Generation", variant="stop", elem_classes="end-button-force")
+
+# function to handle extension direction changes for video_extension mode
+def toggle_init_color_for_backward(extension_direction, mode):
+    """Show color picker when Backward is selected in video_extension mode"""
+    show_color = (extension_direction == "Backward" and mode == "video_extension")
+    return gr.update(visible=show_color)
 
 def update_video_stats(window_size, segments, overlap):
     """Calculate and format video statistics based on current settings"""
