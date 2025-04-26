@@ -4,6 +4,7 @@ import torch
 import random
 import time
 import numpy as np
+import os
 from utils.common import debug
 from ui.style import make_progress_bar_html
 from diffusers_helper.thread_utils import AsyncStream, async_run
