@@ -129,8 +129,8 @@ class VideoGenerator:
             )
         
         # Process masks
-        llama_vec, llama_attention_mask = crop_or_pad_yield_mask(llama_vec, length=512)
-        llama_vec_n, llama_attention_mask_n = crop_or_pad_yield_mask(llama_vec_n, length=512)
+        llama_vec, llama_attention_mask = crop_or_pad_yield_mask(llama_vec, 512)
+        llama_vec_n, llama_attention_mask_n = crop_or_pad_yield_mask(llama_vec_n, 512)
         
         # Apply weights
         if llm_weight != 1.0:
