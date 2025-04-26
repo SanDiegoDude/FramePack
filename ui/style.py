@@ -112,6 +112,20 @@ def get_css():
     .stats-box td:first-child {
         width: 40%;
     }
+    /* Ensure video controls are visible */
+    .video-container {
+        margin-bottom: 50px !important; /* Add space below video for controls */
+    }
+    
+    /* Hide frame thumbnails by default */
+    .frame-thumbnail {
+        display: none;
+    }
+    
+    /* Show frame thumbnails only when they have content */
+    .frame-thumbnail:not(:empty) {
+        display: block;
+    }
     """
 
 def make_progress_bar_css():
