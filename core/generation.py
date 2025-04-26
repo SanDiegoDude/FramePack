@@ -27,7 +27,7 @@ from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
 from ui.style import make_progress_bar_html
 class VideoGenerator:
     """Handles all video generation functionality"""
-    def **init**(self, model_manager, outputs_folder='./outputs/'):
+    def __init__(self, model_manager, outputs_folder='./outputs/'):
         self.model_manager = model_manager
         self.output_folder = outputs_folder
         os.makedirs(outputs_folder, exist_ok=True)
