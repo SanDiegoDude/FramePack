@@ -50,7 +50,6 @@ def sample_hunyuan(
         dtype=torch.bfloat16,
         device=None,
         negative_kwargs=None,
-        text_len=None,  # Add this parameter
         callback=None,
         **kwargs,
 ):
@@ -102,7 +101,6 @@ def sample_hunyuan(
             encoder_hidden_states=prompt_embeds,
             encoder_attention_mask=prompt_embeds_mask,
             guidance=distilled_guidance,
-            text_len=text_len,  # Add this parameter
             **kwargs,
         ),
         negative=dict(
@@ -110,7 +108,6 @@ def sample_hunyuan(
             encoder_hidden_states=negative_prompt_embeds,
             encoder_attention_mask=negative_prompt_embeds_mask,
             guidance=distilled_guidance,
-            text_len=text_len,  # Add this parameter
             **(kwargs if negative_kwargs is None else {**kwargs, **negative_kwargs}),
         )
     )
