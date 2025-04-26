@@ -235,19 +235,26 @@ def create_interface(model_manager, video_generator):
                     loop=True,
                     visible=False # Hide on startup
                 )
-                
-                # First/Last frame displays
-                with gr.Row():
-                    first_frame = gr.Image(label="First Frame", elem_classes="frame-thumbnail", visible=False)
-                    last_frame = gr.Image(label="Last Frame", elem_classes="frame-thumbnail", visible=False)
-                
-                # Action buttons for output
-                extend_button = gr.Button(value="Extend This Video", visible=False)
                 result_image_html = gr.Image(
                     label='Single Frame Image', 
                     elem_classes="result-container", 
                     visible=False
                 )
+                # First/Last frame displays
+                with gr.Row():
+                    first_frame = gr.Image(
+                        label="First Frame", 
+                        elem_classes="frame-thumbnail", 
+                        visible=False
+                    )
+                    last_frame = gr.Image(
+                        label="Last Frame", 
+                        elem_classes="frame-thumbnail", 
+                        visible=False
+                    )
+                
+                # Action buttons for output
+                extend_button = gr.Button(value="Extend This Video", visible=False)
                 
                 note_message = gr.Markdown(
                     value="", 
