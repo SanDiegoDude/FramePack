@@ -695,6 +695,32 @@ class VideoGenerator:
                 combined_filename = os.path.join(self.output_folder, f'{job_id}_combined.mp4')
                 try:
                     import subprocess
+                    if extension_direction == "Backward":
+                        debug(f"[FFMPEG] Processing for backward extension - need to apply trim to extension")
+                        
+                        # Create a trimmed version of the extension with trim_percentage applied
+                        trim_ext = os.path.join(self.output_folder, f'{job_id}_ext_trimmed.mp4')
+                        
+                        # Calculate the number of frames to keep (trim from start)
+                        trim_seconds = trim_percentage * 5.0  # Approximate trim in seconds (assuming ~30fps and usual length)
+                        
+                        trim_cmd = [
+                            "ffmpeg", "-y",
+                            "-i", extension_filename,
+                            "-ss", str(trim_seconds),  # Start time offset to skip initial frames
+                            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                            "-vsync", "cfr", "-r", "30",
+                            trim_ext
+                        ]
+                        
+                        try:
+                            subprocess.run(trim_cmd, check=True, capture_output=True)
+                            debug(f"[FFMPEG] Successfully created trimmed extension for backward mode")
+                            # Use the trimmed file instead of the original extension
+                            extension_filename = trim_ext
+                        except Exception as e:
+                            debug(f"[FFMPEG] Failed to trim extension: {e}")
+                            # Continue with original file
                     # Prepare videos for concatenation
                     debug("[FFMPEG] Preparing videos for concatenation...")
                     temp_ext = os.path.join(self.output_folder, f'{job_id}_ext_compat.mp4')
