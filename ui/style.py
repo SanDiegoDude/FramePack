@@ -156,6 +156,34 @@ def get_css():
     .frame-thumbnail:not(:empty) {
         display: block;
     }
+
+    <script>
+    function detectVideoTrimmingUI() {
+        const style = `
+            <style>
+                .video-container.editing {
+                    padding-bottom: 180px !important;
+                }
+            </style>
+        `;
+        document.head.insertAdjacentHTML('beforeend', style);
+        
+        // Monitor for trim UI appearance
+        setInterval(function() {
+            const videoContainers = document.querySelectorAll('.video-container');
+            videoContainers.forEach(container => {
+                const trimControls = container.querySelector('.trim-control');
+                if (trimControls) {
+                    container.classList.add('editing');
+                } else {
+                    container.classList.remove('editing');
+                }
+            });
+        }, 500);
+    }
+    // Initialize when page loads
+    window.addEventListener('DOMContentLoaded', detectVideoTrimmingUI);
+    </script>
     """
 
 def make_progress_bar_css():
