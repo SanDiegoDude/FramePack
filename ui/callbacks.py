@@ -127,8 +127,6 @@ def process(
     debug(f"[UI Callback] Prompt received: '{prompt}'")
     debug(f"[UI Callback] Negative Prompt received: '{n_prompt}'")
     
-
-    
     # Initial UI update
     yield (
         None, None, None, '', gr.update(visible=False),  # Progress bar hidden at start
@@ -137,7 +135,9 @@ def process(
         gr.update(value=seed),
         gr.update(visible=False),  # first_frame - explicitly hide
         gr.update(visible=False),  # last_frame - explicitly hide
-        gr.update(visible=False)   # extend_button - explicitly hide
+        gr.update(visible=False),   # extend_button - explicitly hide
+        gr.update(visible=False),   # note_message - hidden at start
+        gr.update(visible=False)    # generation_stats - hidden at start
     )
     # Setup async stream
     stream = AsyncStream()
@@ -223,14 +223,25 @@ def process(
                 gr.update(value=output_filename, visible=True), # result_video
                 gr.update(visible=False),                       # result_image_html
                 gr.update(visible=False),                       # preview_image
-                gr.update(value=last_desc, visible=True),       # progress_desc (show final summary)
+                gr.update(value="", visible=False),             # progress_desc - hide since we show formatted stats
                 gr.update(value="", visible=False),             # progress_bar
                 gr.update(interactive=True, value="Start Generation"), # start_button
                 gr.update(interactive=False),                   # end_button
                 gr.update(),                                    # seed
                 gr.update(value=first_frame_img, visible=True), # first_frame
                 gr.update(value=last_frame_img, visible=True),  # last_frame
-                gr.update(visible=True)                         # extend_button
+                gr.update(visible=True),                        # extend_button
+                gr.update(visible=False),                       # note_message - hide on completion
+                gr.update(visible=True, value=f"""
+            ### Generation Results
+            
+            **Total frames:** {output_filename.split('_')[-2] if output_filename else 'N/A'}  
+            **Video length:** {float(output_filename.split('_')[-2])/30 if output_filename else 'N/A'} seconds (30 FPS)  
+            **Total time:** {last_desc.split('Time taken: ')[-1].split('.')[0] if last_desc and 'Time taken:' in last_desc else 'N/A'}  
+            
+            #### Performance Breakdown
+            {last_desc.split('Performance Breakdown:')[-1] if last_desc and 'Performance Breakdown:' in last_desc else ''}
+                """)                                      # generation_stats - show formatted stats
             )
             last_is_image = False
             last_img_path = None
@@ -253,7 +264,9 @@ def process(
                     gr.update(),                    # seed
                     gr.update(),                    # first_frame
                     gr.update(),                    # last_frame
-                    gr.update()                     # extend_button
+                    gr.update(),                    # extend_button
+                    gr.update(visible=(segment_count_val > 1), value="Note: The ending actions will be generated before the starting actions due to the inverted sampling."),
+                    gr.update(visible=False)        # generation_stats
                 )
             else:
                 debug(f"[UI] Warning: Preview file not found: {preview_filename}")
@@ -276,7 +289,9 @@ def process(
                 gr.update(),                           # seed
                 gr.update(),                           # first_frame
                 gr.update(),                           # last_frame
-                gr.update()                            # extend_button
+                gr.update(),                           # extend_button
+                gr.update(visible=(segment_count_val > 1), value="Note: The ending actions will be generated before the starting actions due to the inverted sampling."),
+                gr.update(visible=False)               # generation_stats
             )
             
         elif flag == 'file_img':
@@ -293,7 +308,9 @@ def process(
                 gr.update(),                                        # seed
                 gr.update(),                                        # first_frame
                 gr.update(),                                        # last_frame
-                gr.update()                                         # extend_button
+                gr.update(),                                        # extend_button
+                gr.update(visible=False),                           # note_message
+                gr.update(visible=False)                            # generation_stats
             )
             last_is_image = True
             last_img_path = img_filename
@@ -312,7 +329,9 @@ def process(
                     gr.update(),                    # seed
                     gr.update(),                    # first_frame
                     gr.update(),                    # last_frame
-                    gr.update()                     # extend_button
+                    gr.update(),                    # extend_button
+                    gr.update(visible=False),       # note_message
+                    gr.update(visible=False)        # generation_stats
                 )
                 
             elif data == "img" or last_is_image:  # special image end
@@ -327,7 +346,9 @@ def process(
                     gr.update(),                    # seed
                     gr.update(),                    # first_frame
                     gr.update(),                    # last_frame
-                    gr.update()                     # extend_button
+                    gr.update(),                    # extend_button
+                    gr.update(visible=False),       # note_message
+                    gr.update(visible=False)        # generation_stats
                 )
                 
             else:
@@ -335,14 +356,16 @@ def process(
                     gr.update(value=output_filename, visible=True), # result_video
                     gr.update(visible=False),                       # result_image_html
                     gr.update(visible=False),                       # preview_image
-                    gr.update(value=last_desc, visible=True),       # progress_desc
+                    gr.update(value="", visible=False),             # progress_desc - hide as we use formatted stats
                     gr.update(value="", visible=False),             # progress_bar
                     gr.update(interactive=True),
                     gr.update(interactive=False),
                     gr.update(),                    # seed
                     gr.update(),                    # first_frame
                     gr.update(),                    # last_frame
-                    gr.update()                     # extend_button
+                    gr.update(),                    # extend_button
+                    gr.update(visible=False),       # note_message
+                    gr.update(visible=True)         # generation_stats - keep visible
                 )
                 
             debug("Process: end event, breaking loop.")
