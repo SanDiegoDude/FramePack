@@ -291,7 +291,7 @@ class VideoGenerator:
                     )
                     debug("moved transformer to gpu (memory preservation)")
                 # Then do CLIP encoding
-                if mode "text2video" or mode "image2video":
+                if mode == "text2video" or mode == "image2video":
                     clip_output = hf_clip_vision_encode(
                         inp_np,
                         self.model_manager.feature_extractor,
