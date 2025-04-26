@@ -220,28 +220,25 @@ def process(
                  last_frame_img = np.zeros((64, 64, 3), dtype=np.uint8) # Placeholder
 
             yield (
-                gr.update(value=output_filename, visible=True), # result_video
-                gr.update(visible=False),                       # result_image_html
-                gr.update(visible=False),                       # preview_image
-                gr.update(value="", visible=False),             # progress_desc - hide since we show formatted stats
-                gr.update(value="", visible=False),             # progress_bar
-                gr.update(interactive=True, value="Start Generation"), # start_button
-                gr.update(interactive=False),                   # end_button
-                gr.update(),                                    # seed
-                gr.update(value=first_frame_img, visible=True), # first_frame
-                gr.update(value=last_frame_img, visible=True),  # last_frame
-                gr.update(visible=True),                        # extend_button
-                gr.update(visible=False),                       # note_message - hide on completion
+                gr.update(value=output_filename, visible=True), 
+                gr.update(visible=False),
+                gr.update(visible=False),
+                gr.update(value="", visible=False),
+                gr.update(value="", visible=False),
+                gr.update(interactive=True, value="Start Generation"), 
+                gr.update(interactive=False),
+                gr.update(),
+                gr.update(value=first_frame_img, visible=True), 
+                gr.update(value=last_frame_img, visible=True),
+                gr.update(visible=True),
+                gr.update(visible=False),
                 gr.update(visible=True, value=f"""
-            ### Generation Results
+            ### Generation Complete
             
-            **Total frames:** {output_filename.split('_')[-2] if output_filename else 'N/A'}  
-            **Video length:** {float(output_filename.split('_')[-2])/30 if output_filename else 'N/A'} seconds (30 FPS)  
-            **Total time:** {last_desc.split('Time taken: ')[-1].split('.')[0] if last_desc and 'Time taken:' in last_desc else 'N/A'}  
+            **Video saved as:** `{os.path.basename(output_filename)}`
             
-            #### Performance Breakdown
-            {last_desc.split('Performance Breakdown:')[-1] if last_desc and 'Performance Breakdown:' in last_desc else ''}
-                """)                                      # generation_stats - show formatted stats
+            {last_desc if last_desc else ""}
+                """)
             )
             last_is_image = False
             last_img_path = None
