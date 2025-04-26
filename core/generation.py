@@ -278,7 +278,7 @@ class VideoGenerator:
                 if not self.model_manager.high_vram:
                     fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
                     load_model_as_complete(self.model_manager.text_encoder_2, gpu)
-                 lv, cp = encode_prompt_conds(
+                lv, cp = encode_prompt_conds(
                     prompt, self.model_manager.text_encoder, self.model_manager.text_encoder_2,
                     self.model_manager.tokenizer, self.model_manager.tokenizer_2
                 )
