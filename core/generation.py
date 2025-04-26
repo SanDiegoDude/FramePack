@@ -781,7 +781,7 @@ class VideoGenerator:
             if 'history_pixels' in locals() and history_pixels is not None and history_pixels.shape[2] > 0:
                 # Check if we've already handled an image or special case
                 image_likely_saved = False
-                if (mode "text2video" or (mode "keyframes" and start_frame is None)):
+                if (mode == "text2video" or (mode == "keyframes" and start_frame is None)):
                     if history_pixels.shape[2] <= 1:
                         image_likely_saved = True
                 # Handle the extension case first
