@@ -371,22 +371,70 @@ class VideoGenerator:
                 # CLIP Vision feature extraction
                 # ---- Unload all models before sampling
                 if not self.model_manager.high_vram:
+                    debug("------ MEMORY DEBUG BEFORE TRANSFORMER LOAD ------")
+                    debug(f"Section {section}/{total_sections}, preparing to load transformer")
+                    # Clear GPU memory
+                    debug("Clearing CUDA cache multiple times")
+                    for _ in range(5):
+                        torch.cuda.empty_cache()
+                    
+                    # Force garbage collection
+                    gc.collect()
+                    
+                    # Print detailed memory stats
+                    debug(f"CUDA memory allocated: {torch.cuda.memory_allocated() / (1024**3):.2f} GB")
+                    debug(f"CUDA memory reserved: {torch.cuda.memory_reserved() / (1024**3):.2f} GB")
+                    debug(f"Free memory: {get_cuda_free_memory_gb(gpu):.2f} GB")
+                    
+                    # Try to diagnose if any tensors are leaking
+                    tensor_sizes = {}
+                    for obj in gc.get_objects():
+                        try:
+                            if torch.is_tensor(obj) and obj.device.type == 'cuda':
+                                size_mb = obj.nelement() * obj.element_size() / (1024 * 1024)
+                                if size_mb > 10:  # Only log large tensors
+                                    shape_key = str(tuple(obj.shape))
+                                    if shape_key not in tensor_sizes:
+                                        tensor_sizes[shape_key] = 0
+                                    tensor_sizes[shape_key] += size_mb
+                        except:
+                            pass
+                    
+                    if tensor_sizes:
+                        debug("Large tensors still in CUDA memory:")
+                        for shape, size_mb in sorted(tensor_sizes.items(), key=lambda x: x[1], reverse=True):
+                            debug(f"  Shape {shape}: {size_mb:.1f} MB")
+                    
                     unload_complete_models(
-                        self.model_manager.text_encoder, 
-                        self.model_manager.text_encoder_2, 
-                        self.model_manager.image_encoder, 
-                        self.model_manager.vae, 
+                        self.model_manager.text_encoder,
+                        self.model_manager.text_encoder_2,
+                        self.model_manager.image_encoder,
+                        self.model_manager.vae,
                         self.model_manager.transformer
                     )
                     debug("explicitly unloaded all models (before sampling)")
                     
-                    # Load only the transformer for sampling
-                    move_model_to_device_with_memory_preservation(
-                        self.model_manager.transformer, 
-                        target_device=gpu, 
-                        preserved_memory_gb=gpu_memory_preservation
-                    )
-                    debug("moved transformer to gpu (memory preservation)")
+                    # Load only the transformer, with memory preservation
+                    debug("------ ATTEMPTING TO LOAD TRANSFORMER ------")
+                    try:
+                        move_model_to_device_with_memory_preservation(
+                            self.model_manager.transformer,
+                            target_device=gpu,
+                            preserved_memory_gb=gpu_memory_preservation
+                        )
+                        debug("moved transformer to gpu (memory preservation)")
+                    except Exception as e:
+                        debug(f"CRITICAL ERROR loading transformer: {e}")
+                        debug("Attempting emergency memory cleanup...")
+                        # Emergency cleanup
+                        torch.cuda.empty_cache()
+                        gc.collect()
+                        # Try to diagnose
+                        debug(f"After error: Free memory: {get_cuda_free_memory_gb(gpu):.2f} GB")
+                        # Try less memory-intensive approach
+                        if get_cuda_free_memory_gb(gpu) > 2.0:
+                            debug("Trying alternative approach with less memory")
+                            # Continue with CPU processing or smaller batch
 
                 # Set up teacache
                 self.model_manager.initialize_teacache(enable_teacache=use_teacache, num_steps=steps if use_teacache else 0)
