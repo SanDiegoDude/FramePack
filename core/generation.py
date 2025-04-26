@@ -17,13 +17,14 @@ from utils.memory_utils import (
 )
 from utils.video_utils import (
     save_bcthw_as_mp4, find_nearest_bucket, resize_and_center_crop,
-    crop_or_pad_yield_mask, # Make sure this is the CORRECT version from the demo
+    # crop_or_pad_yield_mask, # Make sure this is the CORRECT version from the demo
     extract_frames_from_video, fix_video_compatibility,
     make_mp4_faststart, apply_gaussian_blur, extract_video_frames
 )
 from diffusers_helper.thread_utils import AsyncStream
 from diffusers_helper.hunyuan import encode_prompt_conds, vae_decode, vae_encode, vae_decode_fake
 from diffusers_helper.clip_vision import hf_clip_vision_encode
+from diffusers_helper.utils import crop_or_pad_yield_mask
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
 from ui.style import make_progress_bar_html
 
