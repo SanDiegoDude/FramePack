@@ -259,7 +259,10 @@ class VideoGenerator:
                 end_np = resize_and_center_crop(end_frame, width, height)
 
                 # --- Memory: Offload ---
-                if not self.model_manager.high_vram: unload_complete_models(...) # Unload all
+                if not self.model_manager.high_vram: unload_complete_models(
+                    self.model_manager.text_encoder, self.model_manager.text_encoder_2,
+                    self.model_manager.image_encoder, self.model_manager.vae, self.model_manager.transformer
+                )
 
                 # --- VAE Encode Start/End ---
                 if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.vae, gpu)
@@ -275,17 +278,27 @@ class VideoGenerator:
                 if not self.model_manager.high_vram:
                     fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
                     load_model_as_complete(self.model_manager.text_encoder_2, gpu)
-                lv, cp = encode_prompt_conds(prompt, ...)
-                lv_n, cp_n = encode_prompt_conds(n_prompt, ...) if cfg > 1 else (torch.zeros_like(lv), torch.zeros_like(cp))
+                lv, cp = encode_prompt_conds(
+                    prompt, self.model_manager.text_encoder, self.model_manager.text_encoder_2,
+                    self.model_manager.tokenizer, self.model_manager.tokenizer_2
+                )
+                lv_n, cp_n = encode_prompt_conds(
+                    n_prompt, self.model_manager.text_encoder, self.model_manager.text_encoder_2,
+                    self.model_manager.tokenizer, self.model_manager.tokenizer_2
+                ) if cfg > 1 else (torch.zeros_like(lv), torch.zeros_like(cp))
                 lv, m = crop_or_pad_yield_mask(lv, 512)
                 lv_n, m_n = crop_or_pad_yield_mask(lv_n, 512)
                 if not self.model_manager.high_vram: unload_complete_models(self.model_manager.text_encoder, self.model_manager.text_encoder_2)
 
-                # --- CLIP Vision Encoding ---
+                 # --- CLIP Vision Encoding ---
                 if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.image_encoder, gpu)
-                end_clip = hf_clip_vision_encode(end_np, ...).last_hidden_state
+                end_clip = hf_clip_vision_encode(
+                    end_np, self.model_manager.feature_extractor, self.model_manager.image_encoder
+                ).last_hidden_state
                 if start_frame is not None:
-                    start_clip = hf_clip_vision_encode(anchor_np, ...).last_hidden_state
+                    start_clip = hf_clip_vision_encode(
+                        anchor_np, self.model_manager.feature_extractor, self.model_manager.image_encoder
+                    ).last_hidden_state
                     clip_output = (keyframe_weight * start_clip + (1.0 - keyframe_weight) * end_clip)
                 else:
                     clip_output = end_clip
@@ -302,7 +315,7 @@ class VideoGenerator:
                     anchor_np = np.zeros((height, width, 3), dtype=np.uint8) # Black
 
                 # --- Prepare inputs using common function ---
-                # Note: input_image is the generated color/black frame here
+                # ensure prepare_inputs correctly calls encode_prompt_conds with all managers
                 _, input_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = self.prepare_inputs(
                     anchor_np, prompt, n_prompt, cfg, gaussian_blur_amount, llm_weight, clip_weight
                 )
@@ -316,7 +329,9 @@ class VideoGenerator:
 
                 # --- CLIP Vision (Encode the blank/color frame) ---
                 if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.image_encoder, gpu)
-                clip_output = hf_clip_vision_encode(anchor_np, ...).last_hidden_state
+                clip_output = hf_clip_vision_encode(
+                    anchor_np, self.model_manager.feature_extractor, self.model_manager.image_encoder
+                ).last_hidden_state
                 if not self.model_manager.high_vram: unload_complete_models(self.model_manager.image_encoder)
 
             elif mode == "image2video" or original_mode == "video_extension": # Includes redirected extension
@@ -340,7 +355,9 @@ class VideoGenerator:
                 # --- CLIP Vision ---
                 if self.stream: self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
                 if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.image_encoder, gpu)
-                clip_output = hf_clip_vision_encode(inp_np, ...).last_hidden_state
+                clip_output = hf_clip_vision_encode(
+                    inp_np, self.model_manager.feature_extractor, self.model_manager.image_encoder
+                ).last_hidden_state
                 if not self.model_manager.high_vram: unload_complete_models(self.model_manager.image_encoder)
                 debug("CLIP Vision encoded")
 
