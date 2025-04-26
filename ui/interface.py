@@ -66,24 +66,26 @@ def create_interface(model_manager, video_generator):
                 end_frame = gr.Image(sources='upload', type="numpy", label="End Frame (Required)",
                                    elem_classes="keyframe-image-container", visible=False)
                 
-                # Video extension mode controls
-                with gr.Group(visible=False) as video_extension_options:
+                # Wrap the video in a custom div for scrolling
+                with gr.Group(visible=False, elem_classes="video-container-wrapper") as video_extension_options:
                     input_video = gr.Video(
                         label="Upload Video to Extend",
                         format="mp4",
                         height=320,
                         elem_classes="video-container",
-                        include_audio=False,  # No audio needed
-                        interactive=True,     # Allow interaction
+                        include_audio=False,
+                        interactive=True,
                         show_share_button=False,
                         show_download_button=True
                     )
+                    
                     extension_direction = gr.Radio(
                         ["Forward", "Backward"],
                         label="Extension Direction",
                         value="Forward",
                         info="Forward extends the end, Backward extends the beginning"
                     )
+                    
                     extension_frames = gr.Slider(
                         label="Context Frames",
                         minimum=1,
