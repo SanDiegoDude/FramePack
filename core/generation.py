@@ -107,6 +107,7 @@ class VideoGenerator:
 
         debug(f"[Prepare Inputs] Text Encoder device: {self.model_manager.text_encoder.device if self.model_manager.text_encoder else 'None'}")
         debug(f"[Prepare Inputs] Text Encoder 2 device: {self.model_manager.text_encoder_2.device if self.model_manager.text_encoder_2 else 'None'}")                          
+        debug(f"[Prepare Inputs] BEFORE POS ENCODE - Prompt: '{prompt}'")
         lv, cp = encode_prompt_conds(
             prompt,
             self.model_manager.text_encoder,
@@ -118,9 +119,14 @@ class VideoGenerator:
 
         debug(f"[Prepare Inputs] Neg Text Encoder device: {self.model_manager.text_encoder.device if self.model_manager.text_encoder else 'None'}")
         debug(f"[Prepare Inputs] Neg Text Encoder 2 device: {self.model_manager.text_encoder_2.device if self.model_manager.text_encoder_2 else 'None'}")
+
+        debug(f"[Prepare Inputs] AFTER POS ENCODE - lv: {lv.shape} ({lv.dtype}), mean: {lv.mean():.4f}, std: {lv.std():.4f}, isfinite: {torch.isfinite(lv).all()}")
+        debug(f"[Prepare Inputs] AFTER POS ENCODE - cp: {cp.shape} ({cp.dtype}), mean: {cp.mean():.4f}, std: {cp.std():.4f}, isfinite: {torch.isfinite(cp).all()}")
         if cfg == 1:
             lv_n, cp_n = torch.zeros_like(lv), torch.zeros_like(cp)
+            debug(f"[Prepare Inputs] Using ZERO negative embeddings for CFG=1")
         else:
+            debug(f"[Prepare Inputs] BEFORE NEG ENCODE - Prompt: '{n_prompt}'")
             lv_n, cp_n = encode_prompt_conds(
                 n_prompt,
                 self.model_manager.text_encoder,
@@ -128,12 +134,18 @@ class VideoGenerator:
                 self.model_manager.tokenizer,
                 self.model_manager.tokenizer_2
             )
+            debug(f"[Prepare Inputs] AFTER NEG ENCODE - lv_n: {lv_n.shape} ({lv_n.dtype}), mean: {lv_n.mean():.4f}, std: {lv_n.std():.4f}, isfinite: {torch.isfinite(lv_n).all()}")
+            debug(f"[Prepare Inputs] AFTER NEG ENCODE - cp_n: {cp_n.shape} ({cp_n.dtype}), mean: {cp_n.mean():.4f}, std: {cp_n.std():.4f}, isfinite: {torch.isfinite(cp_n).all()}")
 
         # --- Mask Generation (using the *correct* crop_or_pad_yield_mask) ---
         # This function should return lv/lv_n with shape [B, 512, D]
         # and m/m_n with shape [B, 512] and dtype torch.bool
+        debug(f"[Prepare Inputs] BEFORE PADDING - lv mean: {lv.mean():.4f}, std: {lv.std():.4f}")                          
         lv, m = crop_or_pad_yield_mask(lv, 512)
+        debug(f"[Prepare Inputs] AFTER PADDING - lv mean: {lv.mean():.4f}, std: {lv.std():.4f}") # Check if padding affects stats
+        debug(f"[Prepare Inputs] BEFORE PADDING - lv_n mean: {lv_n.mean():.4f}, std: {lv_n.std():.4f}")
         lv_n, m_n = crop_or_pad_yield_mask(lv_n, 512)
+        debug(f"[Prepare Inputs] AFTER PADDING - lv_n mean: {lv_n.mean():.4f}, std: {lv_n.std():.4f}") # Check if padding affects stats
         debug(f"After crop_or_pad - lv: {lv.shape} ({lv.dtype}), m: {m.shape} ({m.dtype})")
         debug(f"lv mean: {lv.mean():.4f}, std: {lv.std():.4f}, isfinite: {torch.isfinite(lv).all()}")
         debug(f"cp mean: {cp.mean():.4f}, std: {cp.std():.4f}, isfinite: {torch.isfinite(cp).all()}")
@@ -145,9 +157,11 @@ class VideoGenerator:
         if llm_weight != 1.0:
             lv = lv * llm_weight
             lv_n = lv_n * llm_weight
+            debug(f"[Prepare Inputs] Applied LLM weight: {llm_weight}")
         if clip_weight != 1.0:
             cp = cp * clip_weight
             cp_n = cp_n * clip_weight
+            debug(f"[Prepare Inputs] Applied CLIP weight: {clip_weight}")
 
         # --- Image Processing ---
         h, w = find_nearest_bucket(H, W, resolution=640)
