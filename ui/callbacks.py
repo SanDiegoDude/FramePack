@@ -189,27 +189,42 @@ def process(
         debug(f"Process: got queue event: {flag}, type(data): {type(data)}")
         
         if flag == 'file':
+            # Assign data first
             output_filename = data # Use a local variable for clarity in this block
             final_output_path = output_filename # Update the outer scope variable too
             debug(f"[UI] Received final file: {output_filename}")
+
+            # Initialize variables before try/call
+            first_frame_img = None
+            last_frame_img = None
             
-            # Handle case where extraction fails
+            # Extract first and last frames using the corrected path
+            try: # Add try-except for robustness
+                first_frame_img, last_frame_img = extract_video_frames(output_filename)
+                debug(f"[UI] Frame extraction result: first_frame exists={first_frame_img is not None}, last_frame exists={last_frame_img is not None}")
+            except Exception as e:
+                debug(f"[UI] Error during extract_video_frames: {e}")
+                # Keep them as None if extraction fails
+
+            # Handle case where extraction fails or returns None
             if first_frame_img is None:
-                first_frame_img = np.zeros((256, 256, 3), dtype=np.uint8)  # Black fallback image
+                 debug("[UI] First frame is None, using placeholder.")
+                 first_frame_img = np.zeros((64, 64, 3), dtype=np.uint8) # Placeholder
             if last_frame_img is None:
-                last_frame_img = np.zeros((256, 256, 3), dtype=np.uint8)  # Black fallback image
-            
+                 debug("[UI] Last frame is None, using placeholder.")
+                 last_frame_img = np.zeros((64, 64, 3), dtype=np.uint8) # Placeholder
+
             yield (
                 gr.update(value=output_filename, visible=True), # result_video
                 gr.update(visible=False),                       # result_image_html
                 gr.update(visible=False),                       # preview_image
-                gr.update(value="", visible=False),             # progress_desc
+                gr.update(value=last_desc, visible=True),       # progress_desc (show final summary)
                 gr.update(value="", visible=False),             # progress_bar
-                gr.update(interactive=True, value="Start Generation", variant="primary"),  # start_button
-                gr.update(interactive=False, value="End Generation"),  # end_button
+                gr.update(interactive=True, value="Start Generation"), # start_button
+                gr.update(interactive=False),                   # end_button
                 gr.update(),                                    # seed
-                gr.update(value=first_frame_img, visible=True), # first_frame - use extracted frames
-                gr.update(value=last_frame_img, visible=True),  # last_frame - use extracted frames
+                gr.update(value=first_frame_img, visible=True), # first_frame
+                gr.update(value=last_frame_img, visible=True),  # last_frame
                 gr.update(visible=True)                         # extend_button
             )
             last_is_image = False
