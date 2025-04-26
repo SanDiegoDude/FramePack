@@ -126,44 +126,6 @@ def fix_video_compatibility(video_path, fps=30):
             except:
                 pass
 
-def crop_or_pad_yield_mask(tensor, target_length):
-    """
-    Crop or pad a tensor to target length and yield a mask
-    Args:
-        tensor: Input tensor of shape [B, L, D]
-        target_length: Target length for the L dimension
-    Returns:
-        tuple: (cropped_or_padded_tensor, mask of shape [B, target_length])
-    """
-    current_length = tensor.shape[1]
-
-    if current_length == target_length:
-        mask = torch.ones_like(tensor[:, :, 0], dtype=torch.bool) # Shape [B, L], dtype bool
-        return tensor, mask
-
-    if current_length > target_length:
-        # Crop
-        diff = current_length - target_length
-        start = diff // 2
-        cropped = tensor[:, start:start + target_length]
-        mask = torch.ones_like(cropped[:, :, 0], dtype=torch.bool) # Shape [B, target_length], dtype bool
-        return cropped, mask
-
-    if current_length < target_length:
-        # Pad
-        diff = target_length - current_length
-        pad_left = diff // 2
-        pad_right = diff - pad_left
-        padded = torch.zeros(
-            (tensor.shape[0], target_length, tensor.shape[2]),
-            dtype=tensor.dtype, device=tensor.device
-        )
-        padded[:, pad_left:pad_left+current_length] = tensor
-        # Create boolean mask of target shape [B, target_length]
-        mask = torch.zeros((tensor.shape[0], target_length), dtype=torch.bool, device=tensor.device)
-        mask[:, pad_left:pad_left+current_length] = True
-        return padded, mask
-
 def extract_video_frames(video_path, first_and_last=True):
     """Extract first and/or last frame from a video file"""
     try:
