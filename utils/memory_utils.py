@@ -2,6 +2,22 @@
 import torch
 import gc
 from utils.common import debug
+from diffusers_helper.memory import (
+    cpu, gpu, get_cuda_free_memory_gb, move_model_to_device_with_memory_preservation,
+    offload_model_from_device_for_memory_preservation, fake_diffusers_current_device,
+    DynamicSwapInstaller, unload_complete_models, load_model_as_complete
+)
+
+# We'll import and re-export the original functions from diffusers_helper.memory
+# This maintains compatibility while allowing us to add debug statements or customizations
+
+def clear_cuda_cache():
+    """Clear CUDA cache to free fragmented memory"""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        free_mem = get_cuda_free_memory_gb(gpu)
+        return free_mem
+    return 0
 
 # Define device constants
 cpu = torch.device('cpu')
