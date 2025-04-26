@@ -112,11 +112,23 @@ def get_css():
     .stats-box td:first-child {
         width: 40%;
     }
-    /* Ensure video controls are visible */
+    /* Video container with extra space for trimming UI */
     .video-container {
-        margin-bottom: 50px !important; /* Add space below video for controls */
+        margin-bottom: 180px !important; /* Extra space for trim controls */
+        z-index: 100; /* Ensure it stays on top */
+    }
+    /* Better formatting for generation stats */
+    #generation_stats {
+        margin-top: 20px;
+        padding: 15px;
+        background: #333;
+        border-radius: 8px;
+        border-left: 4px solid orange;
     }
     
+    #generation_stats strong {
+        color: #ff8800;
+    }
     /* Hide frame thumbnails by default */
     .frame-thumbnail {
         display: none;
