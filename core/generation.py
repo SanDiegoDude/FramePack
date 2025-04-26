@@ -737,6 +737,29 @@ class VideoGenerator:
                     debug(f"In callback, section: {section_percentage}%, overall: {overall_percentage}%")
                     if self.stream:
                         self.stream.output_queue.push(('progress', (preview, desc, progress_html)))
+
+
+                # Add this just before the sample_hunyuan call in core/generation.py
+                debug(f"*** PROMPT DEBUGGING ***")
+                debug(f"prompt_embeds type: {type(lv)}, dtype: {lv.dtype}")
+                debug(f"prompt_embeds_mask type: {type(m)}, dtype: {m.dtype}")
+                debug(f"prompt_poolers shape: {cp.shape if cp is not None else 'None'}")
+                
+                # Examine the actual contents of the mask
+                if m is not None:
+                    debug(f"Mask min: {m.min().item()}, max: {m.max().item()}, mean: {m.float().mean().item()}")
+                    # Check if mask is all ones (which would be unusual for attention mask)
+                    debug(f"Is mask all ones? {(m == 1.0).all().item()}")
+                    
+                    # Add a key fix attempt - try transposing dimensions if needed
+                    if len(m.shape) == 3 and m.shape[2] == 4096:
+                        debug("Trying to fix mask dimension by reshaping...")
+                        # Experiment with different ways to fix the mask
+                        # Option 1: Generate a new mask ignoring the last dimension
+                        fixed_mask = torch.ones((m.shape[0], m.shape[1]), dtype=m.dtype, device=m.device)
+                        debug(f"Created simple binary mask with shape {fixed_mask.shape}")
+                        m = fixed_mask
+
                 
                 # Run sampling based on mode
                 if mode == "keyframes":
