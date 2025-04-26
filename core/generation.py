@@ -129,8 +129,8 @@ class VideoGenerator:
             )
         
         # Process masks
-        llama_vec, mask = crop_or_pad_yield_mask(llama_vec, 512)
-        llama_vec_n, mask_n = crop_or_pad_yield_mask(llama_vec_n, 512)
+        llama_vec, llama_attention_mask = crop_or_pad_yield_mask(llama_vec, length=512)
+        llama_vec_n, llama_attention_mask_n = crop_or_pad_yield_mask(llama_vec_n, length=512)
         
         # Apply weights
         if llm_weight != 1.0:
@@ -156,7 +156,7 @@ class VideoGenerator:
         if gaussian_blur_amount > 0.0:
             input_tensor = apply_gaussian_blur(input_tensor, gaussian_blur_amount)
         
-        return input_np, input_tensor, llama_vec, clip_pool, llama_vec_n, clip_pool_n, mask, mask_n, h, w
+        return input_np, input_tensor, llama_vec, clip_pool, llama_vec_n, clip_pool_n, llama_attention_mask, llama_attention_mask_n, h, w
     
     def cleanup_temp_files(self, job_id, keep_final=True, final_output_path=None):
         """Clean up temporary files created during generation"""
@@ -523,7 +523,7 @@ class VideoGenerator:
                     self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Text encoding ...'))))
                 
                 # Use prepare_inputs for standard processing
-                inp_np, inp_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = self.prepare_inputs(
+                inp_np, inp_tensor, llama_vec, clip_l_pooler, llama_vec_n, clip_l_pooler_n, llama_attention_mask, llama_attention_mask_n, height, width = self.prepare_inputs(
                     input_image, prompt, n_prompt, cfg,
                     gaussian_blur_amount=gaussian_blur_amount,
                     llm_weight=llm_weight,
@@ -736,7 +736,15 @@ class VideoGenerator:
                     debug(f"In callback, section: {section_percentage}%, overall: {overall_percentage}%")
                     if self.stream:
                         self.stream.output_queue.push(('progress', (preview, desc, progress_html)))
-                
+
+
+                llama_vec = llama_vec.to(self.model_manager.transformer.dtype)
+                llama_vec_n = llama_vec_n.to(self.model_manager.transformer.dtype)
+                clip_l_pooler = clip_l_pooler.to(self.model_manager.transformer.dtype)
+                clip_l_pooler_n = clip_l_pooler_n.to(self.model_manager.transformer.dtype)
+                if clip_output is not None:
+                    clip_output = clip_output.to(self.model_manager.transformer.dtype)
+                    
                 # Run sampling based on mode
                 if mode == "keyframes":
                     generated_latents = sample_hunyuan(
@@ -750,12 +758,12 @@ class VideoGenerator:
                         guidance_rescale=rs,
                         num_inference_steps=steps,
                         generator=rnd,
-                        prompt_embeds=lv,
-                        prompt_embeds_mask=m,
-                        prompt_poolers=cp,
-                        negative_prompt_embeds=lv_n,
-                        negative_prompt_embeds_mask=m_n,
-                        negative_prompt_poolers=cp_n,
+                        prompt_embeds=llama_vec,
+                        prompt_embeds_mask=llama_attention_mask,
+                        prompt_poolers=clip_l_pooler,
+                        negative_prompt_embeds=llama_vec_n,
+                        negative_prompt_embeds_mask=llama_attention_mask_n,
+                        negative_prompt_poolers=clip_l_pooler_n,
                         device=gpu,
                         dtype=torch.bfloat16,
                         image_embeddings=clip_output,
