@@ -8,6 +8,7 @@ import os
 from utils.common import debug
 from ui.style import make_progress_bar_html
 from diffusers_helper.thread_utils import AsyncStream, async_run
+from utils.video_utils import extract_video_frames
 
 # Global stream for async communication
 stream = None
@@ -190,7 +191,7 @@ def process(
         if flag == 'file':
             output_filename = data
             # Extract first and last frames
-            first_frame_img, last_frame_img = video_generator.extract_video_frames(output_filename)
+            first_frame_img, last_frame_img = extract_video_frames(final_output_path)
             
             # Handle case where extraction fails
             if first_frame_img is None:
@@ -278,7 +279,7 @@ def process(
             last_img_path = img_filename
             
         elif flag == 'end':
-            debug(f"Process: yielding end event. output_filename = {output_filename}")
+            debug(f"Process: yielding end event. final_output_path = {final_output_path}, data = {data}")
             if data == "interrupted":
                 yield (
                     gr.update(visible=False),       # result_video
