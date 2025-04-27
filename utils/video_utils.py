@@ -314,6 +314,39 @@ def resize_and_center_crop(image, target_width, target_height):
         
     return cropped
 
+def blend_frames_with_overlap(current, history, overlap=0):
+    """
+    Custom blending function that maintains original order (current first, then history)
+    while properly blending overlapping frames.
+    
+    Args:
+        current: The new frames tensor with shape [B,C,T,H,W]
+        history: The existing frames tensor with shape [B,C,T,H,W]
+        overlap: Number of frames to overlap and blend
+        
+    Returns:
+        Tensor with blended frames in the order [current, history]
+    """
+    # If no overlap or first section, just concatenate
+    if overlap <= 0 or history is None:
+        return torch.cat([current, history], dim=2) if history is not None else current
+    
+    # Check if we have enough frames to overlap
+    if current.shape[2] < overlap or history.shape[2] < overlap:
+        debug(f"WARNING: Not enough frames to overlap! current:{current.shape[2]}, history:{history.shape[2]}, overlap:{overlap}")
+        return torch.cat([current, history], dim=2)
+    
+    # Create blending weights that transition from current to history
+    weights = torch.linspace(0, 1, overlap, dtype=current.dtype, device=current.device).view(1, 1, -1, 1, 1)
+    
+    # Blend the overlapping regions
+    blended = weights * history[:, :, :overlap] + (1 - weights) * current[:, :, -overlap:]
+    
+    # Concatenate: current (minus overlap end) + blended + history (minus overlap beginning)
+    result = torch.cat([current[:, :, :-overlap], blended, history[:, :, overlap:]], dim=2)
+    
+    return result
+
 def make_mp4_faststart(mp4_path, quiet=False):
     """
     Move moov atom to start of file for fast streaming
