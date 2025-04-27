@@ -2,9 +2,53 @@
 import gradio as gr
 import random
 import torch
+import os
+import contextlib
+import sys
 from ui.style import get_css
 from utils.common import debug
 from utils.memory_utils import get_cuda_free_memory_gb, gpu
+
+
+# Hush noisy mpeg output.
+@contextlib.contextmanager
+def suppress_output_if_not_debug():
+    """Context manager to suppress stdout and stderr only when debug is disabled"""
+    if debug:
+        # In debug mode, don't suppress anything
+        yield
+    else:
+        # Not in debug mode, suppress output
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        
+        # Open null files
+        null_out = open(os.devnull, 'w')
+        null_err = open(os.devnull, 'w')
+        
+        try:
+            # Redirect stdout/stderr to null
+            sys.stdout = null_out
+            sys.stderr = null_err
+            yield
+        finally:
+            # Restore original stdout/stderr
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+            # Close null files
+            null_out.close()
+            null_err.close()
+
+import gradio as gr
+original_video_postprocess = gr.Video.postprocess
+
+def debug_aware_video_postprocess(self, y):
+    """Wrapper around Gradio's Video postprocess that respects the debug flag"""
+    with suppress_output_if_not_debug():
+        return original_video_postprocess(self, y)
+
+gr.Video.postprocess = debug_aware_video_postprocess
+
 
 def create_interface(model_manager, video_generator):
     """Create and configure the Gradio interface"""
