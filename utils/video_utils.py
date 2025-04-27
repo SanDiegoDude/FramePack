@@ -314,19 +314,56 @@ def resize_and_center_crop(image, target_width, target_height):
         
     return cropped
 
-def blend_frames_with_overlap(current, history, overlap=0):
+# Toggle this flag to switch between blending methods
+USE_EXPERIMENTAL_CROSSFADE = True
+
+def simple_crossfade(current, history, overlap=0):
     """
-    Custom blending function that maintains original order (current first, then history)
-    while properly blending overlapping frames.
+    A very simple crossfade approach for quick testing.
     
     Args:
-        current: The new frames tensor with shape [B,C,T,H,W]
-        history: The existing frames tensor with shape [B,C,T,H,W]
-        overlap: Number of frames to overlap and blend
-        
-    Returns:
-        Tensor with blended frames in the order [current, history]
+        current: New frames tensor [B,C,T,H,W]
+        history: Existing frames tensor [B,C,T,H,W]
+        overlap: Number of frames to crossfade at the boundary
     """
+    debug(f"Using experimental crossfade with overlap={overlap}")
+    
+    if overlap <= 0 or history is None:
+        return torch.cat([current, history], dim=2) if history is not None else current
+    
+    # Make sure we have enough frames to blend
+    overlap = min(overlap, current.shape[2]//2, history.shape[2]//2)
+    if overlap == 0:
+        return torch.cat([current, history], dim=2)
+    
+    # Keep everything but prepare indices for blending
+    current_end = current.shape[2] - overlap
+    history_start = overlap
+    
+    # Create linear weights for crossfade
+    weights = torch.linspace(1.0, 0.0, steps=overlap, dtype=current.dtype, device=current.device)
+    weights = weights.view(1, 1, -1, 1, 1)
+    
+    # Calculate blended section
+    blend = weights * current[:, :, current_end:] + (1.0 - weights) * history[:, :, :overlap]
+    
+    # Concatenate parts in order
+    result = torch.cat([
+        current[:, :, :current_end],
+        blend,
+        history[:, :, history_start:]
+    ], dim=2)
+    
+    return result
+
+def blend_frames_with_overlap(current, history, overlap=0):
+    """
+    Blend frames with overlap - uses experimental method if enabled.
+    """
+    if USE_EXPERIMENTAL_CROSSFADE:
+        return simple_crossfade(current, history, overlap)
+    
+    # Original blending implementation (keeping for reference)
     # If no overlap or first section, just concatenate
     if overlap <= 0 or history is None:
         return torch.cat([current, history], dim=2) if history is not None else current
