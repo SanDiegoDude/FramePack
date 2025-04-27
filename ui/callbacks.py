@@ -420,12 +420,22 @@ def update_video_stats(window_size, segments, overlap):
     segments_val = float(segments)
     overlap_val = float(overlap)
     
-    # Calculate frames
-    frames_per_section = int(window_size_val * 4 - 3)
-    max_overlap = max(0, frames_per_section - 1)
-    actual_overlap = min(overlap_val, max_overlap)
-    effective_frames = frames_per_section - actual_overlap
-    total_frames = segments_val * effective_frames
+    # Calculate frames using the original algorithm logic
+    overlapped_frames = int(window_size_val * 4 - 3)
+    
+    # Calculate frames per segment using the correct formula
+    # Last section (first in reverse generation order)
+    last_section_frames = int(window_size_val * 2 + 1)
+    # Regular sections
+    regular_section_frames = int(window_size_val * 2)
+    
+    # Calculate total frames
+    if segments_val == 1:
+        total_frames = last_section_frames + 4  # +4 for initial frame when only one segment
+    else:
+        # First segment (last in generation order) gets the extra frame
+        # and we add 4 for the initial frame
+        total_frames = last_section_frames + 4 + (regular_section_frames * (segments_val - 1))
     
     # Calculate time (at 30fps)
     seconds = total_frames / 30.0
@@ -438,7 +448,7 @@ def update_video_stats(window_size, segments, overlap):
         <table>
             <tr>
                 <td><b>Frames per segment:</b></td>
-                <td>{int(effective_frames)} frames</td>
+                <td>{regular_section_frames} frames (regular), {last_section_frames} frames (last)</td>
             </tr>
             <tr>
                 <td><b>Total frames:</b></td>
