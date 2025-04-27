@@ -18,7 +18,7 @@ from utils.memory_utils import (
 )
 from utils.video_utils import (
     save_bcthw_as_mp4, find_nearest_bucket, resize_and_center_crop,
-    # crop_or_pad_yield_mask, # Make sure this is the CORRECT version from the demo
+    blend_frames_with_overlap,
     extract_frames_from_video, fix_video_compatibility,
     make_mp4_faststart, apply_gaussian_blur, extract_video_frames
 )
@@ -261,6 +261,11 @@ class VideoGenerator:
         
         t_start = time.time()
         timings = {"latent_encoding": 0, "step_times": [], "generation_time": 0, "vae_decode_time": 0, "total_time": 0}
+
+        # Extract the frame_overlap
+        frame_overlap = config.get('frame_overlap', 0)
+        debug(f"Using frame overlap: {frame_overlap}")
+
         
         # Calculate sections based on calculated seconds/frames
         # NOTE: Assuming adv_seconds/selected_frames are correctly calculated in ui.callbacks.process
@@ -682,9 +687,9 @@ class VideoGenerator:
                         history_pixels = current_pixels
                         debug(f"First section: Set history_pixels directly with shape: {history_pixels.shape}")
                     else:
-                        # Use soft_append_bcthw for proper blending instead of simple concatenation
-                        history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlap=frame_overlap)
-                        debug(f"Blended frames with overlap={frame_overlap}. New history shape: {history_pixels.shape}")
+                        # Use our custom blending function
+                        history_pixels = blend_frames_with_overlap(current_pixels, history_pixels, overlap=frame_overlap)
+                        debug(f"Blended new frames with history using overlap={frame_overlap}. New history shape: {history_pixels.shape}")
                     
                     # Save preview video
                     preview_filename = os.path.join(self.output_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
