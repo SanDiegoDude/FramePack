@@ -1,6 +1,58 @@
-<p align="center">
-    <img src="https://github.com/user-attachments/assets/2cc030b4-87e1-40a0-b5bf-1b7d6b62820b" width="300">
-</p>
+# FramePack Advanced Video Generator v2.0: Architecture Refactoring
+
+## Major Changes
+* Complete refactoring of codebase to separate UI from model operations
+* Implemented modular architecture with clear separation of concerns:
+  - UI layer for user interaction
+  - Core generation module for video processing logic
+  - Model management system for efficient VRAM usage
+  - Utility modules for common functionality
+* New launcher **main.py**
+  - To launch Framepack Advanced Generator, run:
+    ```python main.py```
+  - Moved demo gradio and old advanced launcher into /legacy/ directory
+
+## Benefits of Refactoring
+* Easier maintenance and bug fixing
+* Faster development of new features
+* Better memory management and resource utilization
+* Clearer code organization and improved readability
+
+## New Features
+* Enhanced UI Design
+  - First/Last frame thumbnails now tracked and draggable into inputs
+  - "Extend Video" button added to output that loads video directly into extension mode
+  - Improved controls layout and organization
+
+* Video Processing Improvements
+  - Fixed directional extension to properly honor clip trimming
+  - Improved video format compatibility for Windows/Mac 
+  - Enhanced memory management for more stable operation
+
+* Developer Experience
+  - Moved debug logging behind a flag (activate with `--debug` flag)
+  - Better error handling and reporting
+  - Modular components for easier extension
+
+## Technical Changes
+* Split monolithic script into logical modules
+* Standardized interfaces between components
+* Improved error recovery and graceful shutdowns
+
+## Known Issues & Technical Limitations
+* Txt2video and reverse generations have gray backgrounds
+  - This is due to how I'm currently initializing these modes. I plan on fixing this to create a proper latent, but it's not quite as easy as just give it a blank latent and hope for the best, as that causes a lot of yucky output in my initial testing. I'll rip this bandaid off as soon as I can!
+* Reverse keyframes have a gray fade in.
+  - You can suppress this behavior by increasing Segment Trim Percentage (default is 20%)   
+* Output video looks choppy
+  - If you are modifying Latent Window Size (LWS) or frame overlap, it can lead to these issues, especially if you are using very large LWS. 
+  - You can try turning up Gaussian blur a little bit (I don't recommend going over 0.15 unless you want smeary output)  and can also try turning off teacache (warning, 70% generation time increase doing this). 
+  - Sometimes this behavior still just happens 😕- it's very intermittent, but if you find a pattern as to why it happens, please let me know! 
+
+## Original Framepack Readme Available Below
+* Installation Process Remains Unchanged
+
+<br /><br /><br />
 
 # FramePack
 
