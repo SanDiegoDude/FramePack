@@ -29,8 +29,6 @@ from diffusers_helper.utils import crop_or_pad_yield_mask, soft_append_bcthw
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
 from ui.style import make_progress_bar_html
 
-total_generated_latent_frames = 0
-
 class VideoGenerator:
     """Handles all video generation functionality"""
     def __init__(self, model_manager, outputs_folder='./outputs/'):
@@ -252,6 +250,7 @@ class VideoGenerator:
         clip_weight = config.get('clip_weight', 1.0)
         trim_percentage = config.get('trim_percentage', 0.2)  # Default to 0.2 if not provided
         frame_overlap = config.get('frame_overlap', 0)
+        total_generated_latent_frames = 0
         job_id = generate_timestamp()
         
         debug(f"[Generator] Received prompt: '{prompt}'")
