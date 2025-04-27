@@ -421,7 +421,7 @@ def update_video_stats(window_size, segments, overlap):
     overlap_val = float(overlap)
     
     # Calculate frames based on the original demo's approach
-    last_section_frames = int(window_size_val * 4 - 3)  # Last section (first in generation order)
+    last_section_frames = int(window_size_val * 4 - 3  + overlap_val + 1)  # Last section (first in generation order)
     regular_section_frames = int(window_size_val * 4 - 3 + overlap_val) # Regular sections
     
     # Maximum possible overlap is limited by section sizes
