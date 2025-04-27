@@ -14,36 +14,49 @@ def get_css():
         font-size: 1.1em !important;
         padding: 8px 12px !important;
     }
-    /* Start/End Buttons */
+    /* Start Button - Spotify green, taller */
     .start-button button {
         width: 100% !important;
-        background-color: #4CAF50 !important;
-        border-color: #4CAF50 !important;
+        background-color: #1DB954 !important; /* Spotify green */
+        border-color: #1DB954 !important;
         font-size: 1.2em !important;
-        padding: 10px !important;
+        padding: 16px !important; /* Taller button */
+        margin-bottom: 10px !important;
     }
     .start-button button:disabled {
-        background-color: #2E7D32 !important;
-        border-color: #2E7D32 !important;
+        background-color: #107C33 !important; /* Darker Spotify green */
+        border-color: #107C33 !important;
     }
-    .end-button button {
+
+    /* End Generation Button - Windows Explorer mellow yellow */
+    .end-graceful-button button {
         width: 100% !important;
-        background-color: #8B0000 !important; /* Dark red when disabled */
-        border-color: #8B0000 !important;
-        font-size: 1.2em !important;
+        background-color: #FFCC00 !important; /* Windows Explorer yellow */
+        border-color: #FFCC00 !important;
+        font-size: 1.1em !important;
         padding: 10px !important;
     }
-    .end-button button:enabled {
-        background-color: #FF0000 !important; /* Bright red when enabled */
-        border-color: #FF0000 !important;
+    .end-graceful-button button:disabled {
+        background-color: #D4AA00 !important; /* Darker yellow */
+        border-color: #D4AA00 !important;
     }
-    .end-button-warning button {
-        background-color: #FFA500 !important; /* Yellow for graceful stop */
-        border-color: #FFA500 !important;
+
+    /* Force Stop Button - Crimson */
+    .force-stop-button button {
+        width: 100% !important;
+        background-color: #DC143C !important; /* Crimson */
+        border-color: #DC143C !important;
+        font-size: 1.1em !important;
+        padding: 10px !important;
     }
-    .end-button-force button {
-        background-color: #FF0000 !important; /* Bright red for force stop */
-        border-color: #FF0000 !important;
+    .force-stop-button button:disabled {
+        background-color: #AA0F2D !important; /* Darker crimson */
+        border-color: #AA0F2D !important;
+    }
+    
+    /* Remove old button classes that are no longer needed */
+    .end-button-warning, .end-button-force {
+        display: none !important;
     }
     /* Frame Thumbnails */
     .frame-thumbnail img {
