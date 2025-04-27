@@ -265,7 +265,14 @@ def create_interface(model_manager, video_generator):
                     start_button = gr.Button(value="Start Generation", elem_classes="start-button")
                 
                 with gr.Row():
-                    end_button = gr.Button(value="End Generation", interactive=False, elem_classes="end-button")
+                    with gr.Column(scale=1):
+                        end_graceful_button = gr.Button(value="End Generation", 
+                                                        interactive=False, 
+                                                        elem_classes="end-graceful-button")
+                    with gr.Column(scale=1):
+                        force_stop_button = gr.Button(value="Force Stop", 
+                                                      interactive=False, 
+                                                      elem_classes="force-stop-button")
                 
                 # Progress indicators
                 progress_bar = gr.HTML(visible=False)
@@ -453,13 +460,14 @@ def create_interface(model_manager, video_generator):
             progress_desc,     # 3
             progress_bar,      # 4
             start_button,      # 5
-            end_button,        # 6
-            seed,              # 7
-            first_frame,       # 8
-            last_frame,        # 9
-            extend_button,     # 10
-            note_message,      # 11 (new)
-            generation_stats   # 12 (new)
+            end_graceful_button,# 6 - replaced end_button
+            force_stop_button, # 7 - new button
+            seed,              # 8
+            first_frame,       # 9
+            last_frame,        # 10
+            extend_button,     # 11
+            note_message,      # 12
+            generation_stats   # 13
         ]
         
         prompt.submit(
@@ -473,8 +481,11 @@ def create_interface(model_manager, video_generator):
             inputs=ips,
             outputs=output_list,
         )
-        
-        end_button.click(fn=end_process, outputs=[end_button])
+
+        end_graceful_button.click(fn=request_graceful_end, 
+                                 outputs=[end_graceful_button, force_stop_button])
+        force_stop_button.click(fn=force_immediate_stop, 
+                               outputs=[end_graceful_button, force_stop_button])
         
         # Initialize the video stats on page load
         block.load(
