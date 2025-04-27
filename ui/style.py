@@ -13,7 +13,7 @@ def get_css():
         font-size: 1.1em !important;
         padding: 8px 12px !important;
     }
-    /* Start Button - Spotify green, taller */
+    /* Start/End Buttons styling */
     .start-button button {
         width: 100% !important;
         background-color: #1DB954 !important; /* Spotify green */
@@ -26,7 +26,6 @@ def get_css():
         background-color: #107C33 !important; /* Darker Spotify green */
         border-color: #107C33 !important;
     }
-    /* End Generation Button - Windows Explorer mellow yellow */
     .end-graceful-button button {
         width: 100% !important;
         background-color: #FFCC00 !important; /* Windows Explorer yellow */
@@ -38,7 +37,6 @@ def get_css():
         background-color: #D4AA00 !important; /* Darker yellow */
         border-color: #D4AA00 !important;
     }
-    /* Force Stop Button - Crimson */
     .force-stop-button button {
         width: 100% !important;
         background-color: #DC143C !important; /* Crimson */
@@ -50,69 +48,61 @@ def get_css():
         background-color: #AA0F2D !important; /* Darker crimson */
         border-color: #AA0F2D !important;
     }
-    /* Remove old button classes that are no longer needed */
-    .end-button-warning, .end-button-force {
-        display: none !important;
-    }
     
-    /* Frame Thumbnails - FIXED with constrained height */
+    /* Frame Thumbnails - FIXED with proper scaling */
     .frame-thumbnail {
-        width: 100% !important;
-        height: 340px !important; /* Exactly 340px height */
+        max-height: 340px !important;
         overflow: hidden !important;
         margin-bottom: 10px !important;
         display: none !important; /* Hidden by default */
     }
-    /* This class will be toggled by our code */
     .frame-thumbnail.show-thumbnail {
         display: block !important;
     }
     .frame-thumbnail img {
-        width: 100% !important;
-        height: 100% !important;
-        object-fit: contain !important; /* Maintain aspect ratio */
-        margin: 0 auto !important;
-    }
-    
-    /* Input Image Container - constrained to 340px */
-    .input-image-container, .keyframe-image-container {
-        height: 340px !important;
-        overflow: hidden !important;
-    }
-    
-    .input-image-container img, .keyframe-image-container img {
-        width: 100% !important;
-        height: 100% !important;
-        object-fit: contain !important;
-        margin: 0 auto !important;
-    }
-    
-    /* Result Container - constrained to 512px */
-    .result-container {
-        height: 512px !important;
-        overflow: hidden !important;
-    }
-    
-    .result-container img, .result-container video {
-        width: 100% !important;
-        height: 100% !important;
+        max-height: 340px !important;
+        width: auto !important;
         object-fit: contain !important;
         margin: 0 auto !important;
         display: block !important;
     }
     
-    /* Video Container - constrained to 512px with 85% scale */
+    /* Input Image Container - proper scaling */
+    .input-image-container, .keyframe-image-container {
+        max-height: 340px !important;
+        overflow: hidden !important;
+    }
+    .input-image-container img, .keyframe-image-container img {
+        max-height: 340px !important;
+        width: auto !important;
+        object-fit: contain !important;
+        margin: 0 auto !important;
+        display: block !important;
+    }
+    
+    /* Result Container - proper scaling */
+    .result-container {
+        max-height: 512px !important;
+        overflow: hidden !important;
+    }
+    .result-container img, .result-container video {
+        max-height: 512px !important;
+        width: auto !important;
+        object-fit: contain !important;
+        margin: 0 auto !important;
+        display: block !important;
+    }
+    
+    /* Video Container - proper scaling */
     .video-container {
         position: relative;
-        height: 512px !important;
+        max-height: 512px !important;
         overflow: hidden !important;
         margin-bottom: 20px;
     }
-    
     .video-container video {
-        width: 85% !important; /* Scaled to 85% to avoid overlaps */
-        height: auto !important;
         max-height: 85% !important;
+        width: auto !important;
         object-fit: contain !important;
         margin: 0 auto !important;
         display: block !important;
@@ -174,12 +164,7 @@ def get_css():
         color: #ff8800;
     }
     
-    /* Ensure empty components stay hidden */
-    [class*='container']:empty {
-        display: none !important;
-    }
-    
-    /* Fix for trim controls - add extra padding when trim is visible */
+    /* Fix for trim controls */
     .video-container.editing {
         padding-bottom: 180px !important;
     }
