@@ -54,21 +54,22 @@ def get_css():
     .end-button-warning, .end-button-force {
         display: none !important;
     }
-    /* Frame Thumbnails - FIXED */
+    /* Frame Thumbnails - FIXED with togglable visibility */
     .frame-thumbnail {
-        display: none !important; /* Hide by default and enforce with !important */
         width: 100% !important;
         height: 256px !important;
         overflow: hidden !important;
         margin-bottom: 10px !important;
+        display: none !important; /* Hidden by default */
     }
-    .frame-thumbnail.has-content {
-        display: block !important; /* Show only with has-content class */
+    /* This class will be toggled by our code */
+    .frame-thumbnail.show-thumbnail {
+        display: block !important;
     }
     .frame-thumbnail img {
         width: 100% !important;
         height: 100% !important;
-        object-fit: contain !important; /* Changed from cover to contain */
+        object-fit: contain !important;
         margin: 0 auto !important;
     }
     /* Image and Video Container Styling */
