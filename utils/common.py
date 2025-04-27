@@ -1,20 +1,21 @@
 # utils/common.py
-# General utility functions
+import time
 
-# Debug control
-DEBUG = True
+# Default to debug off
+DEBUG = False
 
-def setup_debug(enable=True):
-    """Set up debugging mode"""
+def setup_debug(enabled=False):
+    """Set the debug output state"""
     global DEBUG
-    DEBUG = enable
+    DEBUG = enabled
+    if enabled:
+        print("[DEBUG] Debug logging enabled")
 
 def debug(*args, **kwargs):
-    """Print debug messages when DEBUG is enabled"""
+    """Print debug output if debug mode is enabled"""
     if DEBUG:
         print("[DEBUG]", *args, **kwargs)
 
 def generate_timestamp():
-    """Generate a timestamp for file naming"""
-    import time
-    return time.strftime("%Y%m%d_%H%M%S")
+    """Generate a timestamp string for filenames"""
+    return time.strftime("%y%m%d_%H%M%S_%f")[:-3]
