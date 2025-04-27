@@ -1,3 +1,5 @@
+# This script has been deprecated and may not work properly due to ongoing development. Move to the root directory of Framepack if you want to run this.
+
 from diffusers_helper.hf_login import login
 import os
 import time
