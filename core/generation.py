@@ -525,7 +525,13 @@ class VideoGenerator:
                     actual_seconds = actual_pixel_frames / 30.0
                     
                     hint = f'Section {sections_completed+1}/{total_sections} - Step {current_step}/{steps}'
-                    desc = f'Pixel frames generated: {actual_pixel_frames}, Length: {actual_seconds:.2f}s (FPS-30)'
+                    total_expected_frames = 0
+                    if total_sections == 1:
+                        total_expected_frames = (latent_window_size * 2 + 1) + 4  # +4 for initial frame 
+                    else:
+                        total_expected_frames = (latent_window_size * 2 + 1) + 4 + (latent_window_size * 2) * (total_sections - 1)
+                    
+                    desc = f'Pixel frames generated: {actual_pixel_frames}, Length: {actual_seconds:.2f}s (FPS-30), Expected total: {total_expected_frames} frames'
                     
                     # HTML progress display
                     progress_html = f"""
