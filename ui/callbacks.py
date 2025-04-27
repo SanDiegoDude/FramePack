@@ -372,22 +372,22 @@ def process(
             last_is_image = False
             last_img_path = None
 
-def end_process():
-    """Stop the generation process"""
-    global graceful_stop_requested, stream
-    
-    if not graceful_stop_requested:
-        # First click: request graceful stop
-        graceful_stop_requested = True
-        if stream:
-            stream.input_queue.push('graceful_end')
-        return gr.update(value="Force Stop Now", variant="stop", elem_classes="end-button-warning")
-    else:
-        # Second click: force immediate stop
-        graceful_stop_requested = False  # Reset for next time
-        if stream:
-            stream.input_queue.push('end')
-        return gr.update(value="End Generation", variant="stop", elem_classes="end-button-force")
+# Replace the old end_process function with two new functions
+def request_graceful_end():
+    """Request a graceful end to the generation process"""
+    global stream
+    if stream:
+        stream.input_queue.push('graceful_end')
+    # Return updates for both buttons
+    return gr.update(interactive=False), gr.update(interactive=True)
+
+def force_immediate_stop():
+    """Force an immediate stop to the generation process"""
+    global stream
+    if stream:
+        stream.input_queue.push('end')
+    # Return updates for both buttons
+    return gr.update(interactive=False), gr.update(interactive=False)
 
 # function to handle extension direction changes for video_extension mode
 def toggle_init_color_for_backward(extension_direction, mode):
