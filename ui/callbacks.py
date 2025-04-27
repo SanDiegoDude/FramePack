@@ -453,14 +453,14 @@ def update_video_stats(window_size, segments, overlap):
     # Calculate total frames
     if segments_val <= 1:
         # Just one section (include the input frame)
-        total_frames = last_section_frames + 1
+        total_frames = last_section_frames
     else:
         # First section gets full frame count plus input frame
-        total_frames = last_section_frames + 1
+        total_frames = last_section_frames
         
         # Each additional section adds (length - overlap) frames
         for i in range(1, int(segments_val)):
-            total_frames += (regular_section_frames - effective_overlap)
+            total_frames += regular_section_frames
     
     # Calculate time (at 30fps)
     seconds = total_frames / 30.0
