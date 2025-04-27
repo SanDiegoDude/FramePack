@@ -453,15 +453,16 @@ def switch_mode(mode):
     show_blur = is_img2vid or is_keyframes or is_video_ext
     
     return (
-        gr.update(visible=is_img2vid),  # input_image
-        gr.update(visible=is_keyframes),  # start_frame
-        gr.update(visible=is_keyframes),  # end_frame
-        gr.update(visible=is_txt2vid),  # aspect_selector
-        gr.update(visible=False),  # custom_w - will be updated by show_custom
-        gr.update(visible=False),  # custom_h - will be updated by show_custom
-        gr.update(visible=is_keyframes),  # keyframes_options
-        gr.update(visible=is_video_ext),  # video_extension_options
-        gr.update(visible=show_blur)  # gaussian_blur
+        gr.update(visible=is_img2vid),              # input_image
+        gr.update(visible=is_keyframes),            # start_frame
+        gr.update(visible=is_keyframes),            # end_frame
+        gr.update(visible=is_txt2vid),              # aspect_selector
+        gr.update(visible=False),                   # custom_w - updated by show_custom
+        gr.update(visible=False),                   # custom_h - updated by show_custom
+        gr.update(visible=is_keyframes),            # keyframes_options
+        gr.update(visible=is_video_ext),            # video_container
+        gr.update(visible=is_video_ext),            # video_extension_controls
+        gr.update(visible=show_blur)                # gaussian_blur
     )
 
 def show_custom(aspect):
@@ -476,13 +477,14 @@ def show_init_color(mode):
 def setup_for_extension(video_path):
     """Setup UI for video extension"""
     if not video_path:
-        return [gr.update() for _ in range(6)]
+        return [gr.update() for _ in range(7)]  # Update number of return values
     
     return [
-        gr.update(value="video_extension"),  # mode_selector
-        gr.update(value=video_path),         # input_video
-        gr.update(visible=False),            # input_image
-        gr.update(visible=False),            # start_frame
-        gr.update(visible=False),            # end_frame
-        gr.update(visible=True)              # video_extension_options
+        gr.update(value="video_extension"),     # mode_selector
+        gr.update(value=video_path),            # input_video
+        gr.update(visible=False),               # input_image
+        gr.update(visible=False),               # start_frame
+        gr.update(visible=False),               # end_frame
+        gr.update(visible=True),                # video_container
+        gr.update(visible=True)                 # video_extension_controls
     ]
