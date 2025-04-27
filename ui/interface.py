@@ -329,7 +329,8 @@ def create_interface(model_manager, video_generator):
                 custom_w,
                 custom_h,
                 keyframes_options,
-                video_extension_options,
+                video_container,          # Changed from video_extension_options
+                video_extension_controls, # Added this new component
                 gaussian_blur
             ]
         )
@@ -361,7 +362,8 @@ def create_interface(model_manager, video_generator):
                 input_image,
                 start_frame,
                 end_frame,
-                video_extension_options
+                video_container,          # Changed from video_extension_options
+                video_extension_controls  # Added this new component
             ]
         )
         
