@@ -8,8 +8,9 @@ import einops
 import numpy as np
 import traceback
 import gc
+import subprocess
 from PIL import Image
-from utils.common import debug, generate_timestamp, is_debug_enabled
+from utils.common import debug, generate_timestamp
 from utils.memory_utils import (
     cpu, gpu, get_cuda_free_memory_gb, move_model_to_device_with_memory_preservation,
     offload_model_from_device_for_memory_preservation, load_model_as_complete,
@@ -17,6 +18,7 @@ from utils.memory_utils import (
 )
 from utils.video_utils import (
     save_bcthw_as_mp4, find_nearest_bucket, resize_and_center_crop,
+    # crop_or_pad_yield_mask, # Make sure this is the CORRECT version from the demo
     extract_frames_from_video, fix_video_compatibility,
     make_mp4_faststart, apply_gaussian_blur, extract_video_frames
 )
@@ -26,14 +28,6 @@ from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.utils import crop_or_pad_yield_mask
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
 from ui.style import make_progress_bar_html
-
-# Add a helper function to conditionally log tensor stats
-def log_tensor_stats(name, tensor):
-    if is_debug_enabled():
-        if tensor is None:
-            debug(f"{name}: None")
-        else:
-            debug(f"{name}: {tensor.shape} ({tensor.dtype}), mean: {tensor.mean():.4f}, std: {tensor.std():.4f}, isfinite: {torch.isfinite(tensor).all()}")
 
 class VideoGenerator:
     """Handles all video generation functionality"""
@@ -49,7 +43,7 @@ class VideoGenerator:
         """Initialize async stream for generation"""
         self.stream = AsyncStream()
         return self.stream
-        
+    
     def get_dims_from_aspect(self, aspect, custom_w, custom_h):
         """Calculate dimensions based on aspect ratio"""
         presets = {
@@ -71,7 +65,7 @@ class VideoGenerator:
         width = (width // 8) * 8
         height = (height // 8) * 8
         return width, height
-        
+    
     def parse_hex_color(self, hexcode):
         """Parse hex color code to RGB values"""
         hexcode = hexcode.lstrip('#')
@@ -82,7 +76,7 @@ class VideoGenerator:
             return r, g, b
         # fallback to gray
         return 0.5, 0.5, 0.5
-        
+    
     def extract_frames_from_video(self, video_path, num_frames=8, from_end=True, max_resolution=640):
         """
         Extract frames from a video file
@@ -90,7 +84,7 @@ class VideoGenerator:
         """
         from utils.video_utils import extract_frames_from_video as extract_frames
         return extract_frames(video_path, num_frames, from_end, max_resolution)
-        
+    
     def prepare_inputs(self, input_image, prompt, n_prompt, cfg, gaussian_blur_amount=0.0,
                       llm_weight=1.0, clip_weight=1.0):
         """Prepare text embeddings, poolers, masks, and image tensors"""
@@ -113,16 +107,14 @@ class VideoGenerator:
         # --- Text Encoding ---
         debug(f"[Prepare Inputs] Encoding prompt: '{prompt}'")
         debug(f"[Prepare Inputs] Encoding negative prompt: '{n_prompt}'")
-        
         if not self.model_manager.high_vram:
             fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
             load_model_as_complete(self.model_manager.text_encoder_2, target_device=gpu)
-            
-        if is_debug_enabled():
-            debug(f"[Prepare Inputs] Text Encoder device: {self.model_manager.text_encoder.device if self.model_manager.text_encoder else 'None'}")
-            debug(f"[Prepare Inputs] Text Encoder 2 device: {self.model_manager.text_encoder_2.device if self.model_manager.text_encoder_2 else 'None'}")                          
-            debug(f"[Prepare Inputs] BEFORE POS ENCODE - Prompt: '{prompt}'")
-            
+        
+        debug(f"[Prepare Inputs] Text Encoder device: {self.model_manager.text_encoder.device if self.model_manager.text_encoder else 'None'}")
+        debug(f"[Prepare Inputs] Text Encoder 2 device: {self.model_manager.text_encoder_2.device if self.model_manager.text_encoder_2 else 'None'}")                          
+        debug(f"[Prepare Inputs] BEFORE POS ENCODE - Prompt: '{prompt}'")
+        
         lv, cp = encode_prompt_conds(
             prompt,
             self.model_manager.text_encoder,
@@ -131,12 +123,11 @@ class VideoGenerator:
             self.model_manager.tokenizer_2
         )
         
-        if is_debug_enabled():
-            debug(f"[Prepare Inputs] Neg Text Encoder device: {self.model_manager.text_encoder.device if self.model_manager.text_encoder else 'None'}")
-            debug(f"[Prepare Inputs] Neg Text Encoder 2 device: {self.model_manager.text_encoder_2.device if self.model_manager.text_encoder_2 else 'None'}")
-            log_tensor_stats("[Prepare Inputs] AFTER POS ENCODE - lv", lv)
-            log_tensor_stats("[Prepare Inputs] AFTER POS ENCODE - cp", cp)
-            
+        debug(f"[Prepare Inputs] Neg Text Encoder device: {self.model_manager.text_encoder.device if self.model_manager.text_encoder else 'None'}")
+        debug(f"[Prepare Inputs] Neg Text Encoder 2 device: {self.model_manager.text_encoder_2.device if self.model_manager.text_encoder_2 else 'None'}")
+        debug(f"[Prepare Inputs] AFTER POS ENCODE - lv: {lv.shape} ({lv.dtype}), mean: {lv.mean():.4f}, std: {lv.std():.4f}, isfinite: {torch.isfinite(lv).all()}")
+        debug(f"[Prepare Inputs] AFTER POS ENCODE - cp: {cp.shape} ({cp.dtype}), mean: {cp.mean():.4f}, std: {cp.std():.4f}, isfinite: {torch.isfinite(cp).all()}")
+        
         if cfg == 1:
             lv_n, cp_n = torch.zeros_like(lv), torch.zeros_like(cp)
             debug(f"[Prepare Inputs] Using ZERO negative embeddings for CFG=1")
@@ -149,30 +140,25 @@ class VideoGenerator:
                 self.model_manager.tokenizer,
                 self.model_manager.tokenizer_2
             )
-            if is_debug_enabled():
-                log_tensor_stats("[Prepare Inputs] AFTER NEG ENCODE - lv_n", lv_n)
-                log_tensor_stats("[Prepare Inputs] AFTER NEG ENCODE - cp_n", cp_n)
-                
+            debug(f"[Prepare Inputs] AFTER NEG ENCODE - lv_n: {lv_n.shape} ({lv_n.dtype}), mean: {lv_n.mean():.4f}, std: {lv_n.std():.4f}, isfinite: {torch.isfinite(lv_n).all()}")
+            debug(f"[Prepare Inputs] AFTER NEG ENCODE - cp_n: {cp_n.shape} ({cp_n.dtype}), mean: {cp_n.mean():.4f}, std: {cp_n.std():.4f}, isfinite: {torch.isfinite(cp_n).all()}")
+            
         # --- Mask Generation (using the _correct_ crop_or_pad_yield_mask) ---
-        if is_debug_enabled():
-            debug(f"[Prepare Inputs] BEFORE PADDING - lv mean: {lv.mean():.4f}, std: {lv.std():.4f}")                          
-        
+        # This function should return lv/lv_n with shape [B, 512, D]
+        # and m/m_n with shape [B, 512] and dtype torch.bool
+        debug(f"[Prepare Inputs] BEFORE PADDING - lv mean: {lv.mean():.4f}, std: {lv.std():.4f}")                          
         lv, m = crop_or_pad_yield_mask(lv, 512)
-        
-        if is_debug_enabled():
-            debug(f"[Prepare Inputs] AFTER PADDING - lv mean: {lv.mean():.4f}, std: {lv.std():.4f}")
-            debug(f"[Prepare Inputs] BEFORE PADDING - lv_n mean: {lv_n.mean():.4f}, std: {lv_n.std():.4f}")
-            
+        debug(f"[Prepare Inputs] AFTER PADDING - lv mean: {lv.mean():.4f}, std: {lv.std():.4f}") # Check if padding affects stats
+        debug(f"[Prepare Inputs] BEFORE PADDING - lv_n mean: {lv_n.mean():.4f}, std: {lv_n.std():.4f}")
         lv_n, m_n = crop_or_pad_yield_mask(lv_n, 512)
+        debug(f"[Prepare Inputs] AFTER PADDING - lv_n mean: {lv_n.mean():.4f}, std: {lv_n.std():.4f}") # Check if padding affects stats
         
-        if is_debug_enabled():
-            debug(f"[Prepare Inputs] AFTER PADDING - lv_n mean: {lv_n.mean():.4f}, std: {lv_n.std():.4f}")
-            debug(f"After crop_or_pad - lv: {lv.shape} ({lv.dtype}), m: {m.shape} ({m.dtype})")
-            log_tensor_stats("lv", lv)
-            log_tensor_stats("cp", cp)
-            log_tensor_stats("lv_n", lv_n)
-            log_tensor_stats("cp_n", cp_n)
-            
+        debug(f"After crop_or_pad - lv: {lv.shape} ({lv.dtype}), m: {m.shape} ({m.dtype})")
+        debug(f"lv mean: {lv.mean():.4f}, std: {lv.std():.4f}, isfinite: {torch.isfinite(lv).all()}")
+        debug(f"cp mean: {cp.mean():.4f}, std: {cp.std():.4f}, isfinite: {torch.isfinite(cp).all()}")
+        debug(f"lv_n mean: {lv_n.mean():.4f}, std: {lv_n.std():.4f}, isfinite: {torch.isfinite(lv_n).all()}")
+        debug(f"cp_n mean: {cp_n.mean():.4f}, std: {cp_n.std():.4f}, isfinite: {torch.isfinite(cp_n).all()}")
+        
         # --- Apply Weights ---
         if llm_weight != 1.0:
             lv = lv * llm_weight
@@ -202,7 +188,7 @@ class VideoGenerator:
             input_tensor = apply_gaussian_blur(input_tensor, gaussian_blur_amount)
             
         return input_np, input_tensor, lv, cp, lv_n, cp_n, m, m_n, h, w
-        
+    
     def cleanup_temp_files(self, job_id, keep_final=True, final_output_path=None):
         """Clean up temporary files created during generation"""
         import glob
@@ -215,24 +201,18 @@ class VideoGenerator:
         
         for f in preview_files:
             if os.path.exists(f):
-                try: 
-                    os.remove(f)
-                    debug(f"[CLEANUP] Removed preview: {f}")
-                except Exception as e: 
-                    debug(f"[CLEANUP] Failed to remove {f}: {e}")
-                    
+                try: os.remove(f); debug(f"[CLEANUP] Removed preview: {f}")
+                except Exception as e: debug(f"[CLEANUP] Failed to remove {f}: {e}")
+                
         temp_files = compat_files + [filelist]
         if not keep_final or final_output_path != extension_file:
             temp_files.append(extension_file)
             
         for f in temp_files:
             if os.path.exists(f):
-                try: 
-                    os.remove(f)
-                    debug(f"[CLEANUP] Removed temp file: {f}")
-                except Exception as e: 
-                    debug(f"[CLEANUP] Failed to remove {f}: {e}")
-                    
+                try: os.remove(f); debug(f"[CLEANUP] Removed temp file: {f}")
+                except Exception as e: debug(f"[CLEANUP] Failed to remove {f}: {e}")
+        
         debug(f"[CLEANUP] Completed cleanup for job {job_id}")
         
     @torch.no_grad()
@@ -269,8 +249,8 @@ class VideoGenerator:
         llm_weight = config.get('llm_weight', 1.0)
         clip_weight = config.get('clip_weight', 1.0)
         trim_percentage = config.get('trim_percentage', 0.2)  # Default to 0.2 if not provided
-        
         job_id = generate_timestamp()
+        
         debug(f"[Generator] Received prompt: '{prompt}'")
         debug(f"[Generator] Received negative prompt: '{n_prompt}'")
         debug(f"generate_video(): started {mode}, job_id: {job_id}")
@@ -282,6 +262,7 @@ class VideoGenerator:
         timings = {"latent_encoding": 0, "step_times": [], "generation_time": 0, "vae_decode_time": 0, "total_time": 0}
         
         # Calculate sections based on calculated seconds/frames
+        # NOTE: Assuming adv_seconds/selected_frames are correctly calculated in ui.callbacks.process
         use_adv = True # Always use "advanced" calculations now
         if use_adv:
             latent_window_size = adv_window
@@ -318,35 +299,30 @@ class VideoGenerator:
                     anchor_np = s_np
                 else:
                     anchor_np = np.ones((height, width, 3), dtype=np.uint8) * 128 # Gray
-                
+                    
                 end_np = resize_and_center_crop(end_frame, width, height)
                 
                 # --- Memory: Offload ---
-                if not self.model_manager.high_vram: 
-                    unload_complete_models(
-                        self.model_manager.text_encoder, self.model_manager.text_encoder_2,
-                        self.model_manager.image_encoder, self.model_manager.vae, self.model_manager.transformer
-                    )
+                if not self.model_manager.high_vram: unload_complete_models(
+                    self.model_manager.text_encoder, self.model_manager.text_encoder_2,
+                    self.model_manager.image_encoder, self.model_manager.vae, self.model_manager.transformer
+                )
                 
                 # --- VAE Encode Start/End ---
-                if not self.model_manager.high_vram: 
-                    load_model_as_complete(self.model_manager.vae, gpu)
-                
+                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.vae, gpu)
                 t_vae_start = time.time()
                 anchor_tensor = (torch.from_numpy(anchor_np).float()/127.5 - 1.0).permute(2,0,1)[None,:,None]
                 start_latent = vae_encode(anchor_tensor, self.model_manager.vae)
                 end_tensor = (torch.from_numpy(end_np).float()/127.5 - 1.0).permute(2,0,1)[None,:,None]
                 end_latent = vae_encode(end_tensor, self.model_manager.vae)
                 timings["latent_encoding"] += time.time() - t_vae_start
-                
-                if not self.model_manager.high_vram: 
-                    unload_complete_models(self.model_manager.vae)
+                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.vae)
                 
                 # --- Text Encoding ---
                 if not self.model_manager.high_vram:
                     fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
                     load_model_as_complete(self.model_manager.text_encoder_2, gpu)
-                
+                    
                 lv, cp = encode_prompt_conds(
                     prompt, self.model_manager.text_encoder, self.model_manager.text_encoder_2,
                     self.model_manager.tokenizer, self.model_manager.tokenizer_2
@@ -360,12 +336,10 @@ class VideoGenerator:
                 lv, m = crop_or_pad_yield_mask(lv, 512)
                 lv_n, m_n = crop_or_pad_yield_mask(lv_n, 512)
                 
-                if not self.model_manager.high_vram: 
-                    unload_complete_models(self.model_manager.text_encoder, self.model_manager.text_encoder_2)
+                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.text_encoder, self.model_manager.text_encoder_2)
                 
-                # --- CLIP Vision Encoding ---
-                if not self.model_manager.high_vram: 
-                    load_model_as_complete(self.model_manager.image_encoder, gpu)
+                 # --- CLIP Vision Encoding ---
+                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.image_encoder, gpu)
                 
                 end_clip = hf_clip_vision_encode(
                     end_np, self.model_manager.feature_extractor, self.model_manager.image_encoder
@@ -378,9 +352,8 @@ class VideoGenerator:
                     clip_output = (keyframe_weight * start_clip + (1.0 - keyframe_weight) * end_clip)
                 else:
                     clip_output = end_clip
-                
-                if not self.model_manager.high_vram: 
-                    unload_complete_models(self.model_manager.image_encoder)
+                    
+                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.image_encoder)
                 
             elif mode == "text2video":
                 width, height = self.get_dims_from_aspect(aspect, custom_w, custom_h)
@@ -389,38 +362,29 @@ class VideoGenerator:
                 if init_color:
                     r, g, b = self.parse_hex_color(init_color)
                     anchor_np = np.zeros((height, width, 3), dtype=np.uint8)
-                    anchor_np[:, :, 0] = int(r * 255)
-                    anchor_np[:, :, 1] = int(g * 255)
-                    anchor_np[:, :, 2] = int(b * 255)
+                    anchor_np[:, :, 0] = int(r * 255); anchor_np[:, :, 1] = int(g * 255); anchor_np[:, :, 2] = int(b * 255)
                 else:
                     anchor_np = np.zeros((height, width, 3), dtype=np.uint8) # Black
-                
+                    
                 # --- Prepare inputs using common function ---
+                # ensure prepare_inputs correctly calls encode_prompt_conds with all managers
                 _, input_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = self.prepare_inputs(
                     anchor_np, prompt, n_prompt, cfg, gaussian_blur_amount, llm_weight, clip_weight
                 )
                 
                 # --- VAE Encode ---
-                if not self.model_manager.high_vram: 
-                    load_model_as_complete(self.model_manager.vae, gpu)
-                
+                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.vae, gpu)
                 t_vae_start = time.time()
                 start_latent = vae_encode(input_tensor, self.model_manager.vae)
                 timings["latent_encoding"] += time.time() - t_vae_start
-                
-                if not self.model_manager.high_vram: 
-                    unload_complete_models(self.model_manager.vae)
+                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.vae)
                 
                 # --- CLIP Vision (Encode the blank/color frame) ---
-                if not self.model_manager.high_vram: 
-                    load_model_as_complete(self.model_manager.image_encoder, gpu)
-                
+                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.image_encoder, gpu)
                 clip_output = hf_clip_vision_encode(
                     anchor_np, self.model_manager.feature_extractor, self.model_manager.image_encoder
                 ).last_hidden_state
-                
-                if not self.model_manager.high_vram: 
-                    unload_complete_models(self.model_manager.image_encoder)
+                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.image_encoder)
                 
             elif mode == "image2video" or original_mode == "video_extension": # Includes redirected extension
                 if input_image is None: raise ValueError("Image input required for image2video/video_extension")
@@ -432,35 +396,21 @@ class VideoGenerator:
                 )
                 
                 # --- VAE Encode ---
-                if self.stream: 
-                    self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE encoding ...'))))
-                
-                if not self.model_manager.high_vram: 
-                    load_model_as_complete(self.model_manager.vae, gpu)
-                
+                if self.stream: self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE encoding ...'))))
+                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.vae, gpu)
                 t_vae_start = time.time()
                 start_latent = vae_encode(input_tensor, self.model_manager.vae)
                 timings["latent_encoding"] += time.time() - t_vae_start
-                
-                if not self.model_manager.high_vram: 
-                    unload_complete_models(self.model_manager.vae)
-                
+                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.vae)
                 debug("VAE encoded")
                 
                 # --- CLIP Vision ---
-                if self.stream: 
-                    self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
-                
-                if not self.model_manager.high_vram: 
-                    load_model_as_complete(self.model_manager.image_encoder, gpu)
-                
+                if self.stream: self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
+                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.image_encoder, gpu)
                 clip_output = hf_clip_vision_encode(
                     inp_np, self.model_manager.feature_extractor, self.model_manager.image_encoder
                 ).last_hidden_state
-                
-                if not self.model_manager.high_vram: 
-                    unload_complete_models(self.model_manager.image_encoder)
-                
+                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.image_encoder)
                 debug("CLIP Vision encoded")
                 
             # ============ Dtype Conversion ============
@@ -470,13 +420,12 @@ class VideoGenerator:
             if cp is not None: cp = cp.to(target_dtype)
             if cp_n is not None: cp_n = cp_n.to(target_dtype)
             if clip_output is not None: clip_output = clip_output.to(target_dtype)
+            # Masks (m, m_n) should be torch.bool and shape [B, 512], NO dtype conversion needed.
             
-            if is_debug_enabled():
-                debug(f"Final Dtypes - lv: {lv.dtype}, cp: {cp.dtype}, m: {m.dtype if m is not None else 'None'}, clip: {clip_output.dtype if clip_output is not None else 'None'}")
+            debug(f"Final Dtypes - lv: {lv.dtype}, cp: {cp.dtype}, m: {m.dtype if m is not None else 'None'}, clip: {clip_output.dtype if clip_output is not None else 'None'}")
             
             # ============ Sampling Setup ============
-            if self.stream: 
-                self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Start sampling ...'))))
+            if self.stream: self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Start sampling ...'))))
             
             rnd = torch.Generator("cpu").manual_seed(seed)
             history_latents = torch.zeros((1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32).cpu()
@@ -491,13 +440,8 @@ class VideoGenerator:
                 is_first_iteration = (section == total_sections - 1)
                 debug(f'Section {section}/{total_sections-1}, padding={latent_padding_size}, last={is_last_section}, first={is_first_iteration}')
                 
-                if self.stream and self.stream.input_queue.top() == 'graceful_end': 
-                    graceful_stop = True
-                    debug("Graceful stop requested.")
-                
-                if graceful_stop and not is_last_section: 
-                    debug("Stopping before next section.")
-                    break # Allow last section to finish
+                if self.stream and self.stream.input_queue.top() == 'graceful_end': graceful_stop = True; debug("Graceful stop requested.")
+                if graceful_stop and not is_last_section: debug("Stopping before next section."); break # Allow last section to finish
                 
                 # --- Prepare Indices and Clean Latents ---
                 split_sizes = [1, latent_padding_size, latent_window_size, 1, 2, 16]
@@ -517,9 +461,7 @@ class VideoGenerator:
                 # --- Mask Fallback (Correct Shape/Dtype) ---
                 current_m = m if m is not None else torch.ones((lv.shape[0], lv.shape[1]), dtype=torch.bool, device=lv.device)
                 current_m_n = m_n if m_n is not None else torch.ones((lv_n.shape[0], lv_n.shape[1]), dtype=torch.bool, device=lv_n.device)
-                
-                if is_debug_enabled():
-                    debug(f"Loop {section} - Using mask m: {current_m.shape} ({current_m.dtype})")
+                debug(f"Loop {section} - Using mask m: {current_m.shape} ({current_m.dtype})")
                 
                 # --- Memory: Load Transformer ---
                 if not self.model_manager.high_vram:
@@ -544,7 +486,6 @@ class VideoGenerator:
                         debug("callback: received 'end', stopping generation.")
                         self.stream.output_queue.push(('end', None))
                         raise KeyboardInterrupt('User ends the task.')
-                        
                     if self.stream and self.stream.input_queue.top() == 'graceful_end':
                         debug("callback: received 'graceful_end', will stop after current section.")
                         graceful_stop = True
@@ -576,6 +517,7 @@ class VideoGenerator:
                     # Frame count
                     actual_pixel_frames = history_pixels.shape[2] if history_pixels is not None else 0
                     actual_seconds = actual_pixel_frames / 30.0
+                    
                     hint = f'Section {sections_completed+1}/{total_sections} - Step {current_step}/{steps}'
                     desc = f'Pixel frames generated: {actual_pixel_frames}, Length: {actual_seconds:.2f}s (FPS-30)'
                     
@@ -600,27 +542,25 @@ class VideoGenerator:
                     </div>
                     """
                     
-                    if is_debug_enabled():
-                        debug(f"In callback, section: {section_percentage}%, overall: {overall_percentage}%")
-                        
+                    debug(f"In callback, section: {section_percentage}%, overall: {overall_percentage}%")
                     if self.stream:
                         self.stream.output_queue.push(('progress', (preview, desc, progress_html)))
                 
-                # Run sampling based on mode
-                if is_debug_enabled():
-                    debug(f"Loop {section} - Calling sample_hunyuan...")
-                    log_tensor_stats("  prompt_embeds=lv", lv)
-                    debug(f"  prompt_embeds_mask=current_m: {current_m.shape} ({current_m.dtype})")
-                    log_tensor_stats("  prompt_poolers=cp", cp)
-                    log_tensor_stats("  neg_prompt_embeds=lv_n", lv_n)
-                    debug(f"  neg_prompt_embeds_mask=current_m_n: {current_m_n.shape} ({current_m_n.dtype})")
-                    log_tensor_stats("  neg_prompt_poolers=cp_n", cp_n)
-                    if clip_output is not None:
-                        log_tensor_stats("  image_embeddings=clip_output", clip_output)
-                    else:
-                        debug(f"  image_embeddings=clip_output: None")
-                    debug(f"  CFG scales: cfg={cfg}, gs={gs}, rs={rs}")
+                # DEBUG PROMPT HANDLING
+                debug(f"Loop {section} - Calling sample_hunyuan...")
+                debug(f"  prompt_embeds=lv: {lv.shape} ({lv.dtype}), mean: {lv.mean():.4f}")
+                debug(f"  prompt_embeds_mask=current_m: {current_m.shape} ({current_m.dtype})")
+                debug(f"  prompt_poolers=cp: {cp.shape} ({cp.dtype}), mean: {cp.mean():.4f}")
+                debug(f"  neg_prompt_embeds=lv_n: {lv_n.shape} ({lv_n.dtype}), mean: {lv_n.mean():.4f}")
+                debug(f"  neg_prompt_embeds_mask=current_m_n: {current_m_n.shape} ({current_m_n.dtype})")
+                debug(f"  neg_prompt_poolers=cp_n: {cp_n.shape} ({cp_n.dtype}), mean: {cp_n.mean():.4f}")
+                if clip_output is not None:
+                    debug(f"  image_embeddings=clip_output: {clip_output.shape} ({clip_output.dtype}), mean: {clip_output.mean():.4f}")
+                else:
+                    debug(f"  image_embeddings=clip_output: None")
+                debug(f"  CFG scales: cfg={cfg}, gs={gs}, rs={rs}")
                 
+                # Run sampling based on mode
                 if mode == "keyframes":
                     generated_latents = sample_hunyuan(
                         transformer=self.model_manager.transformer,
@@ -681,7 +621,7 @@ class VideoGenerator:
                         clean_latent_4x_indices=clean_latent_4x_indices,
                         callback=callback
                     )
-                    
+                
                 # Handle last section specially
                 if is_last_section:
                     generated_latents = torch.cat([start_latent.to(generated_latents.device, dtype=generated_latents.dtype), generated_latents], dim=2)
@@ -689,10 +629,8 @@ class VideoGenerator:
                     
                 # Update history latents
                 history_latents = torch.cat([generated_latents.to(history_latents.device, dtype=history_latents.dtype), history_latents], dim=2)
+                debug(f"history_latents.shape after concat: {history_latents.shape}")
                 
-                if is_debug_enabled():
-                    debug(f"history_latents.shape after concat: {history_latents.shape}")
-                    
                 # VAE Decoding Section - CRITICAL ROTARY DECODER
                 if not self.model_manager.high_vram:
                     offload_model_from_device_for_memory_preservation(
@@ -709,40 +647,28 @@ class VideoGenerator:
                 
                 # Calculate theoretical max overlap frames
                 max_overlapped_frames = latent_window_size * 4 - 3
-                if is_debug_enabled():
-                    debug(f"Theoretical max overlapped_frames={max_overlapped_frames}")
-                    
+                debug(f"Theoretical max overlapped_frames={max_overlapped_frames}")
+                
                 try:
                     # Decode the newly generated latents in chunks - CRITICAL LOGIC
                     t_vae_start = time.time()
-                    
-                    if is_debug_enabled():
-                        debug(f"Decoding generated_latents with shape: {generated_latents.shape}")
-                        
+                    debug(f"Decoding generated_latents with shape: {generated_latents.shape}")
                     chunk_size = 4  # Small enough to avoid OOM
                     current_pixels_chunks = []
-                    
                     for i in range(0, generated_latents.shape[2], chunk_size):
                         end_idx = min(i + chunk_size, generated_latents.shape[2])
-                        
-                        if is_debug_enabled():
-                            debug(f"Decoding chunk {i}:{end_idx} of {generated_latents.shape[2]}")
-                            
+                        debug(f"Decoding chunk {i}:{end_idx} of {generated_latents.shape[2]}")
                         # Move chunk to GPU, decode, then immediately move result to CPU
                         chunk = generated_latents[:, :, i:end_idx].to(self.model_manager.vae.device, dtype=self.model_manager.vae.dtype)
                         chunk_pixels = vae_decode(chunk, self.model_manager.vae).cpu()
                         current_pixels_chunks.append(chunk_pixels)
-                        
                         # Force cleanup of chunk tensors
                         del chunk, chunk_pixels
                         torch.cuda.empty_cache()
                         
                     # Combine all chunks on CPU
                     current_pixels = torch.cat(current_pixels_chunks, dim=2)
-                    
-                    if is_debug_enabled():
-                        debug(f"Successfully decoded in chunks: final shape {current_pixels.shape}")
-                        
+                    debug(f"Successfully decoded in chunks: final shape {current_pixels.shape}")
                     del current_pixels_chunks
                     torch.cuda.empty_cache()
                     
@@ -758,16 +684,15 @@ class VideoGenerator:
                         # Important: simple concatenation to avoid blending issues
                         history_pixels = torch.cat([current_pixels, history_pixels], dim=2)
                         debug(f"Concatenated new frames without blending. New history shape: {history_pixels.shape}")
-                        
+                    
                     # Save preview video
                     preview_filename = os.path.join(self.output_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
                     try:
-                        save_bcthw_as_mp4(history_pixels, preview_filename, fps=30)
+                        save_bcthw_as_mp4(history_pixels, preview_filename, fps=30, quiet=True)  # Added quiet parameter
                         debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
                         if self.stream:
                             self.stream.output_queue.push(('preview_video', preview_filename))
-                            if is_debug_enabled():
-                                debug(f"[QUEUE] Queued preview_video event: {preview_filename}")
+                            debug(f"[QUEUE] Queued preview_video event: {preview_filename}")
                     except Exception as e:
                         debug(f"[ERROR] Failed to save preview video: {e}")
                         
@@ -779,7 +704,7 @@ class VideoGenerator:
                     debug(f"Error during VAE decoding: {str(e)}")
                     debug(traceback.format_exc())
                     raise
-                    
+                
                 # Check if we should gracefully stop after this section
                 if graceful_stop:
                     debug("graceful stop requested, ending generation after completing section.")
@@ -790,27 +715,29 @@ class VideoGenerator:
             if original_mode == "video_extension" and input_video is not None and 'history_pixels' in locals() and history_pixels is not None:
                 # Save the generated extension
                 extension_filename = os.path.join(self.output_folder, f'{job_id}_extension.mp4')
-                save_bcthw_as_mp4(history_pixels, extension_filename, fps=30)
+                save_bcthw_as_mp4(history_pixels, extension_filename, fps=30, quiet=True)  # Added quiet parameter
                 debug(f"[FILE] Extension video saved as {extension_filename}")
                 
                 # Now combine with the original video
                 combined_filename = os.path.join(self.output_folder, f'{job_id}_combined.mp4')
                 try:
-                    import subprocess
                     if extension_direction == "Backward":
                         debug(f"[FFMPEG] Processing for backward extension - need to apply trim to extension")
                         # Create a trimmed version of the extension with trim_percentage applied
                         trim_ext = os.path.join(self.output_folder, f'{job_id}_ext_trimmed.mp4')
                         # Calculate the number of frames to keep (trim from start)
                         trim_seconds = trim_percentage * 5.0  # Approximate trim in seconds (assuming ~30fps and usual length)
+                        
+                        # Use quiet ffmpeg
                         trim_cmd = [
-                            "ffmpeg", "-y",
+                            "ffmpeg", "-y", "-loglevel", "error",
                             "-i", extension_filename,
                             "-ss", str(trim_seconds),  # Start time offset to skip initial frames
                             "-c:v", "libx264", "-pix_fmt", "yuv420p",
                             "-vsync", "cfr", "-r", "30",
                             trim_ext
                         ]
+                        
                         try:
                             subprocess.run(trim_cmd, check=True, capture_output=True)
                             debug(f"[FFMPEG] Successfully created trimmed extension for backward mode")
@@ -825,28 +752,30 @@ class VideoGenerator:
                     temp_ext = os.path.join(self.output_folder, f'{job_id}_ext_compat.mp4')
                     temp_orig = os.path.join(self.output_folder, f'{job_id}_orig_compat.mp4')
                     
-                    # Convert extension to compatible format
+                    # Convert extension to compatible format (quiet mode)
                     convert_cmd = [
-                        "ffmpeg", "-y",
+                        "ffmpeg", "-y", "-loglevel", "error",
                         "-i", extension_filename,
                         "-c:v", "libx264", "-pix_fmt", "yuv420p",
                         "-vsync", "cfr", "-r", "30",
                         temp_ext
                     ]
+                    
                     try:
                         subprocess.run(convert_cmd, check=True, capture_output=True)
                     except subprocess.CalledProcessError as e:
                         debug(f"[FFMPEG] Extension conversion failed: {e}")
                         temp_ext = extension_filename
                         
-                    # Convert original video to compatible format
+                    # Convert original video to compatible format (quiet mode)
                     convert_cmd = [
-                        "ffmpeg", "-y",
+                        "ffmpeg", "-y", "-loglevel", "error",
                         "-i", input_video,
                         "-c:v", "libx264", "-pix_fmt", "yuv420p",
                         "-vsync", "cfr", "-r", "30",
                         temp_orig
                     ]
+                    
                     try:
                         subprocess.run(convert_cmd, check=True, capture_output=True)
                     except subprocess.CalledProcessError as e:
@@ -863,15 +792,16 @@ class VideoGenerator:
                             f.write(f"file '{os.path.abspath(temp_ext)}'\n")
                             f.write(f"file '{os.path.abspath(temp_orig)}'\n")
                             
-                    # Run concat
+                    # Run concat (quiet mode)
                     concat_cmd = [
-                        "ffmpeg", "-y",
+                        "ffmpeg", "-y", "-loglevel", "error",
                         "-f", "concat",
                         "-safe", "0",
                         "-i", filelist_path,
                         "-c", "copy",
                         combined_filename
                     ]
+                    
                     result = subprocess.run(concat_cmd, capture_output=True)
                     if result.returncode != 0:
                         debug(f"[FFMPEG] Concat failed: {result.stderr.decode() if result.stderr else 'Unknown error'}")
@@ -879,7 +809,7 @@ class VideoGenerator:
                         output_filename = extension_filename
                     else:
                         debug(f"[FFMPEG] Concat succeeded!")
-                        make_mp4_faststart(combined_filename)
+                        make_mp4_faststart(combined_filename, quiet=True)  # Added quiet parameter
                         output_filename = combined_filename
                         
                     # Clean up temp files
@@ -899,7 +829,6 @@ class VideoGenerator:
             # Final export logic (text2video special handling)
             elif mode == "text2video":
                 N_actual = history_pixels.shape[2]
-                
                 # Special case: single image
                 if latent_window_size <= 2 and total_sections <= 1 and total_frames <= 8:
                     debug("txt2img branch: pulling last frame, skipping video trim (window=2, adv=0.1)")
@@ -1010,19 +939,19 @@ class VideoGenerator:
                 # Handle the extension case first
                 if original_mode == "video_extension" and 'combined_filename' in locals() and os.path.exists(combined_filename):
                     debug(f"[FILE] Using pre-combined video file for video_extension mode: {combined_filename}")
-                    fix_video_compatibility(combined_filename, fps=30)
+                    fix_video_compatibility(combined_filename, fps=30, quiet=True)  # Added quiet parameter
                     if self.stream:
                         self.stream.output_queue.push(('file', combined_filename))
                     self.cleanup_temp_files(job_id, keep_final=True, final_output_path=combined_filename)
                     return combined_filename
-                    
+                
                 # Standard video export
                 elif not image_likely_saved:
                     debug(f"[FILE] Attempting to save final video to {output_filename}")
                     try:
-                        save_bcthw_as_mp4(history_pixels, output_filename, fps=30)
+                        save_bcthw_as_mp4(history_pixels, output_filename, fps=30, quiet=True)  # Added quiet parameter
                         debug(f"[FILE] Video successfully saved to {output_filename}: {os.path.exists(output_filename)}")
-                        fix_video_compatibility(output_filename, fps=30)
+                        fix_video_compatibility(output_filename, fps=30, quiet=True)  # Added quiet parameter
                         if self.stream:
                             self.stream.output_queue.push(('file', output_filename))
                         self.cleanup_temp_files(job_id, keep_final=True, final_output_path=output_filename)
@@ -1077,6 +1006,7 @@ class VideoGenerator:
         finally:
             debug("in finally block, writing final summary/progress/end")
             t_end = time.time()
+            
             # Use final state of history_pixels for summary
             if 'history_pixels' in locals() and history_pixels is not None:
                 # Account for trimming possibly reducing frames before final save
