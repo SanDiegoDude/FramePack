@@ -389,6 +389,7 @@ def process(
                     gr.update(value="", visible=False),             # progress_bar
                     gr.update(interactive=True),
                     gr.update(interactive=False),
+                    gr.update(interactive=False),
                     gr.update(),                    # seed
                     gr.update(),                    # first_frame
                     gr.update(),                    # last_frame
