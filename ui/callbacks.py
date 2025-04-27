@@ -233,8 +233,8 @@ def process(
                 gr.update(interactive=False),           # end_graceful_button (replaces end_button)
                 gr.update(interactive=False),           # force_stop_button (new)
                 gr.update(),
-                gr.update(value=first_frame_img, visible=True), 
-                gr.update(value=last_frame_img, visible=True),
+                gr.update(value=first_frame_img, visible=True, elem_classes="show-thumbnail"),
+                gr.update(value=last_frame_img, visible=True, elem_classes="show-thumbnail"),
                 gr.update(visible=True),
                 gr.update(visible=False),
                 gr.update(visible=True, value=f"""
