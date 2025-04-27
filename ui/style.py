@@ -54,10 +54,11 @@ def get_css():
     .end-button-warning, .end-button-force {
         display: none !important;
     }
-    /* Frame Thumbnails - FIXED with togglable visibility */
+    
+    /* Frame Thumbnails - FIXED with constrained height */
     .frame-thumbnail {
         width: 100% !important;
-        height: 256px !important;
+        height: 340px !important; /* Exactly 340px height */
         overflow: hidden !important;
         margin-bottom: 10px !important;
         display: none !important; /* Hidden by default */
@@ -69,27 +70,54 @@ def get_css():
     .frame-thumbnail img {
         width: 100% !important;
         height: 100% !important;
+        object-fit: contain !important; /* Maintain aspect ratio */
+        margin: 0 auto !important;
+    }
+    
+    /* Input Image Container - constrained to 340px */
+    .input-image-container, .keyframe-image-container {
+        height: 340px !important;
+        overflow: hidden !important;
+    }
+    
+    .input-image-container img, .keyframe-image-container img {
+        width: 100% !important;
+        height: 100% !important;
         object-fit: contain !important;
         margin: 0 auto !important;
     }
-    /* Image and Video Container Styling */
-    .input-image-container img {
-        max-height: 512px !important;
-        width: 100% !important; /* Set to 100% to fill container */
-        object-fit: contain !important;
+    
+    /* Result Container - constrained to 512px */
+    .result-container {
+        height: 512px !important;
+        overflow: hidden !important;
     }
-    .keyframe-image-container img {
-        max-height: 320px !important;
-        width: 100% !important; /* Set to 100% to fill container */
-        object-fit: contain !important;
-    }
+    
     .result-container img, .result-container video {
-        max-height: 512px !important;
-        width: 100% !important; /* Set to 100% to fill container width */
+        width: 100% !important;
+        height: 100% !important;
         object-fit: contain !important;
         margin: 0 auto !important;
         display: block !important;
     }
+    
+    /* Video Container - constrained to 512px with 85% scale */
+    .video-container {
+        position: relative;
+        height: 512px !important;
+        overflow: hidden !important;
+        margin-bottom: 20px;
+    }
+    
+    .video-container video {
+        width: 85% !important; /* Scaled to 85% to avoid overlaps */
+        height: auto !important;
+        max-height: 85% !important;
+        object-fit: contain !important;
+        margin: 0 auto !important;
+        display: block !important;
+    }
+    
     /* Progress Bar Styling */
     .dual-progress-container {
         background: #222;
@@ -133,19 +161,7 @@ def get_css():
     .stats-box td:first-child {
         width: 40%;
     }
-    /* Video Container - Fix for upload video */
-    .video-container {
-        position: relative;
-        max-height: 400px;
-        overflow: hidden !important;
-        margin-bottom: 20px;
-    }
-    .video-container video {
-        width: 100% !important;
-        height: auto !important;
-        object-fit: contain !important;
-        margin: 0 auto !important;
-    }
+    
     /* Better formatting for generation stats */
     #generation_stats {
         margin-top: 20px;
@@ -163,16 +179,13 @@ def get_css():
         display: none !important;
     }
     
+    /* Fix for trim controls - add extra padding when trim is visible */
+    .video-container.editing {
+        padding-bottom: 180px !important;
+    }
+    
     <script>
     function detectVideoTrimmingUI() {
-        const style = `
-            <style>
-                .video-container.editing {
-                    padding-bottom: 180px !important;
-                }
-            </style>
-        `;
-        document.head.insertAdjacentHTML('beforeend', style);
         // Monitor for trim UI appearance
         setInterval(function() {
             const videoContainers = document.querySelectorAll('.video-container');
@@ -182,18 +195,6 @@ def get_css():
                     container.classList.add('editing');
                 } else {
                     container.classList.remove('editing');
-                }
-            });
-        }, 500);
-        
-        // Fix for frame thumbnails visibility
-        setInterval(function() {
-            document.querySelectorAll('.frame-thumbnail').forEach(thumb => {
-                // Check if it has an image inside
-                if (thumb.querySelector('img') || thumb.querySelector('video')) {
-                    thumb.classList.add('has-content');
-                } else {
-                    thumb.classList.remove('has-content');
                 }
             });
         }, 500);
