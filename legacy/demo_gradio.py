@@ -238,6 +238,28 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
                 return
 
+
+
+            print("--- DEBUG: simple_gradio_demo ---")
+            print(f"llama_vec shape: {llama_vec.shape}, dtype: {llama_vec.dtype}")
+            if llama_attention_mask is not None:
+                print(f"llama_attention_mask shape: {llama_attention_mask.shape}, dtype: {llama_attention_mask.dtype}")
+            else:
+                print("llama_attention_mask is None")
+            print(f"clip_l_pooler shape: {clip_l_pooler.shape}, dtype: {clip_l_pooler.dtype}")
+            if image_encoder_last_hidden_state is not None:
+                 print(f"image_encoder_last_hidden_state shape: {image_encoder_last_hidden_state.shape}, dtype: {image_encoder_last_hidden_state.dtype}")
+            else:
+                 print("image_encoder_last_hidden_state is None")
+            print(f"clean_latents shape: {clean_latents.shape}, dtype: {clean_latents.dtype}")
+            print(f"clean_latents_2x shape: {clean_latents_2x.shape}, dtype: {clean_latents_2x.dtype}")
+            print(f"clean_latents_4x shape: {clean_latents_4x.shape}, dtype: {clean_latents_4x.dtype}")
+            print("--- END DEBUG: simple_gradio_demo ---")
+
+           
+
+
+            
             generated_latents = sample_hunyuan(
                 transformer=transformer,
                 sampler='unipc',
