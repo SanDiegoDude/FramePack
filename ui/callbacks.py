@@ -400,6 +400,13 @@ def force_immediate_stop():
     # Return updates for both buttons
     return gr.update(interactive=False), gr.update(interactive=False)
 
+def end_process():
+    """Compatibility function that redirects to force_immediate_stop"""
+    global stream
+    if stream:
+        stream.input_queue.push('end')
+    return gr.update(value="Force Stop", variant="stop")
+
 # function to handle extension direction changes for video_extension mode
 def toggle_init_color_for_backward(extension_direction, mode):
     """Show color picker when Backward is selected in video_extension mode"""
