@@ -67,18 +67,19 @@ def create_interface(model_manager, video_generator):
                                    elem_classes="keyframe-image-container", visible=False)
                 
                 # Wrap the video in a custom div for scrolling
-                with gr.Group(visible=False, elem_classes="video-container-wrapper") as video_extension_options:
+                with gr.Group(visible=False) as video_container:
                     input_video = gr.Video(
                         label="Upload Video to Extend",
                         format="mp4",
-                        height=320,
                         elem_classes="video-container",
                         include_audio=False,
                         interactive=True,
                         show_share_button=False,
                         show_download_button=True
                     )
-                    
+                
+                # Then, controls in a separate group below
+                with gr.Group(visible=False) as video_extension_controls:
                     extension_direction = gr.Radio(
                         ["Forward", "Backward"],
                         label="Extension Direction",
