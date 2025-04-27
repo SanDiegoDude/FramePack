@@ -113,27 +113,25 @@ def get_css():
         width: 40%;
     }
     
-    /* Create a scrollable container for the video component */
-    .video-container-wrapper {
-        max-height: 400px;           /* Fixed height for container */
-        overflow-y: auto;            /* Enable vertical scrolling */
-        overflow-x: hidden;          /* Prevent horizontal scrolling */
-        padding-bottom: 20px;        /* Space at bottom */
-        margin-bottom: 20px;         /* Space below container */
-        position: relative;          /* Establish position context */
-        border: 1px solid #444;      /* Light border to see the container */
-        border-radius: 8px;          /* Rounded corners */
-    }
-    
-    /* Keep video on top within the scrollable area */
+    /* Video container styling */
     .video-container {
-        position: relative !important;
-        z-index: 10000 !important;   /* Extremely high z-index */
+        position: relative;
+        max-height: 400px;           /* Fixed height container */
+        overflow-y: auto;            /* Allow vertical scrolling */
+        overflow-x: hidden;          /* Prevent horizontal scrolling */
+        margin-bottom: 20px;         /* Space below container */
+        padding-bottom: 150px;       /* Extra padding for trim interface */
     }
     
-    /* Special handling for when trim UI is active */
-    .video-container.editing {
-        padding-bottom: 180px;       /* Extra space when editing */
+    /* Make sure the video itself doesn't overflow horizontally */
+    .video-container video {
+        max-width: 100%;
+        object-fit: contain;
+    }
+    
+    /* Ensure trim controls stay with the video */
+    .video-container .video-wrap {
+        position: relative;
     }
     /* Better formatting for generation stats */
     #generation_stats {
