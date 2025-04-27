@@ -8,27 +8,24 @@ import torch
 import math
 from utils.common import debug
 
-def save_bcthw_as_mp4(tensor, filename, fps=30):
+def save_bcthw_as_mp4(tensor, filename, fps=30, quiet=False):
     """
     Save a tensor with shape [batch, channels, time, height, width] as an MP4 video file
-    
     Args:
         tensor: Tensor with shape [b,c,t,h,w]
         filename: Output filename
         fps: Frames per second
+        quiet: If True, suppress ffmpeg output
     """
     # Ensure output directory exists
     os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
-    
     try:
         import tempfile
         import shutil
-        
         # Create a temporary directory to store frames
         with tempfile.TemporaryDirectory() as tmpdir:
             # Extract dimensions
             b, c, t, h, w = tensor.shape
-            
             # Process each batch and time frame
             for bi in range(b):
                 # Process all frames in this batch
@@ -37,14 +34,20 @@ def save_bcthw_as_mp4(tensor, filename, fps=30):
                     frame = tensor[bi, :, ti]
                     frame = (frame.cpu().numpy().transpose(1, 2, 0) + 1) * 127.5
                     frame = np.clip(frame, 0, 255).astype(np.uint8)
-                    
                     # Save frame as an image file
                     frame_path = os.path.join(tmpdir, f"frame_{ti:05d}.png")
                     Image.fromarray(frame).save(frame_path)
             
             # Use ffmpeg to convert the frames to an MP4 video
             cmd = [
-                "ffmpeg", "-y",
+                "ffmpeg", "-y"
+            ]
+            
+            # Add quiet flag if requested
+            if quiet:
+                cmd.extend(["-loglevel", "error"])
+                
+            cmd.extend([
                 "-framerate", str(fps),
                 "-i", os.path.join(tmpdir, "frame_%05d.png"),
                 "-c:v", "libx264",
@@ -52,22 +55,22 @@ def save_bcthw_as_mp4(tensor, filename, fps=30):
                 "-crf", "23",  # Adjust quality (lower is better)
                 "-preset", "medium",  # Adjust speed/compression trade-off
                 filename
-            ]
+            ])
             
-            subprocess.run(cmd, check=True)
+            # Use capture_output to suppress console output if quiet
+            capture_output = quiet
+            subprocess.run(cmd, check=True, capture_output=capture_output)
             
             # Make the video compatible with QuickTime and Windows Media Player
-            fix_video_compatibility(filename, fps)
-            
+            fix_video_compatibility(filename, fps, quiet=quiet)
             return True
-    
     except Exception as e:
         debug(f"Error saving video: {e}")
         import traceback
         debug(traceback.format_exc())
         return False
 
-def fix_video_compatibility(video_path, fps=30):
+def fix_video_compatibility(video_path, fps=30, quiet=False):
     """Fix compatibility issues with MP4 videos for QuickTime and Windows Media Player."""
     if not os.path.exists(video_path):
         debug(f"[VIDEO FIX] Video not found: {video_path}")
@@ -78,7 +81,14 @@ def fix_video_compatibility(video_path, fps=30):
     
     # Use ffmpeg to convert with proper settings
     cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg", "-y"
+    ]
+    
+    # Add quiet flag if requested
+    if quiet:
+        cmd.extend(["-loglevel", "error"])
+        
+    cmd.extend([
         "-i", video_path,
         "-c:v", "libx264",           # Use H.264 codec
         "-pix_fmt", "yuv420p",       # Use widely supported pixel format
@@ -87,7 +97,7 @@ def fix_video_compatibility(video_path, fps=30):
         "-movflags", "+faststart",   # Enable faststart
         "-metadata", f"encoder=FeatureScope",
         temp_path
-    ]
+    ])
     
     try:
         debug(f"[VIDEO FIX] Running compatibility fix for {video_path}")
@@ -107,17 +117,14 @@ def fix_video_compatibility(video_path, fps=30):
         else:
             debug(f"[VIDEO FIX] Failed to create valid output file")
             return False
-    
     except subprocess.CalledProcessError as e:
         debug(f"[VIDEO FIX] FFMPEG error: {e}")
         stderr = e.stderr.decode('utf-8') if e.stderr else "Unknown error"
         debug(f"[VIDEO FIX] FFMPEG stderr: {stderr}")
         return False
-    
     except Exception as e:
         debug(f"[VIDEO FIX] Unexpected error: {e}")
         return False
-    
     finally:
         # Clean up temp file if it still exists
         if os.path.exists(temp_path):
@@ -133,7 +140,6 @@ def extract_video_frames(video_path, first_and_last=True):
         if not os.path.exists(video_path):
             debug(f"Video file not found: {video_path}")
             return None, None
-        
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             debug(f"Could not open video: {video_path}")
@@ -152,10 +158,9 @@ def extract_video_frames(video_path, first_and_last=True):
             last_frame = cv2.cvtColor(last, cv2.COLOR_BGR2RGB) if ret else None
         else:
             last_frame = None
-        
+            
         cap.release()
         return first_frame, last_frame
-    
     except Exception as e:
         debug(f"Error extracting video frames: {e}")
         return None, None
@@ -163,29 +168,25 @@ def extract_video_frames(video_path, first_and_last=True):
 def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resolution=640):
     """
     Extract frames from a video file with bucket resizing for memory efficiency.
-    
     Args:
         video_path: Path to the video file
         num_frames: Number of frames to extract
         from_end: If True, extract from the end of the video
         max_resolution: Maximum resolution for the extracted frames
-    
     Returns:
         tuple: (frames, fps, original_dimensions)
     """
     try:
         debug(f"Extracting frames from video: {video_path}, num_frames={num_frames}, from_end={from_end}")
-        
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise ValueError(f"Could not open video file: {video_path}")
-        
+            
         # Get video properties
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
         orig_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
         debug(f"Video properties: total_frames={total_frames}, fps={fps}, dimensions={orig_width}x{orig_height}")
         
         # Calculate bucket dimensions
@@ -198,42 +199,34 @@ def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resol
             frame_indices = list(range(start_idx, total_frames))
         else:
             frame_indices = list(range(min(num_frames, total_frames)))
-        
+            
         # Extract the frames
         frames = []
         current_frame = 0
-        
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
-            
             if current_frame in frame_indices:
                 # Convert BGR to RGB
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
                 # Resize to bucket dimensions
                 frame = resize_and_center_crop(frame, target_width=bucket_width, target_height=bucket_height)
-                
                 frames.append(frame)
-            
             current_frame += 1
-            
             # Break if we've extracted all needed frames
             if len(frames) == len(frame_indices):
                 break
-        
+                
         cap.release()
         
         if not frames:
             raise ValueError(f"Failed to extract frames from video: {video_path}")
-        
+            
         # Convert to numpy array
         frames = np.array(frames)
         debug(f"Extracted {len(frames)} frames with shape {frames.shape}")
-        
         return frames, fps, (orig_height, orig_width)
-    
     except Exception as e:
         debug(f"Error extracting frames from video: {e}")
         import traceback
@@ -243,13 +236,11 @@ def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resol
 def find_nearest_bucket(height, width, resolution=640, bucket_step=8):
     """
     Find the nearest bucket dimensions for a given height and width.
-    
     Args:
         height: Original height
         width: Original width
         resolution: Target resolution
         bucket_step: Step size for bucket dimensions
-    
     Returns:
         tuple: (bucket_height, bucket_width)
     """
@@ -263,7 +254,7 @@ def find_nearest_bucket(height, width, resolution=640, bucket_step=8):
     else:
         new_width = resolution
         new_height = int(new_width / aspect)
-    
+        
     # Round to nearest bucket_step
     bucket_height = math.ceil(new_height / bucket_step) * bucket_step
     bucket_width = math.ceil(new_width / bucket_step) * bucket_step
@@ -273,12 +264,10 @@ def find_nearest_bucket(height, width, resolution=640, bucket_step=8):
 def resize_and_center_crop(image, target_width, target_height):
     """
     Resize an image and center crop to the target dimensions
-    
     Args:
         image: Input image (numpy array)
         target_width: Target width
         target_height: Target height
-    
     Returns:
         numpy array: Resized and cropped image
     """
@@ -295,14 +284,13 @@ def resize_and_center_crop(image, target_width, target_height):
         # Image is taller than target aspect, match width
         new_w = target_width
         new_h = int(new_w / aspect)
-    
+        
     # Resize the image
     resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
     
     # Center crop
     y_start = max(0, (new_h - target_height) // 2)
     x_start = max(0, (new_w - target_width) // 2)
-    
     cropped = resized[y_start:y_start + target_height, x_start:x_start + target_width]
     
     # Handle any size discrepancies (should be rare)
@@ -321,34 +309,43 @@ def resize_and_center_crop(image, target_width, target_height):
         
         # Pad the image (with border replication)
         cropped = cv2.copyMakeBorder(
-            cropped, top, bottom, left, right, 
+            cropped, top, bottom, left, right,
             cv2.BORDER_CONSTANT, value=[0, 0, 0]
         )
-    
+        
     return cropped
 
-def make_mp4_faststart(mp4_path):
+def make_mp4_faststart(mp4_path, quiet=False):
     """
     Move moov atom to start of file for fast streaming
-    
     Args:
         mp4_path: Path to MP4 file
+        quiet: If True, suppress ffmpeg output
     """
     tmpfile = mp4_path + ".tmp"
-    cmd = [
-        "ffmpeg",
-        "-y",
+    
+    # Construct command
+    cmd = ["ffmpeg", "-y"]
+    
+    # Add quiet flag if requested
+    if quiet:
+        cmd.extend(["-loglevel", "error"])
+        
+    cmd.extend([
         "-i", mp4_path,
         "-c", "copy",
         "-movflags", "+faststart",
         tmpfile
-    ]
+    ])
     
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # Use capture_output to suppress console output if quiet
+        capture_output = quiet
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                      capture_output=capture_output)
+        
         os.replace(tmpfile, mp4_path)
         debug(f"[FFMPEG] Moved moov atom to front of {mp4_path} (faststart applied)")
-    
     except Exception as e:
         debug(f"[FFMPEG] Faststart failed for {mp4_path}: {e}")
         if os.path.exists(tmpfile):
@@ -358,7 +355,7 @@ def apply_gaussian_blur(image_tensor, blur_amount):
     """Apply gaussian blur to input tensor with specified amount (0.0-1.0)"""
     if blur_amount <= 0.0:
         return image_tensor
-    
+        
     # Try multiple methods to apply blur
     try:
         # Method 1: Try torchvision (most reliable)
@@ -377,12 +374,12 @@ def apply_gaussian_blur(image_tensor, blur_amount):
             return result
         else:
             return TF.gaussian_blur(image_tensor, kernel_size, sigma)
-    
     except (ImportError, AttributeError, ModuleNotFoundError):
         # Method 2: Use OpenCV as fallback
         try:
             import cv2
             import numpy as np
+            
             kernel_size = int(blur_amount * 20) + 1
             kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
             sigma = blur_amount * 3.0
@@ -414,7 +411,6 @@ def apply_gaussian_blur(image_tensor, blur_amount):
                     blurred = np.transpose(blurred, (2, 0, 1))  # C,H,W
                     result[bi] = torch.from_numpy(blurred).to(image_tensor.device)
                 return result
-        
         except (ImportError, AttributeError, ModuleNotFoundError):
             from utils.common import debug
             debug("WARNING: Could not apply blur - no suitable method found. Returning original image.")
