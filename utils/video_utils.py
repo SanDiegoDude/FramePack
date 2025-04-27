@@ -234,30 +234,29 @@ def extract_frames_from_video(video_path, num_frames=8, from_end=True, max_resol
         raise
 
 def find_nearest_bucket(height, width, resolution=640, bucket_step=8):
-    """
-    Find the nearest bucket dimensions for a given height and width.
-    Args:
-        height: Original height
-        width: Original width
-        resolution: Target resolution
-        bucket_step: Step size for bucket dimensions
-    Returns:
-        tuple: (bucket_height, bucket_width)
-    """
     # Calculate aspect ratio
     aspect = width / height
-    
-    # Scale to target resolution (the longest side will be scaled to this value)
+    # Scale to target resolution
     if height > width:
         new_height = resolution
         new_width = int(new_height * aspect)
     else:
         new_width = resolution
         new_height = int(new_width / aspect)
-        
-    # Round to nearest bucket_step
-    bucket_height = math.ceil(new_height / bucket_step) * bucket_step
-    bucket_width = math.ceil(new_width / bucket_step) * bucket_step
+    
+    # Calculate latent dimensions
+    latent_height = math.ceil(new_height / bucket_step)
+    latent_width = math.ceil(new_width / bucket_step)
+    
+    # Adjust to ensure even dimensions
+    if latent_height % 2 != 0:
+        latent_height = latent_height - 1  # Make it even by reducing
+    if latent_width % 2 != 0:
+        latent_width = latent_width - 1  # Make it even by reducing
+    
+    # Calculate pixel dimensions
+    bucket_height = latent_height * bucket_step
+    bucket_width = latent_width * bucket_step
     
     return bucket_height, bucket_width
 
