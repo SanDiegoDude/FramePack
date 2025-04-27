@@ -18,7 +18,7 @@ def main():
     args = parser.parse_args()
     
     # Set up debugging based on arguments (True by default for now during development)
-    setup_debug(True)
+    setup_debug(args.debug)
     debug(f"Command line arguments: {args}")
     
     # Set environment variables
