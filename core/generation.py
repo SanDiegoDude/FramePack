@@ -659,6 +659,7 @@ class VideoGenerator:
                 
                 # Update total frame count
                 total_generated_latent_frames += int(generated_latents.shape[2])
+                debug(f"Current number of total generated frames: {total_generated_latent_frames}")
                 real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
                 
                 # VAE decoding with original approach
