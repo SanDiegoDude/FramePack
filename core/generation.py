@@ -676,6 +676,23 @@ class VideoGenerator:
                         debug(f"Blended with original method. New history shape: {history_pixels.shape}")
                     
                     timings["vae_decode_time"] += time.time() - t_vae_start
+                    
+                    # Save preview video
+                    preview_filename = os.path.join(self.output_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
+                    try:
+                        save_bcthw_as_mp4(history_pixels, preview_filename, fps=30, quiet=True)
+                        debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
+                        if self.stream:
+                            self.stream.output_queue.push(('preview_video', preview_filename))
+                            debug(f"[QUEUE] Queued preview_video event: {preview_filename}")
+                    except Exception as e:
+                        debug(f"[ERROR] Failed to save preview video: {e}")
+                    
+                    # Clean up memory
+                    if 'current_pixels' in locals():
+                        del current_pixels
+                    torch.cuda.empty_cache()
+                    
                 except Exception as e:
                     debug(f"Error during VAE decoding: {str(e)}")
                     debug(traceback.format_exc())
