@@ -58,7 +58,8 @@ def process(
             None, None, None,
             "Please upload an input image!", None,
             gr.update(interactive=True),
-            gr.update(interactive=False),
+            gr.update(interactive=False),  # end_graceful_button (replaces end_button)
+            gr.update(interactive=False),  # force_stop_button (new)
             gr.update(),
             gr.update(),
             gr.update(),
@@ -76,7 +77,8 @@ def process(
                 None, None, None,
                 "Please upload a video to extend!", None,
                 gr.update(interactive=True),
-                gr.update(interactive=False),
+                gr.update(interactive=False),  # end_graceful_button (replaces end_button)
+                gr.update(interactive=False),  # force_stop_button (new)
                 gr.update(),
                 gr.update(),
                 gr.update(),
@@ -112,7 +114,8 @@ def process(
                 None, None, None,
                 f"Error processing video: {str(e)}", None,
                 gr.update(interactive=True),
-                gr.update(interactive=False),
+                gr.update(interactive=False),  # end_graceful_button (replaces end_button)
+                gr.update(interactive=False),  # force_stop_button (new)
                 gr.update(),
                 gr.update(),
                 gr.update(),
@@ -131,7 +134,8 @@ def process(
     yield (
         None, None, None, '', gr.update(visible=False),  # Progress bar hidden at start
         gr.update(interactive=False),
-        gr.update(interactive=True),
+        gr.update(interactive=True),  # end_graceful_button (replaces end_button)
+        gr.update(interactive=True),  # force_stop_button (new)
         gr.update(value=seed),
         gr.update(visible=False),  # first_frame - explicitly hide
         gr.update(visible=False),  # last_frame - explicitly hide
@@ -226,7 +230,8 @@ def process(
                 gr.update(value="", visible=False),
                 gr.update(value="", visible=False),
                 gr.update(interactive=True, value="Start Generation"), 
-                gr.update(interactive=False),
+                gr.update(interactive=False),           # end_graceful_button (replaces end_button)
+                gr.update(interactive=False),           # force_stop_button (new)
                 gr.update(),
                 gr.update(value=first_frame_img, visible=True), 
                 gr.update(value=last_frame_img, visible=True),
@@ -257,7 +262,8 @@ def process(
                     "Generating video...",                         # progress_desc
                     gr.update(visible=True),                       # progress_bar
                     gr.update(interactive=False),
-                    gr.update(interactive=True),
+                    gr.update(interactive=True),           # end_graceful_button (replaces end_button)
+                    gr.update(interactive=True),           # force_stop_button (new)
                     gr.update(),                    # seed
                     gr.update(),                    # first_frame
                     gr.update(),                    # last_frame
@@ -282,7 +288,8 @@ def process(
                 desc,                                  # progress_desc
                 gr.update(value=html, visible=True),   # progress_bar
                 gr.update(interactive=False),          # start_button
-                gr.update(interactive=True),           # end_button
+                gr.update(interactive=True),           # end_graceful_button (replaces end_button)
+                gr.update(interactive=True),           # force_stop_button (new)
                 gr.update(),                           # seed
                 gr.update(),                           # first_frame
                 gr.update(),                           # last_frame
@@ -301,7 +308,8 @@ def process(
                 f"Generated single image!<br>Saved as <code>{img_filename}</code>",  # progress_desc
                 gr.update(visible=False),                           # progress_bar
                 gr.update(interactive=True),                        # start_button
-                gr.update(interactive=False),                       # end_button
+                gr.update(interactive=False),           # end_graceful_button (replaces end_button)
+                gr.update(interactive=False),           # force_stop_button (new)
                 gr.update(),                                        # seed
                 gr.update(),                                        # first_frame
                 gr.update(),                                        # last_frame
@@ -322,7 +330,8 @@ def process(
                     "Generation stopped by user.",  # progress_desc
                     gr.update(visible=False),       # progress_bar
                     gr.update(interactive=True, value="Start Generation"),
-                    gr.update(interactive=False, value="End Generation"),
+                    gr.update(interactive=False),           # end_graceful_button (replaces end_button)
+                    gr.update(interactive=False),           # force_stop_button (new)
                     gr.update(),                    # seed
                     gr.update(),                    # first_frame
                     gr.update(),                    # last_frame
@@ -339,7 +348,8 @@ def process(
                     f"Generated single image!<br><a href=\"file/{last_img_path}\" target=\"_blank\">Click here to open full size in new tab.</a><br><code>{last_img_path}</code>",  # progress_desc
                     gr.update(visible=False),               # progress_bar
                     gr.update(interactive=True),
-                    gr.update(interactive=False),
+                    gr.update(interactive=False),           # end_graceful_button (replaces end_button)
+                    gr.update(interactive=False),           # force_stop_button (new)
                     gr.update(),                    # seed
                     gr.update(),                    # first_frame
                     gr.update(),                    # last_frame
@@ -356,7 +366,8 @@ def process(
                     gr.update(value="", visible=False),             # progress_desc - hide as we use formatted stats
                     gr.update(value="", visible=False),             # progress_bar
                     gr.update(interactive=True),
-                    gr.update(interactive=False),
+                    gr.update(interactive=False),           # end_graceful_button (replaces end_button)
+                    gr.update(interactive=False),           # force_stop_button (new)
                     gr.update(),                    # seed
                     gr.update(),                    # first_frame
                     gr.update(),                    # last_frame
