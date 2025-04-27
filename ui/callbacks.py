@@ -319,6 +319,11 @@ def process(
             )
             last_is_image = True
             last_img_path = img_filename
+
+        elif flag == 'final_stats':
+            stats_text = data
+            last_stats = stats_text  # Store for future use
+            debug(f"[UI] Received final stats: {stats_text[:50]}...")
             
         elif flag == 'end':
             debug(f"Process: yielding end event. final_output_path = {final_output_path}, data = {data}")
@@ -359,6 +364,23 @@ def process(
                 )
                 
             else:
+                # For normal video generation completion, update generation_stats with our detailed stats
+                stats_display = ""
+                if 'last_stats' in locals() and last_stats:
+                    # Format the stats nicely with markdown
+                    stats_display = f"""
+        ### Generation Complete
+        **Video saved as:** `{os.path.basename(output_filename)}`
+        
+        {last_stats}
+                    """
+                else:
+                    # Fallback if no stats available
+                    stats_display = f"""
+        ### Generation Complete
+        **Video saved as:** `{os.path.basename(output_filename)}`
+                    """
+                    
                 yield (
                     gr.update(value=output_filename, visible=True), # result_video
                     gr.update(visible=False),                       # result_image_html
@@ -366,14 +388,13 @@ def process(
                     gr.update(value="", visible=False),             # progress_desc - hide as we use formatted stats
                     gr.update(value="", visible=False),             # progress_bar
                     gr.update(interactive=True),
-                    gr.update(interactive=False),           # end_graceful_button (replaces end_button)
-                    gr.update(interactive=False),           # force_stop_button (new)
+                    gr.update(interactive=False),
                     gr.update(),                    # seed
                     gr.update(),                    # first_frame
                     gr.update(),                    # last_frame
                     gr.update(),                    # extend_button
                     gr.update(visible=False),       # note_message
-                    gr.update(visible=True)         # generation_stats - keep visible
+                    gr.update(visible=True, value=stats_display)  # generation_stats - updated with detailed stats
                 )
                 
             debug("Process: end event, breaking loop.")
