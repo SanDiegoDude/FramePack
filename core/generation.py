@@ -25,7 +25,7 @@ from utils.video_utils import (
 from diffusers_helper.thread_utils import AsyncStream
 from diffusers_helper.hunyuan import encode_prompt_conds, vae_decode, vae_encode, vae_decode_fake
 from diffusers_helper.clip_vision import hf_clip_vision_encode
-from diffusers_helper.utils import crop_or_pad_yield_mask
+from diffusers_helper.utils import crop_or_pad_yield_mask, soft_append_bcthw
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
 from ui.style import make_progress_bar_html
 
@@ -249,6 +249,7 @@ class VideoGenerator:
         llm_weight = config.get('llm_weight', 1.0)
         clip_weight = config.get('clip_weight', 1.0)
         trim_percentage = config.get('trim_percentage', 0.2)  # Default to 0.2 if not provided
+        frame_overlap = config.get('frame_overlap', 0)
         job_id = generate_timestamp()
         
         debug(f"[Generator] Received prompt: '{prompt}'")
@@ -681,9 +682,9 @@ class VideoGenerator:
                         history_pixels = current_pixels
                         debug(f"First section: Set history_pixels directly with shape: {history_pixels.shape}")
                     else:
-                        # Important: simple concatenation to avoid blending issues
-                        history_pixels = torch.cat([current_pixels, history_pixels], dim=2)
-                        debug(f"Concatenated new frames without blending. New history shape: {history_pixels.shape}")
+                        # Use soft_append_bcthw for proper blending instead of simple concatenation
+                        history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlap=frame_overlap)
+                        debug(f"Blended frames with overlap={frame_overlap}. New history shape: {history_pixels.shape}")
                     
                     # Save preview video
                     preview_filename = os.path.join(self.output_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
