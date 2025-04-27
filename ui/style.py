@@ -83,11 +83,11 @@ def get_css():
     
     /* Result Container - proper scaling */
     .result-container {
-        max-height: 512px !important;
+        max-height: 340px !important;
         overflow: hidden !important;
     }
     .result-container img, .result-container video {
-        max-height: 512px !important;
+        max-height: 340px !important;
         width: auto !important;
         object-fit: contain !important;
         margin: 0 auto !important;
@@ -102,7 +102,7 @@ def get_css():
         margin-bottom: 20px;
     }
     .video-container video {
-        max-height: 480px !important;
+        max-height: 512px !important;
         width: auto !important;
         object-fit: contain !important;
         margin: 0 auto !important;
@@ -169,25 +169,6 @@ def get_css():
     .video-container.editing {
         padding-bottom: 180px !important;
     }
-    
-    <script>
-    function detectVideoTrimmingUI() {
-        // Monitor for trim UI appearance
-        setInterval(function() {
-            const videoContainers = document.querySelectorAll('.video-container');
-            videoContainers.forEach(container => {
-                const trimControls = container.querySelector('.trim-control');
-                if (trimControls) {
-                    container.classList.add('editing');
-                } else {
-                    container.classList.remove('editing');
-                }
-            });
-        }, 500);
-    }
-    // Initialize when page loads
-    window.addEventListener('DOMContentLoaded', detectVideoTrimmingUI);
-    </script>
     """
 
 def make_progress_bar_css():
