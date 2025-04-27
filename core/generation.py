@@ -1040,6 +1040,7 @@ class VideoGenerator:
             
             if self.stream:
                 self.stream.output_queue.push(('progress', (None, summary_string, "")))
+                self.stream.output_queue.push(('final_stats', summary_string))
                 self.stream.output_queue.push(('end', None))
                 
             return output_filename
