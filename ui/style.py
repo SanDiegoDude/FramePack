@@ -1,5 +1,4 @@
 # ui/style.py
-
 def get_css():
     """Return CSS styling for the UI"""
     return """
@@ -27,7 +26,6 @@ def get_css():
         background-color: #107C33 !important; /* Darker Spotify green */
         border-color: #107C33 !important;
     }
-
     /* End Generation Button - Windows Explorer mellow yellow */
     .end-graceful-button button {
         width: 100% !important;
@@ -40,7 +38,6 @@ def get_css():
         background-color: #D4AA00 !important; /* Darker yellow */
         border-color: #D4AA00 !important;
     }
-
     /* Force Stop Button - Crimson */
     .force-stop-button button {
         width: 100% !important;
@@ -53,31 +50,41 @@ def get_css():
         background-color: #AA0F2D !important; /* Darker crimson */
         border-color: #AA0F2D !important;
     }
-    
     /* Remove old button classes that are no longer needed */
     .end-button-warning, .end-button-force {
         display: none !important;
     }
-    /* Frame Thumbnails */
-    .frame-thumbnail img {
+    /* Frame Thumbnails - FIXED */
+    .frame-thumbnail {
+        display: none !important; /* Hide by default and enforce with !important */
+        width: 100% !important;
         height: 256px !important;
-        width: 256px !important;
-        object-fit: cover !important;
+        overflow: hidden !important;
+        margin-bottom: 10px !important;
+    }
+    .frame-thumbnail.has-content {
+        display: block !important; /* Show only with has-content class */
+    }
+    .frame-thumbnail img {
+        width: 100% !important;
+        height: 100% !important;
+        object-fit: contain !important; /* Changed from cover to contain */
+        margin: 0 auto !important;
     }
     /* Image and Video Container Styling */
     .input-image-container img {
         max-height: 512px !important;
-        width: auto !important;
+        width: 100% !important; /* Set to 100% to fill container */
         object-fit: contain !important;
     }
     .keyframe-image-container img {
         max-height: 320px !important;
-        width: auto !important;
+        width: 100% !important; /* Set to 100% to fill container */
         object-fit: contain !important;
     }
     .result-container img, .result-container video {
         max-height: 512px !important;
-        width: auto !important;
+        width: 100% !important; /* Set to 100% to fill container width */
         object-fit: contain !important;
         margin: 0 auto !important;
         display: block !important;
@@ -125,26 +132,18 @@ def get_css():
     .stats-box td:first-child {
         width: 40%;
     }
-    
-    /* Video container styling */
+    /* Video Container - Fix for upload video */
     .video-container {
         position: relative;
-        max-height: 400px;           /* Fixed height container */
-        overflow-y: auto;            /* Allow vertical scrolling */
-        overflow-x: hidden;          /* Prevent horizontal scrolling */
-        margin-bottom: 20px;         /* Space below container */
-        padding-bottom: 150px;       /* Extra padding for trim interface */
+        max-height: 400px;
+        overflow: hidden !important;
+        margin-bottom: 20px;
     }
-    
-    /* Make sure the video itself doesn't overflow horizontally */
     .video-container video {
-        max-width: 100%;
-        object-fit: contain;
-    }
-    
-    /* Ensure trim controls stay with the video */
-    .video-container .video-wrap {
-        position: relative;
+        width: 100% !important;
+        height: auto !important;
+        object-fit: contain !important;
+        margin: 0 auto !important;
     }
     /* Better formatting for generation stats */
     #generation_stats {
@@ -154,20 +153,15 @@ def get_css():
         border-radius: 8px;
         border-left: 4px solid orange;
     }
-    
     #generation_stats strong {
         color: #ff8800;
     }
-    /* Hide frame thumbnails by default */
-    .frame-thumbnail {
-        display: none;
+    
+    /* Ensure empty components stay hidden */
+    [class*='container']:empty {
+        display: none !important;
     }
     
-    /* Show frame thumbnails only when they have content */
-    .frame-thumbnail:not(:empty) {
-        display: block;
-    }
-
     <script>
     function detectVideoTrimmingUI() {
         const style = `
@@ -178,7 +172,6 @@ def get_css():
             </style>
         `;
         document.head.insertAdjacentHTML('beforeend', style);
-        
         // Monitor for trim UI appearance
         setInterval(function() {
             const videoContainers = document.querySelectorAll('.video-container');
@@ -188,6 +181,18 @@ def get_css():
                     container.classList.add('editing');
                 } else {
                     container.classList.remove('editing');
+                }
+            });
+        }, 500);
+        
+        // Fix for frame thumbnails visibility
+        setInterval(function() {
+            document.querySelectorAll('.frame-thumbnail').forEach(thumb => {
+                // Check if it has an image inside
+                if (thumb.querySelector('img') || thumb.querySelector('video')) {
+                    thumb.classList.add('has-content');
+                } else {
+                    thumb.classList.remove('has-content');
                 }
             });
         }, 500);
