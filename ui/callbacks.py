@@ -137,8 +137,8 @@ def process(
         gr.update(interactive=True),  # end_graceful_button (replaces end_button)
         gr.update(interactive=True),  # force_stop_button (new)
         gr.update(value=seed),
-        gr.update(visible=False),  # first_frame - explicitly hide
-        gr.update(visible=False),  # last_frame - explicitly hide
+        gr.update(visible=False, elem_classes=""),  # first_frame - explicitly hide
+        gr.update(visible=False, elem_classes=""),  # last_frame - explicitly hide
         gr.update(visible=False),   # extend_button - explicitly hide
         gr.update(visible=False),   # note_message - hidden at start
         gr.update(visible=False)    # generation_stats - hidden at start
