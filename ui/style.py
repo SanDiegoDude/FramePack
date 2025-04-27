@@ -53,6 +53,7 @@ def get_css():
     .frame-thumbnail {
         max-height: 340px !important;
         overflow: hidden !important;
+        object-fit: contain !important;
         margin-bottom: 10px !important;
         display: none !important; /* Hidden by default */
     }
@@ -96,12 +97,12 @@ def get_css():
     /* Video Container - proper scaling */
     .video-container {
         position: relative;
-        max-height: 512px !important;
+        max-height: 596px !important;
         overflow: hidden !important;
         margin-bottom: 20px;
     }
     .video-container video {
-        max-height: 85% !important;
+        max-height: 480px !important;
         width: auto !important;
         object-fit: contain !important;
         margin: 0 auto !important;
