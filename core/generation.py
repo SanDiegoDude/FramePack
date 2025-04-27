@@ -29,6 +29,8 @@ from diffusers_helper.utils import crop_or_pad_yield_mask, soft_append_bcthw
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
 from ui.style import make_progress_bar_html
 
+total_generated_latent_frames = 0
+
 class VideoGenerator:
     """Handles all video generation functionality"""
     def __init__(self, model_manager, outputs_folder='./outputs/'):
@@ -646,66 +648,35 @@ class VideoGenerator:
                     )
                     load_model_as_complete(self.model_manager.vae, target_device=gpu)
                     debug("loaded vae to gpu")
-                    
+                
                 # Clear CUDA cache to reduce fragmentation
                 torch.cuda.empty_cache()
                 debug("Cleared CUDA cache before decoding")
                 
-                # Calculate theoretical max overlap frames
-                max_overlapped_frames = latent_window_size * 4 - 3
-                debug(f"Theoretical max overlapped_frames={max_overlapped_frames}")
+                # Update total frame count
+                total_generated_latent_frames += int(generated_latents.shape[2])
+                real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
                 
+                # VAE decoding with original approach
                 try:
-                    # Decode the newly generated latents in chunks - CRITICAL LOGIC
                     t_vae_start = time.time()
-                    debug(f"Decoding generated_latents with shape: {generated_latents.shape}")
-                    chunk_size = 4  # Small enough to avoid OOM
-                    current_pixels_chunks = []
-                    for i in range(0, generated_latents.shape[2], chunk_size):
-                        end_idx = min(i + chunk_size, generated_latents.shape[2])
-                        debug(f"Decoding chunk {i}:{end_idx} of {generated_latents.shape[2]}")
-                        # Move chunk to GPU, decode, then immediately move result to CPU
-                        chunk = generated_latents[:, :, i:end_idx].to(self.model_manager.vae.device, dtype=self.model_manager.vae.dtype)
-                        chunk_pixels = vae_decode(chunk, self.model_manager.vae).cpu()
-                        current_pixels_chunks.append(chunk_pixels)
-                        # Force cleanup of chunk tensors
-                        del chunk, chunk_pixels
-                        torch.cuda.empty_cache()
-                        
-                    # Combine all chunks on CPU
-                    current_pixels = torch.cat(current_pixels_chunks, dim=2)
-                    debug(f"Successfully decoded in chunks: final shape {current_pixels.shape}")
-                    del current_pixels_chunks
-                    torch.cuda.empty_cache()
-                    
-                    # End VAE decode timing
-                    timings["vae_decode_time"] += time.time() - t_vae_start
-                    debug(f"Decoded newly generated latents to pixels with shape: {current_pixels.shape}")
-                    
-                    # Initialize or update history_pixels
                     if history_pixels is None:
-                        history_pixels = current_pixels
-                        debug(f"First section: Set history_pixels directly with shape: {history_pixels.shape}")
+                        history_pixels = vae_decode(real_history_latents, self.model_manager.vae).cpu()
+                        debug(f"First section: Decoded full latents to pixels with shape: {history_pixels.shape}")
                     else:
-                        # Use our custom blending function
-                        history_pixels = blend_frames_with_overlap(current_pixels, history_pixels, overlap=frame_overlap)
-                        debug(f"Blended new frames with history using overlap={frame_overlap}. New history shape: {history_pixels.shape}")
-                    
-                    # Save preview video
-                    preview_filename = os.path.join(self.output_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
-                    try:
-                        save_bcthw_as_mp4(history_pixels, preview_filename, fps=30, quiet=True)  # Added quiet parameter
-                        debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
-                        if self.stream:
-                            self.stream.output_queue.push(('preview_video', preview_filename))
-                            debug(f"[QUEUE] Queued preview_video event: {preview_filename}")
-                    except Exception as e:
-                        debug(f"[ERROR] Failed to save preview video: {e}")
+                        # Calculate correct section frames
+                        section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
+                        overlapped_frames = latent_window_size * 4 - 3
+                        debug(f"Decoding section: frames={section_latent_frames}, overlap={overlapped_frames}")
                         
-                    # Clean up memory
-                    del current_pixels
-                    torch.cuda.empty_cache()
+                        # Decode current section only
+                        current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], self.model_manager.vae).cpu()
+                        
+                        # Use the original soft_append_bcthw with correct order
+                        history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
+                        debug(f"Blended with original method. New history shape: {history_pixels.shape}")
                     
+                    timings["vae_decode_time"] += time.time() - t_vae_start
                 except Exception as e:
                     debug(f"Error during VAE decoding: {str(e)}")
                     debug(traceback.format_exc())
