@@ -314,16 +314,21 @@ def create_interface(model_manager, video_generator):
                 
                 # First/Last frame displays in their own group
                 with gr.Group(visible=False, elem_classes="frame-thumbnail-container") as frame_thumbnails_group:
+                    gr.Markdown("### Frame Comparison", elem_classes="frame-header")
                     with gr.Row(elem_classes="frame-thumbnail-row"):
                         first_frame = gr.Image(
                             label="First Frame",
                             elem_classes="frame-thumbnail",
-                            visible=True
+                            visible=True,
+                            show_download_button=True,
+                            container=True
                         )
                         last_frame = gr.Image(
                             label="Last Frame",
                             elem_classes="frame-thumbnail",
-                            visible=True
+                            visible=True,
+                            show_download_button=True,
+                            container=True
                         )
         
         # Memory management functions
