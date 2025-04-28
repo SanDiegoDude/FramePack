@@ -1,5 +1,5 @@
 # utils/common.py
-import time
+import datetime
 
 # Default to debug off
 DEBUG = False
@@ -16,6 +16,10 @@ def debug(*args, **kwargs):
     if DEBUG:
         print("[DEBUG]", *args, **kwargs)
 
+
 def generate_timestamp():
-    """Generate a timestamp string for filenames"""
-    return time.strftime("%y%m%d_%H%M%S_%f")[:-3]
+    """Generate a timestamp string for filenames (platform independent with microseconds)"""
+    # Returns e.g. '240610_131537_234'
+    now = datetime.datetime.now()
+    return now.strftime("%y%m%d_%H%M%S_%f")[:-3]
+# year, month, day, hour, min, sec, first 3 digits of microseconds (= milliseconds)
