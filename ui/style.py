@@ -51,15 +51,16 @@ def get_css():
     
     /* Frame Thumbnails - Fixed container */
     .frame-thumbnail-container {
-        margin-top: 20px !important;
-        margin-bottom: 20px !important;
-        height: 380px !important; /* Extra space for labels */
+        margin-top: 5px !important;
+        margin-bottom: 5px !important;
+        height: 350px !important; /* Extra space for labels */
     }
     
     .frame-thumbnail-row {
         display: flex !important;
         gap: 15px !important;
-        height: 340px !important;
+        max-height: 340px !important;
+        max-width: 340px !important;
     }
     
     /* Individual frame thumbnails */
@@ -75,8 +76,8 @@ def get_css():
     
     /* Images inside thumbnails */
     .frame-thumbnail img {
-        max-height: 300px !important; /* Slightly smaller than container */
-        max-width: 90% !important;    /* Don't fill entire width */
+        max-height: 340px !important; /* Slightly smaller than container */
+        max-width: 340px !important;    /* Don't fill entire width */
         width: auto !important;
         height: auto !important;
         object-fit: contain !important;
