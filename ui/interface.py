@@ -295,32 +295,36 @@ def create_interface(model_manager, video_generator):
                     elem_classes="result-container", 
                     visible=False
                 )
-                # First/Last frame displays
-                with gr.Row():
-                    first_frame = gr.Image(
-                        label="First Frame", 
-                        elem_classes="frame-thumbnail", 
-                        visible=False
-                    )
-                    last_frame = gr.Image(
-                        label="Last Frame", 
-                        elem_classes="frame-thumbnail", 
-                        visible=False
+                
+                extend_button = gr.Button(value="Extend This Video", visible=False, elem_classes="extend-button")
+                
+                
+                with gr.Accordion("Generation Complete (Expand for details)", open=False, visible=False) as generation_stats_accordion:
+                    generation_stats = gr.Markdown(
+                        value="",
+                        elem_id="generation_stats"
                     )
                 
-                # Action buttons for output
-                extend_button = gr.Button(value="Extend This Video", visible=False)
-                
+                # Note message
                 note_message = gr.Markdown(
-                    value="", 
+                    value="",
                     visible=False,
                     elem_id="sampling_note"
                 )
-                generation_stats = gr.Markdown(
-                    value="",
-                    visible=False,
-                    elem_id="generation_stats"
-                )
+                
+                # First/Last frame displays in their own group
+                with gr.Group(visible=False, elem_classes="frame-thumbnail-container") as frame_thumbnails_group:
+                    with gr.Row(elem_classes="frame-thumbnail-row"):
+                        first_frame = gr.Image(
+                            label="First Frame",
+                            elem_classes="frame-thumbnail",
+                            visible=True
+                        )
+                        last_frame = gr.Image(
+                            label="Last Frame",
+                            elem_classes="frame-thumbnail",
+                            visible=True
+                        )
         
         # Memory management functions
         def unload_all_models():
@@ -468,7 +472,9 @@ def create_interface(model_manager, video_generator):
             last_frame,        # 10
             extend_button,     # 11
             note_message,      # 12
-            generation_stats   # 13
+            generation_stats,   # 13
+            generation_stats_accordion, #14
+            frame_thumbnails_group #15
         ]
         
         prompt.submit(
