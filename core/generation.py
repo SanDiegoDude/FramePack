@@ -84,6 +84,96 @@ class VideoGenerator:
         from utils.video_utils import extract_frames_from_video as extract_frames
         return extract_frames(video_path, num_frames, from_end, max_resolution)
     
+    def encode_multiple_prompts(self, prompt_text, n_prompt, cfg, llm_weight=1.0, clip_weight=1.0):
+        """
+        Encode multiple prompts for sequential generation.
+        Returns encoded prompts, poolers, masks, and negative versions.
+        """
+        from utils.prompt_parser import parse_sequential_prompts
+        
+        prompts = parse_sequential_prompts(prompt_text)
+        debug(f"Encoding {len(prompts)} sequential prompts")
+        
+        # Initialize lists to store encodings
+        llama_vecs = []
+        clip_poolers = []
+        llama_masks = []
+        
+        # --- Memory Management: Offload everything ---
+        if not self.model_manager.high_vram:
+            unload_complete_models(
+                self.model_manager.text_encoder,
+                self.model_manager.text_encoder_2
+            )
+            fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
+            load_model_as_complete(self.model_manager.text_encoder_2, target_device=gpu)
+        
+        # Encode each prompt
+        for i, p in enumerate(prompts):
+            debug(f"Encoding prompt {i+1}/{len(prompts)}: '{p}'")
+            # Encode prompt
+            llama_vec, clip_pooler = encode_prompt_conds(
+                p,
+                self.model_manager.text_encoder,
+                self.model_manager.text_encoder_2,
+                self.model_manager.tokenizer,
+                self.model_manager.tokenizer_2
+            )
+            
+            # Process masks
+            llama_vec, llama_mask = crop_or_pad_yield_mask(llama_vec, 512)
+            
+            # Apply weights
+            if llm_weight != 1.0:
+                llama_vec = llama_vec * llm_weight
+                
+            if clip_weight == 0.0:
+                clip_pooler = clip_pooler * 1e-7  # Near-zero value
+            elif clip_weight != 1.0:
+                clip_pooler = clip_pooler * clip_weight
+                
+            # Store encodings
+            llama_vecs.append(llama_vec)
+            clip_poolers.append(clip_pooler)
+            llama_masks.append(llama_mask)
+        
+        # Handle negative prompt
+        if cfg > 1:
+            debug(f"Encoding negative prompt: '{n_prompt}'")
+            llama_vec_n, clip_pooler_n = encode_prompt_conds(
+                n_prompt,
+                self.model_manager.text_encoder,
+                self.model_manager.text_encoder_2,
+                self.model_manager.tokenizer,
+                self.model_manager.tokenizer_2
+            )
+            llama_vec_n, llama_mask_n = crop_or_pad_yield_mask(llama_vec_n, 512)
+            
+            # Apply weights to negative prompt
+            if llm_weight != 1.0:
+                llama_vec_n = llama_vec_n * llm_weight
+            
+            if clip_weight == 0.0:
+                clip_pooler_n = clip_pooler_n * 1e-7
+            elif clip_weight != 1.0:
+                clip_pooler_n = clip_pooler_n * clip_weight
+        else:
+            debug("Using zero negative embeddings for CFG=1")
+            llama_vec_n = torch.zeros_like(llama_vecs[0])
+            clip_pooler_n = torch.zeros_like(clip_poolers[0])
+            llama_mask_n = torch.ones_like(llama_masks[0])
+        
+        # Convert to appropriate dtype
+        target_dtype = self.model_manager.transformer.dtype
+        for i in range(len(llama_vecs)):
+            llama_vecs[i] = llama_vecs[i].to(target_dtype)
+            clip_poolers[i] = clip_poolers[i].to(target_dtype)
+        
+        llama_vec_n = llama_vec_n.to(target_dtype)
+        clip_pooler_n = clip_pooler_n.to(target_dtype)
+        
+        return llama_vecs, clip_poolers, llama_masks, llama_vec_n, clip_pooler_n, llama_mask_n
+    
     def prepare_inputs(self, input_image, prompt, n_prompt, cfg, gaussian_blur_amount=0.0,
                       llm_weight=1.0, clip_weight=1.0):
         """Prepare text embeddings, poolers, masks, and image tensors"""
@@ -217,6 +307,10 @@ class VideoGenerator:
     @torch.no_grad()
     def generate_video(self, config):
         """Main video generation function"""
+        
+        # Import prompt parser
+        from utils.prompt_parser import parse_sequential_prompts
+        
         # Extract parameters
         mode = config['mode']
         input_image = config.get('input_image', None) # Can be None for text2video
@@ -282,7 +376,20 @@ class VideoGenerator:
             total_frames = int(selected_frames)
             total_sections = total_frames // frames_per_section
             debug(f"Simple Mode | window=9 | frames/sec=33 | total_frames={total_frames} | sections={total_sections}")
-            
+
+        # Check if we're using sequential prompting
+        prompts = parse_sequential_prompts(prompt)
+        use_sequential = len(prompts) > 1
+        
+        # Initialize variables for sequential prompts
+        seq_llama_vecs = None
+        seq_clip_poolers = None 
+        seq_llama_masks = None
+        
+        if use_sequential:
+            debug(f"Using sequential prompting with {len(prompts)} prompts")
+            # We'll encode the sequential prompts after determining the mode 
+        
         if self.stream:
             self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
 
@@ -296,9 +403,7 @@ class VideoGenerator:
             start_latent = None
             end_latent = None # Only for keyframes
             height, width = 0, 0
-        
-        
-            
+
             if mode == "keyframes":
                 if end_frame is None: raise ValueError("Keyframes mode requires End Frame.")
                 end_H, end_W, _= end_frame.shape
@@ -434,6 +539,22 @@ class VideoGenerator:
             # Masks (m, m_n) should be torch.bool and shape [B, 512], NO dtype conversion needed.
             
             debug(f"Final Dtypes - lv: {lv.dtype}, cp: {cp.dtype}, m: {m.dtype if m is not None else 'None'}, clip: {clip_output.dtype if clip_output is not None else 'None'}")
+
+
+            # ============ Sequential Prompt Handling ============
+            if use_sequential:
+                debug(f"Encoding sequential prompts after main prompt preparation")
+                # Store the original encodings 
+                first_lv, first_cp, first_m = lv, cp, m
+                
+                # Now encode all prompts
+                seq_llama_vecs, seq_clip_poolers, seq_llama_masks, seq_llama_vec_n, seq_clip_pooler_n, seq_llama_mask_n = \
+                    self.encode_multiple_prompts(prompt, n_prompt, cfg, llm_weight, clip_weight)
+                
+                # We'll keep using the original negative prompt encodings
+                # as they apply to all prompts
+                debug(f"Encoded {len(seq_llama_vecs)} sequential prompts")
+
             
             # ============ Sampling Setup ============
             if self.stream: self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Start sampling ...'))))
@@ -576,6 +697,26 @@ class VideoGenerator:
                 else:
                     debug(f"  image_embeddings=clip_output: None")
                 debug(f"  CFG scales: cfg={cfg}, gs={gs}, rs={rs}")
+
+                # Find the section to determine which prompt to use
+                if use_sequential and seq_llama_vecs is not None:
+                    # Calculate which prompt to use
+                    # Remember sections are processed in reverse order (end→start)
+                    # section is from your loop_iterator which should match the current section index
+                    section_idx = total_sections - 1 - section  # Convert to forward index
+                    prompt_idx = min(section_idx, len(seq_llama_vecs) - 1)  # Use last prompt if we run out
+                    
+                    debug(f"Section {section}/{total_sections-1} using prompt index {prompt_idx} of {len(seq_llama_vecs)-1}")
+                    
+                    # Use the corresponding encodings
+                    current_lv = seq_llama_vecs[prompt_idx]
+                    current_cp = seq_clip_poolers[prompt_idx]
+                    current_m = seq_llama_masks[prompt_idx]
+                else:
+                    # Use the default single prompt encodings
+                    current_lv = lv
+                    current_cp = cp
+                    current_m = m
                 
                 # Run sampling based on mode
                 if mode == "keyframes":
@@ -590,9 +731,9 @@ class VideoGenerator:
                         guidance_rescale=rs,
                         num_inference_steps=steps,
                         generator=rnd,
-                        prompt_embeds=lv,
-                        prompt_embeds_mask=m,
-                        prompt_poolers=cp,
+                        prompt_embeds=current_lv,
+                        prompt_embeds_mask=current_m,
+                        prompt_poolers=current_cp
                         negative_prompt_embeds=lv_n,
                         negative_prompt_embeds_mask=m_n,
                         negative_prompt_poolers=cp_n,
@@ -620,9 +761,9 @@ class VideoGenerator:
                         guidance_rescale=rs,
                         num_inference_steps=steps,
                         generator=rnd,
-                        prompt_embeds=lv,
-                        prompt_embeds_mask=m,
-                        prompt_poolers=cp,
+                        prompt_embeds=current_lv,
+                        prompt_embeds_mask=current_m,
+                        prompt_poolers=current_cp
                         negative_prompt_embeds=lv_n,
                         negative_prompt_embeds_mask=m_n,
                         negative_prompt_poolers=cp_n,
