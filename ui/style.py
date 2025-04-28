@@ -51,7 +51,7 @@ def get_css():
     
     /* Frame Thumbnails - FIXED with proper scaling */
     .frame-thumbnail {
-        max-height: 340px !important;
+        max-height: 256px !important;
         overflow: hidden !important;
         object-fit: contain !important;
         margin-bottom: 10px !important;
@@ -61,7 +61,7 @@ def get_css():
         display: block !important;
     }
     .frame-thumbnail img {
-        max-height: 340px !important;
+        max-height: 256px !important;
         width: auto !important;
         object-fit: contain !important;
         margin: 0 auto !important;
