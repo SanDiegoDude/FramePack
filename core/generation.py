@@ -387,8 +387,20 @@ class VideoGenerator:
         seq_llama_masks = None
         
         if use_sequential:
+            # Determine if we need to reverse the prompt order based on mode
+            # For most modes, we need to reverse prompt order since generation is back-to-front
+            should_reverse_prompts = (
+                mode == "image2video" or
+                mode == "text2video" or
+                (mode == "keyframes" and start_frame is not None) or
+                (original_mode == "video_extension" and extension_direction == "Forward")
+            )
+            
+            if should_reverse_prompts:
+                debug(f"Reversing sequential prompts for {mode} mode")
+                prompts = list(reversed(prompts))
+                
             debug(f"Using sequential prompting with {len(prompts)} prompts")
-            # We'll encode the sequential prompts after determining the mode 
         
         if self.stream:
             self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
@@ -706,7 +718,10 @@ class VideoGenerator:
                     section_idx = total_sections - 1 - section  # Convert to forward index
                     prompt_idx = min(section_idx, len(seq_llama_vecs) - 1)  # Use last prompt if we run out
                     
-                    debug(f"Section {section}/{total_sections-1} using prompt index {prompt_idx} of {len(seq_llama_vecs)-1}")
+                    if section_idx == prompt_idx:
+                        debug(f"Section {section}/{total_sections-1} using prompt {prompt_idx+1}/{len(seq_llama_vecs)}: '{prompts[prompt_idx][:30]}...'")
+                    else:
+                        debug(f"Section {section}/{total_sections-1} using final prompt {len(seq_llama_vecs)}/{len(seq_llama_vecs)}: '{prompts[prompt_idx][:30]}...'")
                     
                     # Use the corresponding encodings
                     current_lv = seq_llama_vecs[prompt_idx]
