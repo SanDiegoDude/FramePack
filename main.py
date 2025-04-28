@@ -55,7 +55,12 @@ def main():
     debug(f'High-VRAM Mode: {high_vram}')
     
     # Initialize model manager and load models
-    model_manager = ModelManager(high_vram=high_vram)
+    # Initialize model manager and load models
+    model_manager = ModelManager(
+        high_vram=high_vram,
+        lora_path=args.lora,
+        lora_weight=args.lora_weight
+    )
     
     try:
         # Load all models
