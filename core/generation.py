@@ -733,7 +733,7 @@ class VideoGenerator:
                         generator=rnd,
                         prompt_embeds=current_lv,
                         prompt_embeds_mask=current_m,
-                        prompt_poolers=current_cp
+                        prompt_poolers=current_cp,
                         negative_prompt_embeds=lv_n,
                         negative_prompt_embeds_mask=m_n,
                         negative_prompt_poolers=cp_n,
@@ -763,7 +763,7 @@ class VideoGenerator:
                         generator=rnd,
                         prompt_embeds=current_lv,
                         prompt_embeds_mask=current_m,
-                        prompt_poolers=current_cp
+                        prompt_poolers=current_cp,
                         negative_prompt_embeds=lv_n,
                         negative_prompt_embeds_mask=m_n,
                         negative_prompt_poolers=cp_n,
