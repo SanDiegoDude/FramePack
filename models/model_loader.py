@@ -8,12 +8,16 @@ from utils.memory_utils import (
 
 class ModelManager:
     """Manages loading, unloading, and access to AI models"""
-    
-    def __init__(self, high_vram=False):
+    def __init__(self, high_vram=False, lora_path=None, lora_weight=1.0):
         self.high_vram = high_vram
+        self.lora_path = lora_path
+        self.lora_weight = lora_weight
+        self.lora_name = None  # Will be set if LoRA is loaded
         debug(f"ModelManager initialized with high_vram={high_vram}")
-        
-        # Model objects
+        if lora_path:
+            debug(f"LoRA path: {lora_path}, weight: {lora_weight}")
+            
+        # Model objects (existing code)
         self.text_encoder = None
         self.text_encoder_2 = None
         self.tokenizer = None
@@ -25,7 +29,7 @@ class ModelManager:
         
         # Model loading status
         self.models_loaded = False
-    
+        
     def load_all_models(self):
         """Load all required models based on VRAM configuration"""
         try:
@@ -84,6 +88,24 @@ class ModelManager:
                 'lllyasviel/FramePackI2V_HY', 
                 torch_dtype=torch.bfloat16
             ).cpu()
+            
+            # After loading the transformer model, load LoRA if specified
+            if self.lora_path:
+                try:
+                    from utils.lora_utils import load_lora
+                    debug(f"Loading LoRA from {self.lora_path}")
+                    
+                    # Extract filename to use as adapter name
+                    _, filename = os.path.split(self.lora_path)
+                    self.lora_name = filename.split('.')[0]
+                    
+                    # Load the LoRA adapter
+                    self.transformer = load_lora(self.transformer, self.lora_path, filename)
+                    debug(f"Successfully loaded LoRA: {self.lora_name}")
+                except Exception as e:
+                    debug(f"Error loading LoRA: {e}")
+                    import traceback
+                    debug(traceback.format_exc())
             
             # Configure models
             debug("Configuring models")
@@ -146,6 +168,22 @@ class ModelManager:
             return True
         else:
             debug("Cannot initialize TeaCache: transformer not loaded")
+            return False
+
+    def apply_lora_weight(self):
+        """Apply LoRA weight to the loaded adapter"""
+        if not self.lora_name or not hasattr(self, 'transformer') or self.transformer is None:
+            return False
+            
+        try:
+            from utils.lora_utils import set_adapters
+            debug(f"Applying LoRA weight {self.lora_weight} to {self.lora_name}")
+            set_adapters(self.transformer, self.lora_name, self.lora_weight)
+            return True
+        except Exception as e:
+            debug(f"Error applying LoRA weight: {e}")
+            import traceback
+            debug(traceback.format_exc())
             return False
     
     def unload_all_models(self):
