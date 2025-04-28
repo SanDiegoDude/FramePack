@@ -58,7 +58,10 @@ def process(
             None, None, None,
             "Please upload an input image!", None,
             gr.update(interactive=True),
-            gr.update(interactive=False),
+            gr.update(interactive=False),  # end_graceful_button (replaces end_button)
+            gr.update(interactive=False),  # force_stop_button (new)
+            gr.update(),
+            gr.update(),
             gr.update(),
             gr.update(),
             gr.update(),
@@ -76,7 +79,10 @@ def process(
                 None, None, None,
                 "Please upload a video to extend!", None,
                 gr.update(interactive=True),
-                gr.update(interactive=False),
+                gr.update(interactive=False),  # end_graceful_button (replaces end_button)
+                gr.update(interactive=False),  # force_stop_button (new)
+                gr.update(),
+                gr.update(),
                 gr.update(),
                 gr.update(),
                 gr.update(),
@@ -112,7 +118,10 @@ def process(
                 None, None, None,
                 f"Error processing video: {str(e)}", None,
                 gr.update(interactive=True),
-                gr.update(interactive=False),
+                gr.update(interactive=False),  # end_graceful_button (replaces end_button)
+                gr.update(interactive=False),  # force_stop_button (new)
+                gr.update(),
+                gr.update(),
                 gr.update(),
                 gr.update(),
                 gr.update(),
@@ -131,13 +140,16 @@ def process(
     yield (
         None, None, None, '', gr.update(visible=False),  # Progress bar hidden at start
         gr.update(interactive=False),
-        gr.update(interactive=True),
+        gr.update(interactive=True),  # end_graceful_button (replaces end_button)
+        gr.update(interactive=True),  # force_stop_button (new)
         gr.update(value=seed),
-        gr.update(visible=False),  # first_frame - explicitly hide
-        gr.update(visible=False),  # last_frame - explicitly hide
+        gr.update(visible=False, elem_classes=""),  # first_frame - explicitly hide
+        gr.update(visible=False, elem_classes=""),  # last_frame - explicitly hide
         gr.update(visible=False),   # extend_button - explicitly hide
         gr.update(visible=False),   # note_message - hidden at start
-        gr.update(visible=False)    # generation_stats - hidden at start
+        gr.update(visible=False),    # generation_stats - hidden at start
+        gr.update(visible=False), # generation_stats_accordian
+        gr.update(visible=False) # frame_thumbnails_group
     )
     # Setup async stream
     stream = AsyncStream()
@@ -226,10 +238,11 @@ def process(
                 gr.update(value="", visible=False),
                 gr.update(value="", visible=False),
                 gr.update(interactive=True, value="Start Generation"), 
-                gr.update(interactive=False),
+                gr.update(interactive=False),           # end_graceful_button (replaces end_button)
+                gr.update(interactive=False),           # force_stop_button (new)
                 gr.update(),
-                gr.update(value=first_frame_img, visible=True), 
-                gr.update(value=last_frame_img, visible=True),
+                gr.update(value=first_frame_img, visible=True, elem_classes="show-thumbnail"),
+                gr.update(value=last_frame_img, visible=True, elem_classes="show-thumbnail"),
                 gr.update(visible=True),
                 gr.update(visible=False),
                 gr.update(visible=True, value=f"""
@@ -238,7 +251,9 @@ def process(
             **Video saved as:** `{os.path.basename(output_filename)}`
             
             {last_desc if last_desc else ""}
-                """)
+                """),
+                gr.update(visible=True, open=False),            # generation_stats_accordion 
+                gr.update(visible=True)                         # frame_thumbnails_group
             )
             last_is_image = False
             last_img_path = None
@@ -257,13 +272,16 @@ def process(
                     "Generating video...",                         # progress_desc
                     gr.update(visible=True),                       # progress_bar
                     gr.update(interactive=False),
-                    gr.update(interactive=True),
+                    gr.update(interactive=True),           # end_graceful_button (replaces end_button)
+                    gr.update(interactive=True),           # force_stop_button (new)
                     gr.update(),                    # seed
                     gr.update(),                    # first_frame
                     gr.update(),                    # last_frame
                     gr.update(),                    # extend_button
                     gr.update(visible=(segment_count_val > 1), value="Note: The ending actions will be generated before the starting actions due to the inverted sampling."),
-                    gr.update(visible=False)        # generation_stats
+                    gr.update(visible=False),        # generation_stats
+                    gr.update(visible=False, open=False),            # generation_stats_accordion 
+                    gr.update(visible=False)                         # frame_thumbnails_group
                 )
             else:
                 debug(f"[UI] Warning: Preview file not found: {preview_filename}")
@@ -282,13 +300,16 @@ def process(
                 desc,                                  # progress_desc
                 gr.update(value=html, visible=True),   # progress_bar
                 gr.update(interactive=False),          # start_button
-                gr.update(interactive=True),           # end_button
+                gr.update(interactive=True),           # end_graceful_button (replaces end_button)
+                gr.update(interactive=True),           # force_stop_button (new)
                 gr.update(),                           # seed
                 gr.update(),                           # first_frame
                 gr.update(),                           # last_frame
                 gr.update(),                           # extend_button
                 gr.update(visible=(segment_count_val > 1), value="Note: The ending actions will be generated before the starting actions due to the inverted sampling."),
-                gr.update(visible=False)               # generation_stats
+                gr.update(visible=False),               # generation_stats
+                gr.update(visible=False, open=False),    # generation_stats_accordion 
+                gr.update(visible=False)                 # frame_thumbnails_group
             )
             
         elif flag == 'file_img':
@@ -301,16 +322,24 @@ def process(
                 f"Generated single image!<br>Saved as <code>{img_filename}</code>",  # progress_desc
                 gr.update(visible=False),                           # progress_bar
                 gr.update(interactive=True),                        # start_button
-                gr.update(interactive=False),                       # end_button
+                gr.update(interactive=False),           # end_graceful_button (replaces end_button)
+                gr.update(interactive=False),           # force_stop_button (new)
                 gr.update(),                                        # seed
                 gr.update(),                                        # first_frame
                 gr.update(),                                        # last_frame
                 gr.update(),                                        # extend_button
                 gr.update(visible=False),                           # note_message
-                gr.update(visible=False)                            # generation_stats
+                gr.update(visible=False),                            # generation_stats
+                gr.update(visible=False, open=False),            # generation_stats_accordion 
+                gr.update(visible=False)                         # frame_thumbnails_group
             )
             last_is_image = True
             last_img_path = img_filename
+
+        elif flag == 'final_stats':
+            stats_text = data
+            last_stats = stats_text  # Store for future use
+            debug(f"[UI] Received final stats: {stats_text[:50]}...")
             
         elif flag == 'end':
             debug(f"Process: yielding end event. final_output_path = {final_output_path}, data = {data}")
@@ -322,13 +351,16 @@ def process(
                     "Generation stopped by user.",  # progress_desc
                     gr.update(visible=False),       # progress_bar
                     gr.update(interactive=True, value="Start Generation"),
-                    gr.update(interactive=False, value="End Generation"),
+                    gr.update(interactive=False),           # end_graceful_button (replaces end_button)
+                    gr.update(interactive=False),           # force_stop_button (new)
                     gr.update(),                    # seed
                     gr.update(),                    # first_frame
                     gr.update(),                    # last_frame
                     gr.update(),                    # extend_button
                     gr.update(visible=False),       # note_message
-                    gr.update(visible=False)        # generation_stats
+                    gr.update(visible=False),        # generation_stats
+                    gr.update(visible=False, open=False),            # generation_stats_accordion 
+                    gr.update(visible=False)                         # frame_thumbnails_group
                 )
                 
             elif data == "img" or last_is_image:  # special image end
@@ -339,16 +371,36 @@ def process(
                     f"Generated single image!<br><a href=\"file/{last_img_path}\" target=\"_blank\">Click here to open full size in new tab.</a><br><code>{last_img_path}</code>",  # progress_desc
                     gr.update(visible=False),               # progress_bar
                     gr.update(interactive=True),
-                    gr.update(interactive=False),
+                    gr.update(interactive=False),           # end_graceful_button (replaces end_button)
+                    gr.update(interactive=False),           # force_stop_button (new)
                     gr.update(),                    # seed
                     gr.update(),                    # first_frame
                     gr.update(),                    # last_frame
                     gr.update(),                    # extend_button
                     gr.update(visible=False),       # note_message
-                    gr.update(visible=False)        # generation_stats
+                    gr.update(visible=False),        # generation_stats
+                    gr.update(visible=False, open=False),            # generation_stats_accordion 
+                    gr.update(visible=False)                         # frame_thumbnails_group
                 )
                 
             else:
+                # For normal video generation completion, update generation_stats with our detailed stats
+                stats_display = ""
+                if 'last_stats' in locals() and last_stats:
+                    # Format the stats nicely with markdown
+                    stats_display = f"""
+        ### Generation Complete
+        **Video saved as:** `{os.path.basename(output_filename)}`
+        
+        {last_stats}
+                    """
+                else:
+                    # Fallback if no stats available
+                    stats_display = f"""
+        ### Generation Complete
+        **Video saved as:** `{os.path.basename(output_filename)}`
+                    """
+                    
                 yield (
                     gr.update(value=output_filename, visible=True), # result_video
                     gr.update(visible=False),                       # result_image_html
@@ -357,12 +409,15 @@ def process(
                     gr.update(value="", visible=False),             # progress_bar
                     gr.update(interactive=True),
                     gr.update(interactive=False),
+                    gr.update(interactive=False),
                     gr.update(),                    # seed
                     gr.update(),                    # first_frame
                     gr.update(),                    # last_frame
                     gr.update(),                    # extend_button
                     gr.update(visible=False),       # note_message
-                    gr.update(visible=True)         # generation_stats - keep visible
+                    gr.update(visible=True, value=stats_display),  # generation_stats - updated with detailed stats
+                    gr.update(visible=True, open=False),            # generation_stats_accordion 
+                    gr.update(visible=True)                         # frame_thumbnails_group
                 )
                 
             debug("Process: end event, breaking loop.")
@@ -372,22 +427,29 @@ def process(
             last_is_image = False
             last_img_path = None
 
+# Replace the old end_process function with two new functions
+def request_graceful_end():
+    """Request a graceful end to the generation process"""
+    global stream
+    if stream:
+        stream.input_queue.push('graceful_end')
+    # Return updates for both buttons
+    return gr.update(interactive=False), gr.update(interactive=True)
+
+def force_immediate_stop():
+    """Force an immediate stop to the generation process"""
+    global stream
+    if stream:
+        stream.input_queue.push('end')
+    # Return updates for both buttons
+    return gr.update(interactive=False), gr.update(interactive=False)
+
 def end_process():
-    """Stop the generation process"""
-    global graceful_stop_requested, stream
-    
-    if not graceful_stop_requested:
-        # First click: request graceful stop
-        graceful_stop_requested = True
-        if stream:
-            stream.input_queue.push('graceful_end')
-        return gr.update(value="Force Stop Now", variant="stop", elem_classes="end-button-warning")
-    else:
-        # Second click: force immediate stop
-        graceful_stop_requested = False  # Reset for next time
-        if stream:
-            stream.input_queue.push('end')
-        return gr.update(value="End Generation", variant="stop", elem_classes="end-button-force")
+    """Compatibility function that redirects to force_immediate_stop"""
+    global stream
+    if stream:
+        stream.input_queue.push('end')
+    return gr.update(value="Force Stop", variant="stop")
 
 # function to handle extension direction changes for video_extension mode
 def toggle_init_color_for_backward(extension_direction, mode):
@@ -402,12 +464,26 @@ def update_video_stats(window_size, segments, overlap):
     segments_val = float(segments)
     overlap_val = float(overlap)
     
-    # Calculate frames
-    frames_per_section = int(window_size_val * 4 - 3)
-    max_overlap = max(0, frames_per_section - 1)
-    actual_overlap = min(overlap_val, max_overlap)
-    effective_frames = frames_per_section - actual_overlap
-    total_frames = segments_val * effective_frames
+    # Calculate frames based on the original demo's approach
+    last_section_frames = int(window_size_val * 4 + 1)  # Last section (first in generation order)
+    regular_section_frames = int(window_size_val * 4) # Regular sections
+    
+    # Maximum possible overlap is limited by section sizes
+    max_possible_overlap = min(regular_section_frames, last_section_frames)
+    # User's requested overlap (limited by what's possible)
+    effective_overlap = min(int(overlap_val), max_possible_overlap)
+    
+    # Calculate total frames
+    if segments_val <= 1:
+        # Just one section (include the input frame)
+        total_frames = last_section_frames
+    else:
+        # First section gets full frame count plus input frame
+        total_frames = last_section_frames
+        
+        # Each additional section adds (length - overlap) frames
+        for i in range(1, int(segments_val)):
+            total_frames += regular_section_frames
     
     # Calculate time (at 30fps)
     seconds = total_frames / 30.0
@@ -420,7 +496,7 @@ def update_video_stats(window_size, segments, overlap):
         <table>
             <tr>
                 <td><b>Frames per segment:</b></td>
-                <td>{int(effective_frames)} frames</td>
+                <td>{regular_section_frames} frames (regular), {last_section_frames} frames (last)</td>
             </tr>
             <tr>
                 <td><b>Total frames:</b></td>

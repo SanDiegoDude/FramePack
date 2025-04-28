@@ -18,14 +18,13 @@ from utils.memory_utils import (
 )
 from utils.video_utils import (
     save_bcthw_as_mp4, find_nearest_bucket, resize_and_center_crop,
-    # crop_or_pad_yield_mask, # Make sure this is the CORRECT version from the demo
     extract_frames_from_video, fix_video_compatibility,
     make_mp4_faststart, apply_gaussian_blur, extract_video_frames
 )
 from diffusers_helper.thread_utils import AsyncStream
 from diffusers_helper.hunyuan import encode_prompt_conds, vae_decode, vae_encode, vae_decode_fake
 from diffusers_helper.clip_vision import hf_clip_vision_encode
-from diffusers_helper.utils import crop_or_pad_yield_mask
+from diffusers_helper.utils import crop_or_pad_yield_mask, soft_append_bcthw
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
 from ui.style import make_progress_bar_html
 
@@ -249,6 +248,8 @@ class VideoGenerator:
         llm_weight = config.get('llm_weight', 1.0)
         clip_weight = config.get('clip_weight', 1.0)
         trim_percentage = config.get('trim_percentage', 0.2)  # Default to 0.2 if not provided
+        frame_overlap = config.get('frame_overlap', 0)
+        total_generated_latent_frames = 0
         job_id = generate_timestamp()
         
         debug(f"[Generator] Received prompt: '{prompt}'")
@@ -260,6 +261,11 @@ class VideoGenerator:
         
         t_start = time.time()
         timings = {"latent_encoding": 0, "step_times": [], "generation_time": 0, "vae_decode_time": 0, "total_time": 0}
+
+        # Extract the frame_overlap
+        frame_overlap = config.get('frame_overlap', 0)
+        debug(f"Using frame overlap: {frame_overlap}")
+
         
         # Calculate sections based on calculated seconds/frames
         # NOTE: Assuming adv_seconds/selected_frames are correctly calculated in ui.callbacks.process
@@ -519,7 +525,13 @@ class VideoGenerator:
                     actual_seconds = actual_pixel_frames / 30.0
                     
                     hint = f'Section {sections_completed+1}/{total_sections} - Step {current_step}/{steps}'
-                    desc = f'Pixel frames generated: {actual_pixel_frames}, Length: {actual_seconds:.2f}s (FPS-30)'
+                    total_expected_frames = 0
+                    if total_sections == 1:
+                        total_expected_frames = (latent_window_size * 2 + 1) + 4  # +4 for initial frame 
+                    else:
+                        total_expected_frames = (latent_window_size * 2 + 1) + 4 + (latent_window_size * 2) * (total_sections - 1)
+                    
+                    desc = f'Pixel frames generated: {actual_pixel_frames}, Length: {actual_seconds:.2f}s (FPS-30), Expected total: {total_expected_frames} frames'
                     
                     # HTML progress display
                     progress_html = f"""
@@ -640,64 +652,51 @@ class VideoGenerator:
                     )
                     load_model_as_complete(self.model_manager.vae, target_device=gpu)
                     debug("loaded vae to gpu")
-                    
+                
                 # Clear CUDA cache to reduce fragmentation
                 torch.cuda.empty_cache()
                 debug("Cleared CUDA cache before decoding")
                 
-                # Calculate theoretical max overlap frames
-                max_overlapped_frames = latent_window_size * 4 - 3
-                debug(f"Theoretical max overlapped_frames={max_overlapped_frames}")
+                # Update total frame count
+                total_generated_latent_frames += int(generated_latents.shape[2])
+                debug(f"Current number of total generated frames: {total_generated_latent_frames}")
+                real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
                 
+                # VAE decoding with original approach
                 try:
-                    # Decode the newly generated latents in chunks - CRITICAL LOGIC
                     t_vae_start = time.time()
-                    debug(f"Decoding generated_latents with shape: {generated_latents.shape}")
-                    chunk_size = 4  # Small enough to avoid OOM
-                    current_pixels_chunks = []
-                    for i in range(0, generated_latents.shape[2], chunk_size):
-                        end_idx = min(i + chunk_size, generated_latents.shape[2])
-                        debug(f"Decoding chunk {i}:{end_idx} of {generated_latents.shape[2]}")
-                        # Move chunk to GPU, decode, then immediately move result to CPU
-                        chunk = generated_latents[:, :, i:end_idx].to(self.model_manager.vae.device, dtype=self.model_manager.vae.dtype)
-                        chunk_pixels = vae_decode(chunk, self.model_manager.vae).cpu()
-                        current_pixels_chunks.append(chunk_pixels)
-                        # Force cleanup of chunk tensors
-                        del chunk, chunk_pixels
-                        torch.cuda.empty_cache()
-                        
-                    # Combine all chunks on CPU
-                    current_pixels = torch.cat(current_pixels_chunks, dim=2)
-                    debug(f"Successfully decoded in chunks: final shape {current_pixels.shape}")
-                    del current_pixels_chunks
-                    torch.cuda.empty_cache()
-                    
-                    # End VAE decode timing
-                    timings["vae_decode_time"] += time.time() - t_vae_start
-                    debug(f"Decoded newly generated latents to pixels with shape: {current_pixels.shape}")
-                    
-                    # Initialize or update history_pixels
                     if history_pixels is None:
-                        history_pixels = current_pixels
-                        debug(f"First section: Set history_pixels directly with shape: {history_pixels.shape}")
+                        history_pixels = vae_decode(real_history_latents, self.model_manager.vae).cpu()
+                        debug(f"First section: Decoded full latents to pixels with shape: {history_pixels.shape}")
                     else:
-                        # Important: simple concatenation to avoid blending issues
-                        history_pixels = torch.cat([current_pixels, history_pixels], dim=2)
-                        debug(f"Concatenated new frames without blending. New history shape: {history_pixels.shape}")
+                        # Calculate correct section frames
+                        section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
+                        overlapped_frames = latent_window_size * 4 - 3
+                        debug(f"Decoding section: frames={section_latent_frames}, overlap={overlapped_frames}")
+                        
+                        # Decode current section only
+                        current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], self.model_manager.vae).cpu()
+                        
+                        # Use the original soft_append_bcthw with correct order
+                        history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
+                        debug(f"Blended with original method. New history shape: {history_pixels.shape}")
+                    
+                    timings["vae_decode_time"] += time.time() - t_vae_start
                     
                     # Save preview video
                     preview_filename = os.path.join(self.output_folder, f'{job_id}_preview_{uuid.uuid4().hex}.mp4')
                     try:
-                        save_bcthw_as_mp4(history_pixels, preview_filename, fps=30, quiet=True)  # Added quiet parameter
+                        save_bcthw_as_mp4(history_pixels, preview_filename, fps=30, quiet=True)
                         debug(f"[FILE] Preview video saved: {preview_filename} ({os.path.exists(preview_filename)})")
                         if self.stream:
                             self.stream.output_queue.push(('preview_video', preview_filename))
                             debug(f"[QUEUE] Queued preview_video event: {preview_filename}")
                     except Exception as e:
                         debug(f"[ERROR] Failed to save preview video: {e}")
-                        
+                    
                     # Clean up memory
-                    del current_pixels
+                    if 'current_pixels' in locals():
+                        del current_pixels
                     torch.cuda.empty_cache()
                     
                 except Exception as e:
@@ -1026,21 +1025,23 @@ class VideoGenerator:
             # Format timing display
             minutes = int(timings["total_time"] // 60)
             seconds = timings["total_time"] % 60
-            summary_string = (
-                f"Finished!\n"
-                f"Total generated frames: {trimmed_frames}, "
-                f"Video length: {video_seconds:.2f} seconds (FPS-30), "
-                f"Time taken: {minutes}m {seconds:.2f}s.\n\n"
-                f"⏱️ Performance Breakdown:\n"
-                f"• Latent encoding: {timings['latent_encoding']:.2f}s\n"
-                f"• Average step time: {avg_step_time:.2f}s\n"
-                f"• Active generation: {timings['generation_time']:.2f}s\n"
-                f"• VAE decoding: {timings['vae_decode_time']:.2f}s\n"
-                f"• Other processing: {misc_time:.2f}s"
-            )
+            summary_string = f"""
+            ### Performance Summary
+            **Total generated frames:** {trimmed_frames}  
+            **Video length:** {video_seconds:.2f} seconds (FPS-30)  
+            **Time taken:** {minutes}m {seconds:.2f}s  
+            
+            ### ⏱️ Performance Breakdown:
+            • **Latent encoding:** {timings['latent_encoding']:.2f}s  
+            • **Average step time:** {avg_step_time:.2f}s  
+            • **Active generation:** {timings['generation_time']:.2f}s  
+            • **VAE decoding:** {timings['vae_decode_time']:.2f}s  
+            • **Other processing:** {misc_time:.2f}s
+            """
             
             if self.stream:
                 self.stream.output_queue.push(('progress', (None, summary_string, "")))
+                self.stream.output_queue.push(('final_stats', summary_string))
                 self.stream.output_queue.push(('end', None))
                 
             return output_filename
