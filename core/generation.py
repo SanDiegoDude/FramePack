@@ -285,7 +285,20 @@ class VideoGenerator:
             
         if self.stream:
             self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
+
+        try:
+            if hasattr(self.model_manager, 'lora_name') and self.model_manager.lora_name:
+                debug(f"Applying LoRA '{self.model_manager.lora_name}' with weight {self.model_manager.lora_weight}")
+                self.model_manager.apply_lora_weight()
             
+            # ============ Input Preparation ============
+            clip_output = None
+            lv, cp, lv_n, cp_n, m, m_n = None, None, None, None, None, None
+            start_latent = None
+            end_latent = None # Only for keyframes
+            height, width = 0, 0
+        
+        
         try:
             # ============ Input Preparation ============
             clip_output = None
