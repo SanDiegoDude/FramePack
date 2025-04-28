@@ -396,8 +396,8 @@ class VideoGenerator:
                 (original_mode == "video_extension" and extension_direction == "Forward")
             )
 
-            # changed to if not to reverse the behavior
-            if not should_reverse_prompts:
+            
+            if should_reverse_prompts:
                 debug(f"Reversing sequential prompts for {mode} mode")
                 prompts = list(reversed(prompts))
                 
