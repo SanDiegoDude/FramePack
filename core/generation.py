@@ -1025,18 +1025,19 @@ class VideoGenerator:
             # Format timing display
             minutes = int(timings["total_time"] // 60)
             seconds = timings["total_time"] % 60
-            summary_string = (
-                f"Finished!\n"
-                f"Total generated frames: {trimmed_frames}, "
-                f"Video length: {video_seconds:.2f} seconds (FPS-30), "
-                f"Time taken: {minutes}m {seconds:.2f}s.\n\n"
-                f"⏱️ Performance Breakdown:\n"
-                f"• Latent encoding: {timings['latent_encoding']:.2f}s\n"
-                f"• Average step time: {avg_step_time:.2f}s\n"
-                f"• Active generation: {timings['generation_time']:.2f}s\n"
-                f"• VAE decoding: {timings['vae_decode_time']:.2f}s\n"
-                f"• Other processing: {misc_time:.2f}s"
-            )
+            summary_string = f"""
+            ### Performance Summary
+            **Total generated frames:** {trimmed_frames}  
+            **Video length:** {video_seconds:.2f} seconds (FPS-30)  
+            **Time taken:** {minutes}m {seconds:.2f}s  
+            
+            ### ⏱️ Performance Breakdown:
+            • **Latent encoding:** {timings['latent_encoding']:.2f}s  
+            • **Average step time:** {avg_step_time:.2f}s  
+            • **Active generation:** {timings['generation_time']:.2f}s  
+            • **VAE decoding:** {timings['vae_decode_time']:.2f}s  
+            • **Other processing:** {misc_time:.2f}s
+            """
             
             if self.stream:
                 self.stream.output_queue.push(('progress', (None, summary_string, "")))
