@@ -175,9 +175,10 @@ def create_interface(model_manager, video_generator):
                     )
                     
                     overlap_slider = gr.Slider(
-                        label="Frame Overlap",
+                        label="Frame Overlap (Currently Locked to 8)",
                         minimum=0, maximum=33, value=8, step=1,
-                        info="Controls how many frames overlap between sections"
+                        info="Controls how many frames overlap between sections",
+                        interactive=False  # Set to non-interactive
                     )
                     
                     trim_percentage = gr.Slider(
