@@ -15,6 +15,8 @@ def main():
     parser.add_argument("--port", type=int, required=False, help="Port to run the server on")
     parser.add_argument("--inbrowser", action='store_true', help="Open in browser automatically")
     parser.add_argument("--debug", action='store_true', help="Enable debug output")
+    parser.add_argument("--lora", type=str, default=None, help="Path to LoRA file")
+    parser.add_argument("--lora-weight", type=float, default=1.0, help="Weight for LoRA (0.0-1.0)")
     args = parser.parse_args()
     
     # Set up debugging based on arguments (True by default for now during development)
@@ -53,7 +55,12 @@ def main():
     debug(f'High-VRAM Mode: {high_vram}')
     
     # Initialize model manager and load models
-    model_manager = ModelManager(high_vram=high_vram)
+    # Initialize model manager and load models
+    model_manager = ModelManager(
+        high_vram=high_vram,
+        lora_path=args.lora,
+        lora_weight=args.lora_weight
+    )
     
     try:
         # Load all models

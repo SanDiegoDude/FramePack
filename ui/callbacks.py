@@ -388,21 +388,33 @@ def process(
                 stats_display = ""
                 if 'last_stats' in locals() and last_stats:
                     # Format the stats nicely with markdown
-                    stats_display = f"""
-        ### Generation Complete
-        **Video saved as:** `{os.path.basename(output_filename)}`
-        
-        {last_stats}
-                    """
+                    if output_filename and os.path.exists(output_filename):
+                        stats_display = f"""
+            ### Generation Complete
+            **Video saved as:** `{os.path.basename(output_filename)}`
+            {last_stats}
+                        """
+                    else:
+                        stats_display = f"""
+            ### Generation Stopped
+            No complete output was generated.
+            {last_stats}
+                        """
                 else:
                     # Fallback if no stats available
-                    stats_display = f"""
-        ### Generation Complete
-        **Video saved as:** `{os.path.basename(output_filename)}`
-                    """
-                    
+                    if output_filename and os.path.exists(output_filename):
+                        stats_display = f"""
+            ### Generation Complete
+            **Video saved as:** `{os.path.basename(output_filename)}`
+                        """
+                    else:
+                        stats_display = f"""
+            ### Generation Stopped
+            No complete output was generated.
+                        """
+                        
                 yield (
-                    gr.update(value=output_filename, visible=True), # result_video
+                    gr.update(value=output_filename if output_filename else None, visible=bool(output_filename)), # result_video
                     gr.update(visible=False),                       # result_image_html
                     gr.update(visible=False),                       # preview_image
                     gr.update(value="", visible=False),             # progress_desc - hide as we use formatted stats
@@ -416,8 +428,8 @@ def process(
                     gr.update(),                    # extend_button
                     gr.update(visible=False),       # note_message
                     gr.update(visible=True, value=stats_display),  # generation_stats - updated with detailed stats
-                    gr.update(visible=True, open=False),            # generation_stats_accordion 
-                    gr.update(visible=True)                         # frame_thumbnails_group
+                    gr.update(visible=True, open=False),            # generation_stats_accordion
+                    gr.update(visible=bool(output_filename))         # frame_thumbnails_group - only show if we have output
                 )
                 
             debug("Process: end event, breaking loop.")
