@@ -53,12 +53,14 @@ def get_css():
     .frame-thumbnail-container {
         margin-top: 5px !important;
         margin-bottom: 5px !important;
+        justify-content: center !important;
         height: 350px !important; /* Extra space for labels */
     }
     
     .frame-thumbnail-row {
         display: flex !important;
         gap: 15px !important;
+        justify-content: center !important;
         max-height: 340px !important;
         max-width: 340px !important;
     }
@@ -78,8 +80,8 @@ def get_css():
     .frame-thumbnail img {
         max-height: 340px !important; /* Slightly smaller than container */
         max-width: 340px !important;    /* Don't fill entire width */
-        width: auto !important;
-        height: auto !important;
+        /* width: auto !important; */
+        /* height: auto !important; */
         object-fit: contain !important;
         display: block !important;
         margin: 0 auto !important;
@@ -118,7 +120,7 @@ def get_css():
         overflow: hidden !important;
     }
     .result-container img, .result-container video {
-        max-height: 340px !important;
+        max-height: 512px !important;
         width: auto !important;
         object-fit: contain !important;
         margin: 0 auto !important;
