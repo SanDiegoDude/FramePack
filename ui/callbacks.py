@@ -63,6 +63,8 @@ def process(
             gr.update(),
             gr.update(),
             gr.update(),
+            gr.update(),
+            gr.update(),
             gr.update()
         )
     
@@ -79,6 +81,8 @@ def process(
                 gr.update(interactive=True),
                 gr.update(interactive=False),  # end_graceful_button (replaces end_button)
                 gr.update(interactive=False),  # force_stop_button (new)
+                gr.update(),
+                gr.update(),
                 gr.update(),
                 gr.update(),
                 gr.update(),
@@ -119,6 +123,8 @@ def process(
                 gr.update(),
                 gr.update(),
                 gr.update(),
+                gr.update(),
+                gr.update(),
                 gr.update()
             )
     
@@ -141,7 +147,9 @@ def process(
         gr.update(visible=False, elem_classes=""),  # last_frame - explicitly hide
         gr.update(visible=False),   # extend_button - explicitly hide
         gr.update(visible=False),   # note_message - hidden at start
-        gr.update(visible=False)    # generation_stats - hidden at start
+        gr.update(visible=False),    # generation_stats - hidden at start
+        gr.update(visible=False), # generation_stats_accordian
+        gr.update(visible=False) # frame_thumbnails_group
     )
     # Setup async stream
     stream = AsyncStream()
@@ -243,7 +251,9 @@ def process(
             **Video saved as:** `{os.path.basename(output_filename)}`
             
             {last_desc if last_desc else ""}
-                """)
+                """),
+                gr.update(visible=True, open=False),            # generation_stats_accordion 
+                gr.update(visible=True)                         # frame_thumbnails_group
             )
             last_is_image = False
             last_img_path = None
@@ -269,7 +279,9 @@ def process(
                     gr.update(),                    # last_frame
                     gr.update(),                    # extend_button
                     gr.update(visible=(segment_count_val > 1), value="Note: The ending actions will be generated before the starting actions due to the inverted sampling."),
-                    gr.update(visible=False)        # generation_stats
+                    gr.update(visible=False),        # generation_stats
+                    gr.update(visible=False, open=False),            # generation_stats_accordion 
+                    gr.update(visible=False)                         # frame_thumbnails_group
                 )
             else:
                 debug(f"[UI] Warning: Preview file not found: {preview_filename}")
@@ -295,7 +307,9 @@ def process(
                 gr.update(),                           # last_frame
                 gr.update(),                           # extend_button
                 gr.update(visible=(segment_count_val > 1), value="Note: The ending actions will be generated before the starting actions due to the inverted sampling."),
-                gr.update(visible=False)               # generation_stats
+                gr.update(visible=False),               # generation_stats
+                gr.update(visible=False, open=False),    # generation_stats_accordion 
+                gr.update(visible=False)                 # frame_thumbnails_group
             )
             
         elif flag == 'file_img':
@@ -315,7 +329,9 @@ def process(
                 gr.update(),                                        # last_frame
                 gr.update(),                                        # extend_button
                 gr.update(visible=False),                           # note_message
-                gr.update(visible=False)                            # generation_stats
+                gr.update(visible=False),                            # generation_stats
+                gr.update(visible=False, open=False),            # generation_stats_accordion 
+                gr.update(visible=False)                         # frame_thumbnails_group
             )
             last_is_image = True
             last_img_path = img_filename
@@ -342,7 +358,9 @@ def process(
                     gr.update(),                    # last_frame
                     gr.update(),                    # extend_button
                     gr.update(visible=False),       # note_message
-                    gr.update(visible=False)        # generation_stats
+                    gr.update(visible=False),        # generation_stats
+                    gr.update(visible=False, open=False),            # generation_stats_accordion 
+                    gr.update(visible=False)                         # frame_thumbnails_group
                 )
                 
             elif data == "img" or last_is_image:  # special image end
@@ -360,7 +378,9 @@ def process(
                     gr.update(),                    # last_frame
                     gr.update(),                    # extend_button
                     gr.update(visible=False),       # note_message
-                    gr.update(visible=False)        # generation_stats
+                    gr.update(visible=False),        # generation_stats
+                    gr.update(visible=False, open=False),            # generation_stats_accordion 
+                    gr.update(visible=False)                         # frame_thumbnails_group
                 )
                 
             else:
@@ -395,7 +415,9 @@ def process(
                     gr.update(),                    # last_frame
                     gr.update(),                    # extend_button
                     gr.update(visible=False),       # note_message
-                    gr.update(visible=True, value=stats_display)  # generation_stats - updated with detailed stats
+                    gr.update(visible=True, value=stats_display),  # generation_stats - updated with detailed stats
+                    gr.update(visible=True, open=False),            # generation_stats_accordion 
+                    gr.update(visible=True)                         # frame_thumbnails_group
                 )
                 
             debug("Process: end event, breaking loop.")
