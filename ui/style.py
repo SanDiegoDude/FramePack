@@ -52,28 +52,36 @@ def get_css():
     /* Frame Thumbnails - Fixed container */
     .frame-thumbnail-container {
         margin-top: 20px !important;
+        margin-bottom: 20px !important;
         height: 380px !important; /* Extra space for labels */
-        overflow: hidden !important;
     }
     
     .frame-thumbnail-row {
         display: flex !important;
-        gap: 10px !important;
+        gap: 15px !important;
         height: 340px !important;
     }
     
+    /* Individual frame thumbnails */
     .frame-thumbnail {
         flex: 1 !important;
-        max-height: 340px !important;
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        background: #222 !important;
+        padding: 5px !important;
         overflow: hidden !important;
     }
     
+    /* Images inside thumbnails */
     .frame-thumbnail img {
-        max-height: 340px !important;
+        max-height: 300px !important; /* Slightly smaller than container */
+        max-width: 90% !important;    /* Don't fill entire width */
         width: auto !important;
+        height: auto !important;
         object-fit: contain !important;
-        margin: 0 auto !important;
         display: block !important;
+        margin: 0 auto !important;
     }
     
     /* Position extend button next to video */
