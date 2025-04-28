@@ -49,23 +49,45 @@ def get_css():
         border-color: #AA0F2D !important;
     }
     
-    /* Frame Thumbnails - FIXED with proper scaling */
-    .frame-thumbnail {
-        max-height: 256px !important;
+    /* Frame Thumbnails - Fixed container */
+    .frame-thumbnail-container {
+        margin-top: 20px !important;
+        height: 380px !important; /* Extra space for labels */
         overflow: hidden !important;
-        object-fit: contain !important;
-        margin-bottom: 10px !important;
-        display: none !important; /* Hidden by default */
     }
-    .frame-thumbnail.show-thumbnail {
-        display: block !important;
+    
+    .frame-thumbnail-row {
+        display: flex !important;
+        gap: 10px !important;
+        height: 340px !important;
     }
+    
+    .frame-thumbnail {
+        flex: 1 !important;
+        max-height: 340px !important;
+        overflow: hidden !important;
+    }
+    
     .frame-thumbnail img {
-        max-height: 256px !important;
+        max-height: 340px !important;
         width: auto !important;
         object-fit: contain !important;
         margin: 0 auto !important;
         display: block !important;
+    }
+    
+    /* Position extend button next to video */
+    .extend-button button {
+        margin-top: 5px !important;
+        margin-bottom: 15px !important;
+        background-color: #0078D7 !important; /* Microsoft blue */
+        border-color: #0078D7 !important;
+    }
+    
+    /* Make accordions look better */
+    .gradio-accordion {
+        margin-top: 10px !important;
+        margin-bottom: 10px !important;
     }
     
     /* Input Image Container - proper scaling */
