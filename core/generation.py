@@ -822,7 +822,7 @@ class VideoGenerator:
                 if not self.model_manager.high_vram:
                     mem_utils.offload_model_from_device_for_memory_preservation(
                         self.model_manager.transformer,
-                        target_device=gpu,
+                        offload_target_device=mem_utils.gpu,
                         preserved_memory_gb=8
                     )
                     mem_utils.load_model_as_complete(self.model_manager.vae, target_device=gpu)
