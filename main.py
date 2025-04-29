@@ -21,6 +21,17 @@ def main():
     parser.add_argument("--lora-diagnose", action='store_true', help="Diagnose LoRA weights/loadability and exit (no generation)")
     args = parser.parse_args()
 
+
+    # --- BEGIN BACKEND SWITCH ---
+    try:
+        # The error involves cusolver, so let's try preferring 'magma'
+        torch.backends.cuda.preferred_linalg_library("magma")
+        debug("Set preferred CUDA linear algebra library to 'magma'")
+    except Exception as e:
+        debug(f"Could not set preferred CUDA linalg library: {e}. Using default.")
+    # --- END BACKEND SWITCH ---
+
+    
     # Multi-LoRA configuration
     from utils.lora_utils import parse_lora_arg, lora_diagnose
     lora_arg = args.lora or ""
