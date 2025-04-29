@@ -142,8 +142,6 @@ def move_model_to_device_with_memory_preservation(model, target_device, preserve
         gc.collect()
         raise
 
-# Renamed target_device parameter to offload_target_device for clarity in this function context
-# Although the original code used target_device (usually gpu) the intent is to offload TO CPU.
 def offload_model_from_device_for_memory_preservation(model, offload_target_device, preserved_memory_gb=6):
     """Offload a model with detailed memory tracking, including PEFT adapters"""
     if model is None:
@@ -170,43 +168,42 @@ def offload_model_from_device_for_memory_preservation(model, offload_target_devi
 
     start_time = time.time()
     try:
-        # Use original implementation (handles DynamicSwap base model)
-        # The original function might *keep* some base layers on the GPU (target_device)
-        # based on the preserved_memory_gb. We still want to ensure LoRAs go to CPU regardless.
-        model = _original_offload_model_from_device_for_memory_preservation(
+        model_after_offload = _original_offload_model_from_device_for_memory_preservation(
             model, offload_target_device, preserved_memory_gb
         )
 
         # --- BEGIN LoRA Offload Handling ---
-        # Explicitly move PEFT adapters to CPU
-        debug(f"MEMORY: Ensuring PEFT LoRA adapters are on cpu for {model_name}")
-        offloaded_lora_adapter_count = 0
-        for module in model.modules():
-            if hasattr(module, 'lora_A') and isinstance(module.lora_A, torch.nn.ModuleDict):
-                for adapter_name in module.lora_A:
-                    # Check if the adapter's weight is currently NOT on CPU
-                    if module.lora_A[adapter_name].weight.device != cpu:
-                        module.lora_A[adapter_name].to(cpu)
-                        offloaded_lora_adapter_count += 1
-            if hasattr(module, 'lora_B') and isinstance(module.lora_B, torch.nn.ModuleDict):
-                 for adapter_name in module.lora_B:
-                    # Check if the adapter's weight is currently NOT on CPU
-                    if module.lora_B[adapter_name].weight.device != cpu:
-                        module.lora_B[adapter_name].to(cpu)
-                        offloaded_lora_adapter_count += 1
-            # Add checks for other LoRA types if necessary (e.g., LoRA embeddings)
-            if hasattr(module, 'lora_embedding_A') and isinstance(module.lora_embedding_A, torch.nn.ParameterDict):
-                 for adapter_name in module.lora_embedding_A:
-                     if module.lora_embedding_A[adapter_name].device != cpu:
-                         module.lora_embedding_A[adapter_name] = torch.nn.Parameter(module.lora_embedding_A[adapter_name].to(cpu))
-                         offloaded_lora_adapter_count += 1
-            if hasattr(module, 'lora_embedding_B') and isinstance(module.lora_embedding_B, torch.nn.ParameterDict):
-                 for adapter_name in module.lora_embedding_B:
-                     if module.lora_embedding_B[adapter_name].device != cpu:
-                         module.lora_embedding_B[adapter_name] = torch.nn.Parameter(module.lora_embedding_B[adapter_name].to(cpu))
-                         offloaded_lora_adapter_count += 1
-        if offloaded_lora_adapter_count > 0:
-             debug(f"MEMORY: Offloaded {offloaded_lora_adapter_count} LoRA adapter components to cpu")
+        if model_after_offload is None:
+            debug(f"MEMORY: Base model became None after original offload call for {model_name}, skipping LoRA offload.")
+        else:
+            # Now it's safe to proceed with model_after_offload
+            debug(f"MEMORY: Ensuring PEFT LoRA adapters are on cpu for {model_name}")
+            offloaded_lora_adapter_count = 0
+            # Iterate using the potentially modified model object returned by the original function
+            for module in model_after_offload.modules():
+                if hasattr(module, 'lora_A') and isinstance(module.lora_A, torch.nn.ModuleDict):
+                    for adapter_name in module.lora_A:
+                        if module.lora_A[adapter_name].weight.device != cpu:
+                            module.lora_A[adapter_name].to(cpu)
+                            offloaded_lora_adapter_count += 1
+                if hasattr(module, 'lora_B') and isinstance(module.lora_B, torch.nn.ModuleDict):
+                     for adapter_name in module.lora_B:
+                        if module.lora_B[adapter_name].weight.device != cpu:
+                            module.lora_B[adapter_name].to(cpu)
+                            offloaded_lora_adapter_count += 1
+                # Add checks for other LoRA types if necessary (e.g., LoRA embeddings)
+                if hasattr(module, 'lora_embedding_A') and isinstance(module.lora_embedding_A, torch.nn.ParameterDict):
+                     for adapter_name in module.lora_embedding_A:
+                         if module.lora_embedding_A[adapter_name].device != cpu:
+                             module.lora_embedding_A[adapter_name] = torch.nn.Parameter(module.lora_embedding_A[adapter_name].to(cpu))
+                             offloaded_lora_adapter_count += 1
+                if hasattr(module, 'lora_embedding_B') and isinstance(module.lora_embedding_B, torch.nn.ParameterDict):
+                     for adapter_name in module.lora_embedding_B:
+                         if module.lora_embedding_B[adapter_name].device != cpu:
+                             module.lora_embedding_B[adapter_name] = torch.nn.Parameter(module.lora_embedding_B[adapter_name].to(cpu))
+                             offloaded_lora_adapter_count += 1
+            if offloaded_lora_adapter_count > 0:
+                 debug(f"MEMORY: Offloaded {offloaded_lora_adapter_count} LoRA adapter components to cpu")
         # --- END LoRA Offload Handling ---
 
 
@@ -217,7 +214,9 @@ def offload_model_from_device_for_memory_preservation(model, offload_target_devi
             debug(f"MEMORY: Offloaded {model_name} (incl. LoRAs) in {elapsed:.2f}s, freed approx {freed_mem:.2f} GB, now {free_mem_after:.2f} GB free")
         else:
              debug(f"MEMORY: Offloaded {model_name} (incl. LoRAs) from {current_device} in {elapsed:.2f}s")
-        return model
+
+        # Return the result from the original function (which might be None)
+        return model_after_offload
     except Exception as e:
         debug(f"MEMORY: ERROR offloading {model_name}: {e}")
         if current_device.type == 'cuda':
