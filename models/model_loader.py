@@ -30,25 +30,25 @@ class ModelManager:
         # Model loading status
         self.models_loaded = False
 
-        def load_loras(self):
-            """
-            Load all requested LoRAs and activate their adapters.
-            """
-            if not self.lora_configs:
-                return
-            from utils.lora_utils import load_all_loras
-            self.active_loras, self.failed_loras = load_all_loras(
-                self.transformer,
-                self.lora_configs,
-                skip_fail=self.lora_skip_fail
-            )
-            # Diagnostic/verbose prints for CLI/log
-            if self.active_loras:
-                print("Loaded LoRAs: " + ", ".join([f"{c.path} (w={c.weight})" for c in self.active_loras]))
-            if self.failed_loras:
-                print("LoRAs failed to load:")
-                for c in self.failed_loras:
-                    print(f"  {c.path} reason: {c.error}")
+    def load_loras(self):
+        """
+        Load all requested LoRAs and activate their adapters.
+        """
+        if not self.lora_configs:
+            return
+        from utils.lora_utils import load_all_loras
+        self.active_loras, self.failed_loras = load_all_loras(
+            self.transformer,
+            self.lora_configs,
+            skip_fail=self.lora_skip_fail
+        )
+        # Diagnostic/verbose prints for CLI/log
+        if self.active_loras:
+            print("Loaded LoRAs: " + ", ".join([f"{c.path} (w={c.weight})" for c in self.active_loras]))
+        if self.failed_loras:
+            print("LoRAs failed to load:")
+            for c in self.failed_loras:
+                print(f"  {c.path} reason: {c.error}")
     
     def load_all_models(self):
         """Load all required models based on VRAM configuration"""
