@@ -31,11 +31,10 @@ def clear_cuda_cache():
     return 0
 
 def move_model_to_device_with_memory_preservation(model, target_device, preserved_memory_gb=6):
-    """Move a model to device with detailed memory tracking"""
     if model is None:
         debug("MEMORY: Attempted to move None model")
-        return None
-        
+        raise ValueError("Attempted to move_model_to_device_with_memory_preservation on a None object!")
+            
     model_name = model.__class__.__name__
     
     # Only show message if not in debug mode
