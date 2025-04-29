@@ -615,10 +615,9 @@ class VideoGenerator:
 
                 # --- Memory: Load Transformer ---
                 if not self.model_manager.high_vram:
-                    unload_complete_models() # Clear space first
-                    if self.model_manager.transformer is None:
-                        debug("Transformer is None. Reloading all models.")
-                        self.model_manager.load_all_models()
+                    unload_complete_models()  # Clear space first
+                    self.model_manager.ensure_all_models_loaded()
+                    debug("[LOAD TRANSFORMER] Ensured all models loaded before attempting GPU load")
                     move_model_to_device_with_memory_preservation(self.model_manager.transformer, gpu, gpu_memory_preservation)
                 
                 # --- Initialize TeaCache ---
