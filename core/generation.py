@@ -615,18 +615,16 @@ class VideoGenerator:
                 if not self.model_manager.high_vram:
                     # Only offload models you want to! Don't call with no args.
                     mem_utils.unload_complete_models(
-                        self.model_manager.text_encoder,
+                        # self.model_manager.text_encoder,
                         self.model_manager.text_encoder_2,
                         self.model_manager.image_encoder,
                         self.model_manager.vae,
-                        self.model_manager.transformer
+                        # self.model_manager.transformer
                     )
-                    self.model_manager.ensure_all_models_loaded()
-                    debug("[LOAD TRANSFORMER] Ensured all models loaded before attempting GPU load")
                     if self.model_manager.transformer is None:
-                        raise RuntimeError("ModelManager.transformer is None after ensure_all_models_loaded!")
-                    debug(f"[GEN] About to restore model: id={id(self.model_manager.transformer)}, type={type(self.model_manager.transformer)}")                        
-                    mem_utils.move_model_to_device_with_memory_preservation(self.model_manager.transformer, gpu, gpu_memory_preservation)
+                        raise RuntimeError("ModelManager.transformer is None before GPU move attempt!")
+                    debug(f"[GEN] About to move managed transformer to GPU: id={id(self.model_manager.transformer)}, type={type(self.model_manager.transformer)}")
+                    mem_utils.move_model_to_device_with_memory_preservation(self.model_manager.transformer, mem_utils.gpu, gpu_memory_preservation)
                 
                 # --- Initialize TeaCache ---
                 self.model_manager.initialize_teacache(use_teacache, steps if use_teacache else 0)
