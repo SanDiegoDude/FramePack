@@ -9,8 +9,12 @@ from utils.memory_utils import (
 
 class ModelManager:
     """Manages loading, unloading, and access to AI models"""
-    def __init__(self, high_vram=False, lora_path=None, lora_weight=1.0):
+    def __init__(self, high_vram=False, lora_configs=None, lora_skip_fail=False):
         self.high_vram = high_vram
+        self.lora_configs = lora_configs or []
+        self.lora_skip_fail = lora_skip_fail
+        self.active_loras = []
+        self.failed_loras = []
         self.lora_path = lora_path
         self.lora_weight = lora_weight
         self.lora_name = None  # Will be set if LoRA is loaded
@@ -30,7 +34,27 @@ class ModelManager:
         
         # Model loading status
         self.models_loaded = False
-        
+
+        def load_loras(self):
+            """
+            Load all requested LoRAs and activate their adapters.
+            """
+            if not self.lora_configs:
+                return
+            from utils.lora_utils import load_all_loras
+            self.active_loras, self.failed_loras = load_all_loras(
+                self.transformer,
+                self.lora_configs,
+                skip_fail=self.lora_skip_fail
+            )
+            # Diagnostic/verbose prints for CLI/log
+            if self.active_loras:
+                print("Loaded LoRAs: " + ", ".join([f"{c.path} (w={c.weight})" for c in self.active_loras]))
+            if self.failed_loras:
+                print("LoRAs failed to load:")
+                for c in self.failed_loras:
+                    print(f"  {c.path} reason: {c.error}")
+    
     def load_all_models(self):
         """Load all required models based on VRAM configuration"""
         try:
@@ -146,7 +170,10 @@ class ModelManager:
                 for m in [self.text_encoder, self.text_encoder_2, self.image_encoder, self.vae, self.transformer]:
                     if m is not None:
                         m.to(gpu)
-            
+
+            # Load LoRAs after transformer is ready
+            if self.lora_configs:
+                self.load_loras()
             self.models_loaded = True
             debug("All models loaded successfully")
             return True
