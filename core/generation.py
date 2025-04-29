@@ -609,8 +609,6 @@ class VideoGenerator:
                 debug(f"Loop {section} - Using mask m: {current_m.shape} ({current_m.dtype})")
 
                 if self.model_manager.transformer is None:
-                    # Reload it!
-                    from utils.memory_utils import load_model_as_complete
                     self.model_manager.transformer = load_model_as_complete(
                         self.model_manager.transformer, gpu
                     )
