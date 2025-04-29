@@ -59,7 +59,6 @@ class ModelManager:
 
     def ensure_all_models_loaded(self):
         """If any required model is None, reload all models (auto-heals from accidental None)."""
-        # List the required model attribute names
         required_attrs = [
             "text_encoder", "text_encoder_2", "tokenizer",
             "tokenizer_2", "vae", "feature_extractor",
@@ -68,11 +67,13 @@ class ModelManager:
         missing = [name for name in required_attrs if getattr(self, name, None) is None]
         if missing:
             debug(f"[AutoReload] ModelManager reloading all models due to missing: {missing}")
+            # Always reload all at once
             self.load_all_models()
-            # After attempt, fail hard if any are still missing
-            still_missing = [name for name in required_attrs if getattr(self, name, None) is None]
-            if still_missing:
-                raise RuntimeError(f"Failed to reload required models: {still_missing}")
+        # Recheck
+        still_missing = [name for name in required_attrs if getattr(self, name, None) is None]
+        if still_missing:
+            debug(f"[FATAL] After reload, still missing: {still_missing}")
+            raise RuntimeError(f"Failed to reload required models: {still_missing}")
     
     def load_all_models(self):
         """Load all required models based on VRAM configuration"""
