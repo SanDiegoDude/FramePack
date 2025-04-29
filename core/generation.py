@@ -607,7 +607,14 @@ class VideoGenerator:
                 current_m = m if m is not None else torch.ones((lv.shape[0], lv.shape[1]), dtype=torch.bool, device=lv.device)
                 current_m_n = m_n if m_n is not None else torch.ones((lv_n.shape[0], lv_n.shape[1]), dtype=torch.bool, device=lv_n.device)
                 debug(f"Loop {section} - Using mask m: {current_m.shape} ({current_m.dtype})")
-                
+
+                if self.model_manager.transformer is None:
+                    # Reload it!
+                    from utils.memory_utils import load_model_as_complete
+                    self.model_manager.transformer = load_model_as_complete(
+                        self.model_manager.transformer, gpu
+                    )
+
                 # --- Memory: Load Transformer ---
                 if not self.model_manager.high_vram:
                     unload_complete_models() # Clear space first
