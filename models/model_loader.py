@@ -150,6 +150,10 @@ class ModelManager:
             # Load LoRAs after transformer is ready
             if self.lora_configs:
                 self.load_loras()
+                if self.high_vram:
+                    self.transformer.to(gpu)
+                else:
+                    self.transformer.to(cpu)
             self.models_loaded = True
             debug("All models loaded successfully")
             return True
