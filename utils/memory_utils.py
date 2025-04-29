@@ -58,6 +58,9 @@ def move_model_to_device_with_memory_preservation(model, target_device, preserve
         model = _original_move_model_to_device_with_memory_preservation(
             model, target_device, preserved_memory_gb
         )
+        if model is None:
+            debug(f"MEMORY: [FATAL] _original_move_model_to_device_with_memory_preservation returned None (model_name={model_name})")
+            raise RuntimeError(f"_original_move_model_to_device_with_memory_preservation returned None for '{model_name}'!")
         # After moving, ensure ALL submodules (including LoRA) are now on the target device
         model.to(target_device)
         # Get memory after moving
