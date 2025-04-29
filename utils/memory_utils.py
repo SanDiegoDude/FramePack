@@ -31,6 +31,7 @@ def clear_cuda_cache():
     return 0
 
 def move_model_to_device_with_memory_preservation(model, target_device, preserved_memory_gb=6):
+    debug(f"MEMORY: Pass to _original_move_model_to_device_with_memory_preservation: id={id(model)}, type={type(model)}")
     if model is None:
         debug("MEMORY: Attempted to move None model")
         raise RuntimeError("Tried to move_model_to_device_with_memory_preservation with model=None")
