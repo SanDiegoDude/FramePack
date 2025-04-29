@@ -94,7 +94,7 @@ def move_model_to_device_with_memory_preservation(model, target_device, preserve
 
     model.to(device=target_device)
     torch.cuda.empty_cache()
-    return
+    return model
 
 
 def offload_model_from_device_for_memory_preservation(model, target_device, preserved_memory_gb=0):
@@ -110,7 +110,7 @@ def offload_model_from_device_for_memory_preservation(model, target_device, pres
 
     model.to(device=cpu)
     torch.cuda.empty_cache()
-    return
+    return model
 
 
 def unload_complete_models(*args):
@@ -131,4 +131,4 @@ def load_model_as_complete(model, target_device, unload=True):
     print(f'Loaded {model.__class__.__name__} to {target_device} as complete.')
 
     gpu_complete_modules.append(model)
-    return
+    return model
