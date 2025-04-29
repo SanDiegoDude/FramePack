@@ -61,6 +61,8 @@ def move_model_to_device_with_memory_preservation(model, target_device, preserve
         model = _original_move_model_to_device_with_memory_preservation(
             model, target_device, preserved_memory_gb
         )
+        # After moving, ensure ALL submodules (including LoRA) are now on the target device
+        model.to(target_device)
         # Get memory after moving
         free_mem_after_move = get_cuda_free_memory_gb(target_device)
         used_mem = free_mem_after_clear - free_mem_after_move
