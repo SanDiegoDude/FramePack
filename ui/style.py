@@ -49,43 +49,41 @@ def get_css():
         border-color: #AA0F2D !important;
     }
     
-    /* Frame Thumbnails - Fixed container */
-    .frame-thumbnail-container {
-        margin-top: 5px !important;
-        margin-bottom: 5px !important;
-        justify-content: center !important;
-        height: 350px !important; /* Extra space for labels */
-    }
-    
-    .frame-thumbnail-row {
-        display: flex !important;
-        gap: 15px !important;
-        justify-content: center !important;
-        max-height: 340px !important;
-        max-width: 340px !important;
-    }
-    
-    /* Individual frame thumbnails */
-    .frame-thumbnail {
-        flex: 1 !important;
-        display: flex !important;
-        justify-content: center !important;
-        align-items: center !important;
-        background: #222 !important;
-        padding: 5px !important;
-        overflow: hidden !important;
-    }
-    
-    /* Images inside thumbnails */
-    .frame-thumbnail img {
-        max-height: 340px !important; /* Slightly smaller than container */
-        max-width: 340px !important;    /* Don't fill entire width */
-        /* width: auto !important; */
-        /* height: auto !important; */
-        object-fit: contain !important;
-        display: block !important;
-        margin: 0 auto !important;
-    }
+    /* Frame Thumbnails - maximize height 460px, side by side */
+.frame-thumbnail-container {
+    margin-top: 5px !important;
+    margin-bottom: 5px !important;
+    height: 460px !important;       /* Increase from 350px */
+    max-height: 460px !important;
+    overflow: visible !important;
+}
+
+.frame-thumbnail-row {
+    display: flex !important;
+    gap: 20px !important;
+    max-height: 460px !important;
+}
+
+.frame-thumbnail {
+    flex: 1 1 0% !important;
+    display: flex !important;
+    justify-content: center !important;
+    align-items: center !important;
+    background: #222 !important;
+    padding: 5px !important;
+    overflow: hidden !important;
+    height: 100% !important;
+}
+
+.frame-thumbnail img, .frame-thumbnail .gr-image img {
+    max-height: 440px !important;   /* Slightly smaller than container */
+    max-width: 100% !important;
+    width: auto !important;
+    height: auto !important;
+    object-fit: contain !important;
+    display: block !important;
+    margin: 0 auto !important;
+}
     
     /* Position extend button next to video */
     .extend-button button {
@@ -116,16 +114,19 @@ def get_css():
     
     /* Result Container - proper scaling */
     .result-container {
-        max-height: 340px !important;
-        overflow: hidden !important;
-    }
-    .result-container img, .result-container video {
-        max-height: 512px !important;
-        width: auto !important;
-        object-fit: contain !important;
-        margin: 0 auto !important;
-        display: block !important;
-    }
+    max-height: 512px !important;
+    min-height: 128px !important;
+    overflow: hidden !important;
+}
+
+.result-container video, .gr-video video {
+    max-height: 512px !important;
+    height: 100% !important;
+    width: auto !important;
+    object-fit: contain !important;
+    margin: 0 auto !important;
+    display: block !important;
+}
     
     /* Video Container - proper scaling */
     .video-container {
