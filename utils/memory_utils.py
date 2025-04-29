@@ -33,15 +33,13 @@ def clear_cuda_cache():
 def move_model_to_device_with_memory_preservation(model, target_device, preserved_memory_gb=6):
     if model is None:
         debug("MEMORY: Attempted to move None model")
-        raise ValueError("Attempted to move_model_to_device_with_memory_preservation on a None object!")
-            
+        raise RuntimeError("Tried to move_model_to_device_with_memory_preservation with model=None")
     model_name = model.__class__.__name__
-    
     # Only show message if not in debug mode
     if not DEBUG and target_device == gpu:
         print(f"Moving {model_name} to {target_device} with preserved memory: {preserved_memory_gb} GB")
-        
     debug(f"MEMORY: ===== MOVING {model_name} TO {target_device} =====")
+        
     # Get memory stats before
     free_mem_before = get_cuda_free_memory_gb(target_device)
     debug(f"MEMORY: Before moving {model_name}: {free_mem_before:.2f} GB free, preserving {preserved_memory_gb:.2f} GB")
@@ -75,7 +73,10 @@ def move_model_to_device_with_memory_preservation(model, target_device, preserve
         debug(f"MEMORY: ERROR moving {model_name} to {target_device}: {e}")
         # Try to diagnose
         debug(f"MEMORY: Attempting to diagnose OOM for {model_name}")
-        debug(f"MEMORY: Model size estimate: {sum(p.numel() * p.element_size() for p in model.parameters()) / (1024**3):.2f} GB")
+        try:
+            debug(f"MEMORY: Model size estimate: {sum(p.numel() * p.element_size() for p in model.parameters()) / (1024**3):.2f} GB")
+        except Exception:
+            debug("MEMORY: Cannot print model size; model is None or missing parameters")
         debug(f"MEMORY: CUDA Memory allocated: {torch.cuda.memory_allocated() / (1024**3):.2f} GB")
         debug(f"MEMORY: CUDA Memory reserved: {torch.cuda.memory_reserved() / (1024**3):.2f} GB")
         # Try to recover
