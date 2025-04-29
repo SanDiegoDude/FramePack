@@ -16,11 +16,9 @@ from utils.memory_utils import (
     offload_model_from_device_for_memory_preservation, load_model_as_complete,
     unload_complete_models, fake_diffusers_current_device
 )
-from utils.video_utils import (
-    save_bcthw_as_mp4, find_nearest_bucket, resize_and_center_crop,
-    extract_frames_from_video, fix_video_compatibility,
-    make_mp4_faststart, apply_gaussian_blur, extract_video_frames
-)
+import utils.memory_utils as mem_utils
+# Keep other specific imports from memory_utils if needed, or access them via mem_utils
+from utils.memory_utils import cpu, gpu, get_cuda_free_memory_gb
 from diffusers_helper.thread_utils import AsyncStream
 from diffusers_helper.hunyuan import encode_prompt_conds, vae_decode, vae_encode, vae_decode_fake
 from diffusers_helper.clip_vision import hf_clip_vision_encode
@@ -101,12 +99,12 @@ class VideoGenerator:
         
         # --- Memory Management: Offload everything ---
         if not self.model_manager.high_vram:
-            unload_complete_models(
+            mem_utils.unload_complete_models(
                 self.model_manager.text_encoder,
                 self.model_manager.text_encoder_2
             )
-            fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
-            load_model_as_complete(self.model_manager.text_encoder_2, target_device=gpu)
+            mem_utils.fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
+            mem_utils.load_model_as_complete(self.model_manager.text_encoder_2, target_device=gpu)
         
         # Encode each prompt
         for i, p in enumerate(prompts):
@@ -185,7 +183,7 @@ class VideoGenerator:
         
         # --- Memory Management: Offload everything ---
         if not self.model_manager.high_vram:
-            unload_complete_models(
+            mem_utils.unload_complete_models(
                 self.model_manager.text_encoder,
                 self.model_manager.text_encoder_2,
                 self.model_manager.image_encoder,
@@ -197,8 +195,8 @@ class VideoGenerator:
         debug(f"[Prepare Inputs] Encoding prompt: '{prompt}'")
         debug(f"[Prepare Inputs] Encoding negative prompt: '{n_prompt}'")
         if not self.model_manager.high_vram:
-            fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
-            load_model_as_complete(self.model_manager.text_encoder_2, target_device=gpu)
+            mem_utils.fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
+            mem_utils.load_model_as_complete(self.model_manager.text_encoder_2, target_device=gpu)
         
         debug(f"[Prepare Inputs] Text Encoder device: {self.model_manager.text_encoder.device if self.model_manager.text_encoder else 'None'}")
         debug(f"[Prepare Inputs] Text Encoder 2 device: {self.model_manager.text_encoder_2.device if self.model_manager.text_encoder_2 else 'None'}")                          
@@ -432,25 +430,25 @@ class VideoGenerator:
                 end_np = resize_and_center_crop(end_frame, width, height)
                 
                 # --- Memory: Offload ---
-                if not self.model_manager.high_vram: unload_complete_models(
+                if not self.model_manager.high_vram: mem_utils.unload_complete_models(
                     self.model_manager.text_encoder, self.model_manager.text_encoder_2,
                     self.model_manager.image_encoder, self.model_manager.vae, self.model_manager.transformer
                 )
                 
                 # --- VAE Encode Start/End ---
-                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.vae, gpu)
+                if not self.model_manager.high_vram: mem_utils.load_model_as_complete(self.model_manager.vae, gpu)
                 t_vae_start = time.time()
                 anchor_tensor = (torch.from_numpy(anchor_np).float()/127.5 - 1.0).permute(2,0,1)[None,:,None]
                 start_latent = vae_encode(anchor_tensor, self.model_manager.vae)
                 end_tensor = (torch.from_numpy(end_np).float()/127.5 - 1.0).permute(2,0,1)[None,:,None]
                 end_latent = vae_encode(end_tensor, self.model_manager.vae)
                 timings["latent_encoding"] += time.time() - t_vae_start
-                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.vae)
+                if not self.model_manager.high_vram: mem_utils.unload_complete_models(self.model_manager.vae)
                 
                 # --- Text Encoding ---
                 if not self.model_manager.high_vram:
-                    fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
-                    load_model_as_complete(self.model_manager.text_encoder_2, gpu)
+                    mem_utils.fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
+                    mem_utils.load_model_as_complete(self.model_manager.text_encoder_2, gpu)
                     
                 lv, cp = encode_prompt_conds(
                     prompt, self.model_manager.text_encoder, self.model_manager.text_encoder_2,
@@ -465,10 +463,10 @@ class VideoGenerator:
                 lv, m = crop_or_pad_yield_mask(lv, 512)
                 lv_n, m_n = crop_or_pad_yield_mask(lv_n, 512)
                 
-                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.text_encoder, self.model_manager.text_encoder_2)
+                if not self.model_manager.high_vram: mem_utils.unload_complete_models(self.model_manager.text_encoder, self.model_manager.text_encoder_2)
                 
                  # --- CLIP Vision Encoding ---
-                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.image_encoder, gpu)
+                if not self.model_manager.high_vram: mem_utils.load_model_as_complete(self.model_manager.image_encoder, gpu)
                 
                 end_clip = hf_clip_vision_encode(
                     end_np, self.model_manager.feature_extractor, self.model_manager.image_encoder
@@ -482,7 +480,7 @@ class VideoGenerator:
                 else:
                     clip_output = end_clip
                     
-                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.image_encoder)
+                if not self.model_manager.high_vram: mem_utils.unload_complete_models(self.model_manager.image_encoder)
                 
             elif mode == "text2video":
                 width, height = self.get_dims_from_aspect(aspect, custom_w, custom_h)
@@ -502,18 +500,18 @@ class VideoGenerator:
                 )
                 
                 # --- VAE Encode ---
-                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.vae, gpu)
+                if not self.model_manager.high_vram: mem_utils.load_model_as_complete(self.model_manager.vae, gpu)
                 t_vae_start = time.time()
                 start_latent = vae_encode(input_tensor, self.model_manager.vae)
                 timings["latent_encoding"] += time.time() - t_vae_start
-                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.vae)
+                if not self.model_manager.high_vram: mem_utils.unload_complete_models(self.model_manager.vae)
                 
                 # --- CLIP Vision (Encode the blank/color frame) ---
-                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.image_encoder, gpu)
+                if not self.model_manager.high_vram: mem_utils.load_model_as_complete(self.model_manager.image_encoder, gpu)
                 clip_output = hf_clip_vision_encode(
                     anchor_np, self.model_manager.feature_extractor, self.model_manager.image_encoder
                 ).last_hidden_state
-                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.image_encoder)
+                if not self.model_manager.high_vram: mem_utils.unload_complete_models(self.model_manager.image_encoder)
                 
             elif mode == "image2video" or original_mode == "video_extension": # Includes redirected extension
                 if input_image is None: raise ValueError("Image input required for image2video/video_extension")
@@ -526,20 +524,20 @@ class VideoGenerator:
                 
                 # --- VAE Encode ---
                 if self.stream: self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE encoding ...'))))
-                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.vae, gpu)
+                if not self.model_manager.high_vram: mem_utils.load_model_as_complete(self.model_manager.vae, gpu)
                 t_vae_start = time.time()
                 start_latent = vae_encode(input_tensor, self.model_manager.vae)
                 timings["latent_encoding"] += time.time() - t_vae_start
-                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.vae)
+                if not self.model_manager.high_vram: mem_utils.unload_complete_models(self.model_manager.vae)
                 debug("VAE encoded")
                 
                 # --- CLIP Vision ---
                 if self.stream: self.stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
-                if not self.model_manager.high_vram: load_model_as_complete(self.model_manager.image_encoder, gpu)
+                if not self.model_manager.high_vram: mem_utils.load_model_as_complete(self.model_manager.image_encoder, gpu)
                 clip_output = hf_clip_vision_encode(
                     inp_np, self.model_manager.feature_extractor, self.model_manager.image_encoder
                 ).last_hidden_state
-                if not self.model_manager.high_vram: unload_complete_models(self.model_manager.image_encoder)
+                if not self.model_manager.high_vram: mem_utils.unload_complete_models(self.model_manager.image_encoder)
                 debug("CLIP Vision encoded")
                 
             # ============ Dtype Conversion ============
@@ -609,14 +607,14 @@ class VideoGenerator:
                 debug(f"Loop {section} - Using mask m: {current_m.shape} ({current_m.dtype})")
 
                 if self.model_manager.transformer is None:
-                    self.model_manager.transformer = load_model_as_complete(
+                    self.model_manager.transformer = mem_utils.load_model_as_complete(
                         self.model_manager.transformer, gpu
                     )
 
                 # --- Memory: Load Transformer ---
                 if not self.model_manager.high_vram:
                     # Only offload models you want to! Don't call with no args.
-                    unload_complete_models(
+                    mem_utils.unload_complete_models(
                         self.model_manager.text_encoder,
                         self.model_manager.text_encoder_2,
                         self.model_manager.image_encoder,
@@ -628,7 +626,7 @@ class VideoGenerator:
                     if self.model_manager.transformer is None:
                         raise RuntimeError("ModelManager.transformer is None after ensure_all_models_loaded!")
                     debug(f"[GEN] About to restore model: id={id(self.model_manager.transformer)}, type={type(self.model_manager.transformer)}")                        
-                    move_model_to_device_with_memory_preservation(self.model_manager.transformer, gpu, gpu_memory_preservation)
+                    mem_utils.move_model_to_device_with_memory_preservation(self.model_manager.transformer, gpu, gpu_memory_preservation)
                 
                 # --- Initialize TeaCache ---
                 self.model_manager.initialize_teacache(use_teacache, steps if use_teacache else 0)
@@ -824,12 +822,12 @@ class VideoGenerator:
                 
                 # VAE Decoding Section - CRITICAL ROTARY DECODER
                 if not self.model_manager.high_vram:
-                    offload_model_from_device_for_memory_preservation(
+                    mem_utils.offload_model_from_device_for_memory_preservation(
                         self.model_manager.transformer,
                         target_device=gpu,
                         preserved_memory_gb=8
                     )
-                    load_model_as_complete(self.model_manager.vae, target_device=gpu)
+                    mem_utils.load_model_as_complete(self.model_manager.vae, target_device=gpu)
                     debug("loaded vae to gpu")
                 
                 # Clear CUDA cache to reduce fragmentation
@@ -1149,7 +1147,7 @@ class VideoGenerator:
             debug("KeyboardInterrupt received, performing clean recovery")
             # Clean up resources
             if not self.model_manager.high_vram:
-                unload_complete_models(
+                mem_utils.unload_complete_models(
                     self.model_manager.text_encoder,
                     self.model_manager.text_encoder_2,
                     self.model_manager.image_encoder,
@@ -1169,7 +1167,7 @@ class VideoGenerator:
             debug(f"EXCEPTION THROWN: {ex}")
             debug(traceback.format_exc())
             if not self.model_manager.high_vram:
-                unload_complete_models(
+                mem_utils.unload_complete_models(
                     self.model_manager.text_encoder,
                     self.model_manager.text_encoder_2,
                     self.model_manager.image_encoder,
