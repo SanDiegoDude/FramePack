@@ -123,16 +123,26 @@ def load_all_loras(transformer, lora_configs, skip_fail: bool = False):
             loaded_adapter_names.append(adapter_name)
         except Exception as e:
             cfg.error = str(e)
-            failed_configs.append(cfg)
+            failed_configs.append(cfg)# --- Added Error Reporting ---
+            print(f"[WARN] LoRA Load Failed: Could not load '{os.path.basename(cfg.path)}'. Reason: {e}")
             if not skip_fail:
-                raise RuntimeError(f"Failed to load LoRA '{cfg.path}': {e}")
+                print("[ERROR] Stopping due to LoRA load failure (--lora-skip-fail not set).")
+                raise RuntimeError(error_msg) # Re-raise if not skipping
+            else:
+                 print("[WARN] Skipping failed LoRA as --lora-skip-fail is set.")
+            # --- End Added Error Reporting ---
     # Activate all at once
     if applied_configs:
+        debug(f"Activating {len(applied_configs)} LoRA adapters...")
         set_adapters(
             transformer,
             [c.adapter_name for c in applied_configs],
             [c.weight for c in applied_configs],
         )
+        debug("LoRA adapters activated.")
+    else:
+        debug("No LoRA adapters were successfully loaded or activated.")
+
     return applied_configs, failed_configs
 
 def lora_diagnose(lora_path):
