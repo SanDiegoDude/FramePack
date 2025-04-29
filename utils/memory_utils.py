@@ -74,6 +74,8 @@ def move_model_to_device_with_memory_preservation(model, target_device, preserve
             debug(f"MEMORY: WARNING - High memory usage ({used_mem:.2f} GB) for {model_name}")
         return model
     except Exception as e:
+        import traceback
+        debug("EXCEPTION from _original_move_model_to_device_with_memory_preservation:\n" + traceback.format_exc())
         debug(f"MEMORY: ERROR moving {model_name} to {target_device}: {e}")
         # Try to diagnose
         debug(f"MEMORY: Attempting to diagnose OOM for {model_name}")
