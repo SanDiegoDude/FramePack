@@ -119,3 +119,19 @@ def load_all_loras(transformer, lora_configs, skip_fail: bool = False):
             [c.weight for c in applied_configs],
         )
     return applied_configs, failed_configs
+
+def lora_diagnose(lora_path):
+    """
+    Loads a LoRA and prints its key/shape info, for debugging.
+    """
+    try:
+        from diffusers.loaders.lora_pipeline import _fetch_state_dict
+        state_dict = _fetch_state_dict(
+            lora_path, "pytorch_lora_weights.safetensors",
+            True, True, None, None, None, None, None, None, None, None)
+        print(f"LoRA '{lora_path}' metadata:")
+        for k in state_dict:
+            print(f"  {k}: {state_dict[k].shape}")
+        print("LoRA appears loadable and valid.")
+    except Exception as e:
+        print(f"Failed to load LoRA '{lora_path}': {e}")
