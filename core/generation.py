@@ -628,7 +628,6 @@ class VideoGenerator:
                     if self.model_manager.transformer is None:
                         raise RuntimeError("ModelManager.transformer is None after ensure_all_models_loaded!")
                     debug(f"[GEN] About to restore model: id={id(self.model_manager.transformer)}, type={type(self.model_manager.transformer)}")                        
-                    debug(f"MEMORY: Pass to _original_move_model_to_device_with_memory_preservation: id={id(model)}, type={type(model)}")
                     move_model_to_device_with_memory_preservation(self.model_manager.transformer, gpu, gpu_memory_preservation)
                 
                 # --- Initialize TeaCache ---
