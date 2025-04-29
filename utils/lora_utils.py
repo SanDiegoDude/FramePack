@@ -2,6 +2,7 @@
 # Adapted from https://github.com/neph1/FramePack/tree/main
 import os
 import re
+from tqdm import tqdm
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 from diffusers.loaders.lora_pipeline import _fetch_state_dict
@@ -110,7 +111,7 @@ def load_all_loras(transformer, lora_configs, skip_fail: bool = False):
     loaded_adapter_names = []
     applied_configs = []
     failed_configs = []
-    for idx, cfg in enumerate(lora_configs):
+    for idx, cfg in enumerate(tqdm(lora_configs, desc="Loading LoRAs", ncols=70)):
         # Create a unique adapter name for each LoRA
         base_name = os.path.splitext(os.path.basename(cfg.path))[0]
         safe_name = safe_adapter_name(base_name)
