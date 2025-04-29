@@ -1,6 +1,7 @@
 # utils/lora_utils.py
 # Adapted from https://github.com/neph1/FramePack/tree/main
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 from diffusers.loaders.lora_pipeline import _fetch_state_dict
@@ -83,6 +84,18 @@ def set_adapters(
     weights = scale_expansion_fn(transformer, weights)
     set_weights_and_activate_adapters(transformer, adapter_names, weights)
 
+def safe_adapter_name(name):
+    """
+    Return a string safe for use as a PyTorch module name (adapter_name).
+    Forbids dots/periods and weird chars.
+    """
+    # Remove periods, replace with underscore
+    name = name.replace('.', '_')
+    # Only allow [a-zA-Z0-9_-], replace other chars with _
+    name = re.sub(r'[^a-zA-Z0-9_\-]', '_', name)
+    return name
+
+
 # === Multi-LoRA Support ===
 def load_all_loras(transformer, lora_configs, skip_fail: bool = False):
     """
@@ -100,7 +113,8 @@ def load_all_loras(transformer, lora_configs, skip_fail: bool = False):
     for idx, cfg in enumerate(lora_configs):
         # Create a unique adapter name for each LoRA
         base_name = os.path.splitext(os.path.basename(cfg.path))[0]
-        adapter_name = f"lora_{idx}_{base_name}"
+        safe_name = safe_adapter_name(base_name)
+        adapter_name = f"lora_{idx}_{safe_name}"
         try:
             load_lora(transformer, cfg.path, adapter_name=adapter_name)
             cfg.adapter_name = adapter_name
