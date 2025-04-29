@@ -82,19 +82,25 @@ def get_cuda_free_memory_gb(device=None):
 
 
 def move_model_to_device_with_memory_preservation(model, target_device, preserved_memory_gb=0):
-    print(f'Moving {model.__class__.__name__} to {target_device} with preserved memory: {preserved_memory_gb} GB')
-
-    for m in model.modules():
-        if get_cuda_free_memory_gb(target_device) <= preserved_memory_gb:
-            torch.cuda.empty_cache()
-            return
-
-        if hasattr(m, 'weight'):
-            m.to(device=target_device)
-
-    model.to(device=target_device)
-    torch.cuda.empty_cache()
-    return model
+    print(f'[HOOK] move_model_to_device_with_memory_preservation: received model={model} id={id(model)}')
+    print(f'[HOOK]    class={type(model)}')
+    try:
+        for m in model.modules():
+            free_mem = get_cuda_free_memory_gb(target_device)
+            print(f'[HOOK]      current free: {free_mem}GB, preserved: {preserved_memory_gb}')
+            if free_mem <= preserved_memory_gb:
+                torch.cuda.empty_cache()
+                print('[HOOK]      Early return, OOM/preemptive.')
+                return model
+            if hasattr(m, 'weight'):
+                m.to(device=target_device)
+        model.to(device=target_device)
+        torch.cuda.empty_cache()
+        print('[HOOK]      Normal end, return model.')
+        return model
+    except Exception as ex:
+        print('[HOOK]      Caught Exception in move_model_to_device_with_memory_preservation:', ex)
+        raise
 
 
 def offload_model_from_device_for_memory_preservation(model, target_device, preserved_memory_gb=0):
