@@ -42,6 +42,13 @@ class ModelManager:
             self.lora_configs,
             skip_fail=self.lora_skip_fail
         )
+        from utils.memory_utils import gpu, cpu
+
+        # Move transformer and all children to correct device:
+        if self.high_vram:
+            self.transformer.to(gpu)
+        else:
+            self.transformer.to(cpu)
         # Diagnostic/verbose prints for CLI/log
         if self.active_loras:
             print("Loaded LoRAs: " + ", ".join([f"{c.path} (w={c.weight})" for c in self.active_loras]))
