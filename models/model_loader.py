@@ -67,7 +67,11 @@ class ModelManager:
             
             # Load all models to CPU initially
             debug("Loading text encoders and tokenizers")
-            self.text_encoder = LlamaModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder', torch_dtype=torch.float16).cpu()
+            self.text_encoder = LlamaModel.from_pretrained(
+                "hunyuanvideo-community/HunyuanVideo", 
+                subfolder='text_encoder', 
+                torch_dtype=torch.float16
+            ).cpu()
             self.text_encoder_2 = CLIPTextModel.from_pretrained(
                 "hunyuanvideo-community/HunyuanVideo", 
                 subfolder='text_encoder_2', 
