@@ -15,9 +15,33 @@ def main():
     parser.add_argument("--port", type=int, required=False, help="Port to run the server on")
     parser.add_argument("--inbrowser", action='store_true', help="Open in browser automatically")
     parser.add_argument("--debug", action='store_true', help="Enable debug output")
-    parser.add_argument("--lora", type=str, default=None, help="Path to LoRA file")
+    parser.add_argument("--lora", type=str, default=None, help="Path to LoRA files, seperate by commas. Append ':0.85' to name to adjust weight, default 1.0 weight.") 
     parser.add_argument("--lora-weight", type=float, default=1.0, help="Weight for LoRA (0.0-1.0)")
+    parser.add_argument("--lora-skip-fail", action='store_true', help="If set, skip lora failures instead of aborting generation")
+    parser.add_argument("--lora-diagnose", action='store_true', help="Diagnose LoRA weights/loadability and exit (no generation)")
     args = parser.parse_args()
+
+
+    # --- BEGIN BACKEND SWITCH ---
+    try:
+        # The error involves cusolver, so let's try preferring 'magma'
+        torch.backends.cuda.preferred_linalg_library("magma")
+        debug("Set preferred CUDA linear algebra library to 'magma'")
+    except Exception as e:
+        debug(f"Could not set preferred CUDA linalg library: {e}. Using default.")
+    # --- END BACKEND SWITCH ---
+
+    
+    # Multi-LoRA configuration
+    from utils.lora_utils import parse_lora_arg, lora_diagnose
+    lora_arg = args.lora or ""
+    lora_configs = parse_lora_arg(lora_arg) if lora_arg else []
+    lora_skip_fail = args.lora_skip_fail
+
+    if getattr(args, 'lora_diagnose', False):
+        for conf in lora_configs:
+            lora_diagnose(conf.path)
+        exit(0)
     
     # Set up debugging based on arguments (True by default for now during development)
     setup_debug(args.debug)
@@ -55,11 +79,10 @@ def main():
     debug(f'High-VRAM Mode: {high_vram}')
     
     # Initialize model manager and load models
-    # Initialize model manager and load models
     model_manager = ModelManager(
         high_vram=high_vram,
-        lora_path=args.lora,
-        lora_weight=args.lora_weight
+        lora_configs=lora_configs,
+        lora_skip_fail=lora_skip_fail
     )
     
     try:

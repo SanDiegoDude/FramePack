@@ -9,14 +9,13 @@ from utils.memory_utils import (
 
 class ModelManager:
     """Manages loading, unloading, and access to AI models"""
-    def __init__(self, high_vram=False, lora_path=None, lora_weight=1.0):
+    def __init__(self, high_vram=False, lora_configs=None, lora_skip_fail=False):
         self.high_vram = high_vram
-        self.lora_path = lora_path
-        self.lora_weight = lora_weight
-        self.lora_name = None  # Will be set if LoRA is loaded
+        self.lora_configs = lora_configs or []
+        self.lora_skip_fail = lora_skip_fail
+        self.active_loras = []
+        self.failed_loras = []
         debug(f"ModelManager initialized with high_vram={high_vram}")
-        if lora_path:
-            debug(f"LoRA path: {lora_path}, weight: {lora_weight}")
             
         # Model objects (existing code)
         self.text_encoder = None
@@ -30,7 +29,52 @@ class ModelManager:
         
         # Model loading status
         self.models_loaded = False
-        
+
+    def load_loras(self):
+        """
+        Load all requested LoRAs and activate their adapters.
+        """
+        if not self.lora_configs:
+            return
+        from utils.lora_utils import load_all_loras
+        self.active_loras, self.failed_loras = load_all_loras(
+            self.transformer,
+            self.lora_configs,
+            skip_fail=self.lora_skip_fail
+        )
+        from utils.memory_utils import gpu, cpu
+
+        # Move transformer and all children to correct device:
+        if self.high_vram:
+            self.transformer.to(gpu)
+        else:
+            self.transformer.to(cpu)
+        # Diagnostic/verbose prints for CLI/log
+        if self.active_loras:
+            print("Loaded LoRAs: " + ", ".join([f"{c.path} (w={c.weight})" for c in self.active_loras]))
+        if self.failed_loras:
+            print("LoRAs failed to load:")
+            for c in self.failed_loras:
+                print(f"  {c.path} reason: {c.error}")
+
+    def ensure_all_models_loaded(self):
+        """If any required model is None, reload all models (auto-heals from accidental None)."""
+        required_attrs = [
+            "text_encoder", "text_encoder_2", "tokenizer",
+            "tokenizer_2", "vae", "feature_extractor",
+            "image_encoder", "transformer"
+        ]
+        missing = [name for name in required_attrs if getattr(self, name, None) is None]
+        if missing:
+            debug(f"[AutoReload] ModelManager reloading all models due to missing: {missing}")
+            # Always reload all at once
+            self.load_all_models()
+        # Recheck
+        still_missing = [name for name in required_attrs if getattr(self, name, None) is None]
+        if still_missing:
+            debug(f"[FATAL] After reload, still missing: {still_missing}")
+            raise RuntimeError(f"Failed to reload required models: {still_missing}")
+    
     def load_all_models(self):
         """Load all required models based on VRAM configuration"""
         try:
@@ -48,7 +92,6 @@ class ModelManager:
                 subfolder='text_encoder', 
                 torch_dtype=torch.float16
             ).cpu()
-            
             self.text_encoder_2 = CLIPTextModel.from_pretrained(
                 "hunyuanvideo-community/HunyuanVideo", 
                 subfolder='text_encoder_2', 
@@ -90,24 +133,6 @@ class ModelManager:
                 torch_dtype=torch.bfloat16
             ).cpu()
             
-            # After loading the transformer model, load LoRA if specified
-            if self.lora_path:
-                try:
-                    from utils.lora_utils import load_lora
-                    debug(f"Loading LoRA from {self.lora_path}")
-                    
-                    # Extract filename to use as adapter name
-                    _, filename = os.path.split(self.lora_path)
-                    self.lora_name = filename.split('.')[0]
-                    
-                    # Load the LoRA adapter
-                    self.transformer = load_lora(self.transformer, self.lora_path, filename)
-                    debug(f"Successfully loaded LoRA: {self.lora_name}")
-                except Exception as e:
-                    debug(f"Error loading LoRA: {e}")
-                    import traceback
-                    debug(traceback.format_exc())
-            
             # Configure models
             debug("Configuring models")
             for m in [self.vae, self.text_encoder, self.text_encoder_2, self.image_encoder, self.transformer]:
@@ -146,7 +171,14 @@ class ModelManager:
                 for m in [self.text_encoder, self.text_encoder_2, self.image_encoder, self.vae, self.transformer]:
                     if m is not None:
                         m.to(gpu)
-            
+
+            # Load LoRAs after transformer is ready
+            if self.lora_configs:
+                self.load_loras()
+                if self.high_vram:
+                    self.transformer.to(gpu)
+                else:
+                    self.transformer.to(cpu)
             self.models_loaded = True
             debug("All models loaded successfully")
             return True
@@ -171,22 +203,6 @@ class ModelManager:
             debug("Cannot initialize TeaCache: transformer not loaded")
             return False
 
-    def apply_lora_weight(self):
-        """Apply LoRA weight to the loaded adapter"""
-        if not self.lora_name or not hasattr(self, 'transformer') or self.transformer is None:
-            return False
-            
-        try:
-            from utils.lora_utils import set_adapters
-            debug(f"Applying LoRA weight {self.lora_weight} to {self.lora_name}")
-            set_adapters(self.transformer, self.lora_name, self.lora_weight)
-            return True
-        except Exception as e:
-            debug(f"Error applying LoRA weight: {e}")
-            import traceback
-            debug(traceback.format_exc())
-            return False
-    
     def unload_all_models(self):
         """
         Unload all models completely from memory (both CPU and GPU)
