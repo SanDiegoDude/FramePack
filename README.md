@@ -1,3 +1,6 @@
+![image](https://github.com/user-attachments/assets/d24d0989-e734-45ab-b11e-464e81c5c461)
+
+
 # FramePack Advanced Video Generator ✨
 
 This project is a significantly refactored and enhanced version of the original [FramePack](https://github.com/lllyasviel/FramePack) video generation tool. It maintains the core next-frame-section prediction concept while introducing a modular architecture, improved memory management, multi-LoRA support, and various UI/UX enhancements.
@@ -13,6 +16,7 @@ The goal of this fork is to provide a more stable, extensible, and feature-rich 
 *   **Improved Memory Management:** Refactored model manager aims for more robust handling of model loading/unloading, especially in low-VRAM scenarios.
 *   **Video Extension Modes:** Supports both forward (extending the end) and backward (extending the beginning) video generation.
 *   **Video Compatibility:** Improved output MP4 compatibility for wider playback support.
+*   **Sequential Prompting:** Control generation segments individually by separating distinct prompts with a semicolon (`;`) in the main prompt box. Each prompt will be applied to subsequent segments of the video generation process.
 
 ## Requirements
 
