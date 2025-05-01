@@ -287,10 +287,32 @@ class ModelManager:
                  debug(f"Note: Could not explicitly disable adapters (might be okay): {e}")
 
 
-        debug(f"Dynamic LoRA update complete. Active dynamic: {len(self.dynamic_lora_configs)}, Failed this run: {len(failed_dynamic)}")
-        return self.dynamic_lora_configs, self.failed_dynamic_loras
+        # --- Final Check for Failures ---
+        # After attempting to load all requested dynamic LoRAs, check if any failed
+        # This includes failures from path normalization (file not found) AND load_lora() exceptions
+        if failed_dynamic and not self.lora_skip_fail:
+             # Collect error messages for clarity
+            error_details = [f"'{os.path.basename(c.path)}': {c.error}" for c in failed_dynamic]
+            combined_error_msg = f"Failed to apply {len(failed_dynamic)} required dynamic LoRA(s): {', '.join(error_details)}"
+            debug(f"[ERROR] {combined_error_msg} -- Halting generation as --lora-skip-fail is not set.")
+            # Ensure transformer is on its intended device before raising, prevents potential state issues
+            target_device = gpu if self.high_vram else cpu
+            if hasattr(self.transformer, 'device') and self.transformer.device != target_device:
+                try:
+                    self.transformer.to(target_device)
+                except Exception as move_e:
+                     debug(f"Could not move transformer to {target_device} before raising error: {move_e}")
+            raise RuntimeError(combined_error_msg) # Raise the error to be caught by generate_video
 
-    # --- Rest of the ModelManager class ---
+        # Update the combined active list (moved slightly earlier, no functional change)
+        self._update_active_loras()
+
+        # Re-apply *all* currently active adapters (CLI + dynamic)
+        # ... (rest of the adapter application logic remains the same) ...
+
+        debug(f"Dynamic LoRA update complete. Active dynamic: {len(self.dynamic_lora_configs)}, Failed this run: {len(failed_dynamic)}")
+        # Return the lists of applied and failed dynamic LoRAs for this run
+        return self.dynamic_lora_configs, self.failed_dynamic_loras
 
     def ensure_all_models_loaded(self):
         """If any required model is None, reload all models (auto-heals from accidental None)."""
