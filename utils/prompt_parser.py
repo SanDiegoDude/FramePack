@@ -28,14 +28,14 @@ class LoraPromptProcessor(PromptProcessor):
     # Regex explanation:
     # \[             # Match opening square bracket
     # (              # Start capture group 1 (path)
-    #   [^:\]]+     # Match one or more characters that are NOT ':' or ']'
+    #   .+?          # Match one or more characters (.+?) non-greedily
     # )              # End capture group 1
     # (?:            # Start non-capturing group for optional weight
     #   :            # Match the colon separator
     #   (\d+\.?\d*) # Capture group 2 (weight): one or more digits, optional decimal part
     # )?             # End non-capturing group, make it optional
     # \]             # Match closing square bracket
-    LORA_REGEX = re.compile(r"\[([^:\]]+?)(?::(\d+\.?\d*))?\]")
+    LORA_REGEX = re.compile(r"\[(.+?)(?::(\d+\.?\d*))?\]")
 
     def __init__(self):
         super().__init__("lora")
