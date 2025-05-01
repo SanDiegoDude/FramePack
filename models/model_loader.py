@@ -268,11 +268,11 @@ class ModelManager:
                     if cfg not in failed_dynamic: # Avoid duplicates if error was set earlier
                          failed_dynamic.append(cfg)
                     # --- USER VISIBLE PRINT (Pre-fail) ---
-                    # Optional: Print pre-existing failures? Could be noisy.
-                    # print(f"⚠️ Skipping Dynamic LoRA '{os.path.basename(cfg.path)}': {cfg.error}")
+                    print(f"⚠️ Skipping Dynamic LoRA '{os.path.basename(cfg.path)}': {cfg.error}")
                     # -------------------------------------
                     continue # Skip to next requested config
             
+                print(f"  ⏳ Attempting to load: '{os.path.basename(cfg.path)}'")
                 try:
                     debug(f"Loading dynamic LoRA: '{cfg.path}' as '{adapter_name}'")
                     load_lora(self.transformer, cfg.path, adapter_name=adapter_name)
