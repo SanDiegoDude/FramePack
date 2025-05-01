@@ -91,18 +91,17 @@ class VideoGenerator:
         Returns encoded prompts, poolers, masks, and negative versions.
         """
         from utils.prompt_parser import parse_sequential_prompts
-
+    
+        # Use the correct argument name 'cleaned_prompt_text' here
         prompts = parse_sequential_prompts(cleaned_prompt_text)
         if not prompts:
             debug("[Encode Multi] Warning: Cleaned prompt resulted in no sequential prompts. Using the cleaned prompt as a single prompt.")
-            prompts = [cleaned_prompt_text] # Fallback if splitting failed but text exists
+            # Use the input argument name here too for consistency if needed
+            prompts = [cleaned_prompt_text]
         elif len(prompts) == 1:
              debug(f"[Encode Multi] Only one prompt after sequential parse: '{prompts[0]}'")
         else:
              debug(f"[Encode Multi] Encoding {len(prompts)} sequential prompts derived from cleaned prompt.")
-        
-        prompts = parse_sequential_prompts(prompt_text)
-        debug(f"Encoding {len(prompts)} sequential prompts")
         
         # Initialize lists to store encodings
         llama_vecs = []
