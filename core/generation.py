@@ -26,6 +26,9 @@ from diffusers_helper.utils import crop_or_pad_yield_mask, soft_append_bcthw
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
 from ui.style import make_progress_bar_html
 
+from utils.prompt_parser import LoraPromptProcessor, SequentialPromptProcessor, apply_prompt_processors
+from utils.lora_utils import LoRAConfig # Potentially needed for type hints if used directly
+
 class VideoGenerator:
     """Handles all video generation functionality"""
     def __init__(self, model_manager, outputs_folder='./outputs/'):
@@ -82,15 +85,23 @@ class VideoGenerator:
         from utils.video_utils import extract_frames_from_video as extract_frames
         return extract_frames(video_path, num_frames, from_end, max_resolution)
     
-    def encode_multiple_prompts(self, prompt_text, n_prompt, cfg, llm_weight=1.0, clip_weight=1.0):
+    def encode_multiple_prompts(self, cleaned_prompt_text, n_prompt, cfg, llm_weight=1.0, clip_weight=1.0):
         """
         Encode multiple prompts for sequential generation.
         Returns encoded prompts, poolers, masks, and negative versions.
         """
         from utils.prompt_parser import parse_sequential_prompts
-        
-        prompts = parse_sequential_prompts(prompt_text)
-        debug(f"Encoding {len(prompts)} sequential prompts")
+    
+        # Use the correct argument name 'cleaned_prompt_text' here
+        prompts = parse_sequential_prompts(cleaned_prompt_text)
+        if not prompts:
+            debug("[Encode Multi] Warning: Cleaned prompt resulted in no sequential prompts. Using the cleaned prompt as a single prompt.")
+            # Use the input argument name here too for consistency if needed
+            prompts = [cleaned_prompt_text]
+        elif len(prompts) == 1:
+             debug(f"[Encode Multi] Only one prompt after sequential parse: '{prompts[0]}'")
+        else:
+             debug(f"[Encode Multi] Encoding {len(prompts)} sequential prompts derived from cleaned prompt.")
         
         # Initialize lists to store encodings
         llama_vecs = []
@@ -172,8 +183,8 @@ class VideoGenerator:
         
         return llama_vecs, clip_poolers, llama_masks, llama_vec_n, clip_pooler_n, llama_mask_n
     
-    def prepare_inputs(self, input_image, prompt, n_prompt, cfg, gaussian_blur_amount=0.0,
-                      llm_weight=1.0, clip_weight=1.0):
+    def prepare_inputs(self, input_image, cleaned_prompt, n_prompt, cfg, gaussian_blur_amount=0.0,
+                   llm_weight=1.0, clip_weight=1.0):
         """Prepare text embeddings, poolers, masks, and image tensors"""
         if input_image is None:
             raise ValueError("Input image required for this mode.")
@@ -192,7 +203,7 @@ class VideoGenerator:
             )
             
         # --- Text Encoding ---
-        debug(f"[Prepare Inputs] Encoding prompt: '{prompt}'")
+        debug(f"[Prepare Inputs] Using cleaned prompt for encoding: '{cleaned_prompt}'")
         debug(f"[Prepare Inputs] Encoding negative prompt: '{n_prompt}'")
         if not self.model_manager.high_vram:
             mem_utils.fake_diffusers_current_device(self.model_manager.text_encoder, gpu)
@@ -200,10 +211,10 @@ class VideoGenerator:
         
         debug(f"[Prepare Inputs] Text Encoder device: {self.model_manager.text_encoder.device if self.model_manager.text_encoder else 'None'}")
         debug(f"[Prepare Inputs] Text Encoder 2 device: {self.model_manager.text_encoder_2.device if self.model_manager.text_encoder_2 else 'None'}")                          
-        debug(f"[Prepare Inputs] BEFORE POS ENCODE - Prompt: '{prompt}'")
+        debug(f"[Prepare Inputs] BEFORE POS ENCODE - Prompt: '{cleaned_prompt}'")
         
         lv, cp = encode_prompt_conds(
-            prompt,
+            cleaned_prompt, # Use the cleaned prompt here
             self.model_manager.text_encoder,
             self.model_manager.text_encoder_2,
             self.model_manager.tokenizer,
@@ -354,6 +365,56 @@ class VideoGenerator:
         t_start = time.time()
         timings = {"latent_encoding": 0, "step_times": [], "generation_time": 0, "vae_decode_time": 0, "total_time": 0}
 
+        # ============ Prompt Processing & Dynamic LoRA Loading ============
+        debug(f"[Generator] Raw prompt received: '{prompt}'")
+        
+        # 1. Initialize Prompt Processors
+        prompt_processors = [
+            LoraPromptProcessor(),       # Extracts LoRAs and cleans the prompt
+            SequentialPromptProcessor() # Extracts sequential info (doesn't clean further)
+            # Add other processors here if needed in the future
+        ]
+        
+        # 2. Apply Processors
+        cleaned_prompt, extracted_data = apply_prompt_processors(prompt, prompt_processors)
+        
+        # 3. Extract LoRA Configs
+        dynamic_lora_configs = extracted_data.get("lora", {}).get("lora_configs", [])
+        debug(f"[Generator] Extracted {len(dynamic_lora_configs)} dynamic LoRA configs from prompt.")
+        
+        # 4. Apply Dynamic LoRAs via ModelManager
+        # Ensure models (especially transformer) are loaded before applying LoRAs
+        self.model_manager.ensure_all_models_loaded() # Crucial check
+        
+        try:
+            applied_dynamic_loras, failed_dynamic_loras = self.model_manager.set_dynamic_loras(dynamic_lora_configs)
+            # Optional: Handle failures if needed (e.g., notify user)
+            if failed_dynamic_loras:
+                debug(f"[Generator] WARNING: Failed to apply {len(failed_dynamic_loras)} dynamic LoRAs.")
+                # You could add a UI message here if the stream exists
+                # if self.stream:
+                #     fail_msg = ", ".join([f"'{os.path.basename(c.path)}' ({c.error})" for c in failed_dynamic_loras])
+                #     self.stream.output_queue.push(('progress', (None, f"⚠️ Failed LoRAs: {fail_msg}", "")))
+        except RuntimeError as lora_error:
+             # Handle critical failure if --lora-skip-fail is False
+            debug(f"[Generator] CRITICAL LoRA Error: {lora_error}")
+            debug(traceback.format_exc())
+            if self.stream:
+                 self.stream.output_queue.push(('progress', (None, f"❌ LoRA Error: {lora_error}. Generation stopped.", "")))
+                 self.stream.output_queue.push(('end', 'lora_error'))
+            # Clean up models before returning None
+            if not self.model_manager.high_vram:
+                mem_utils.unload_complete_models(
+                    self.model_manager.text_encoder, self.model_manager.text_encoder_2,
+                    self.model_manager.image_encoder, self.model_manager.vae,
+                    self.model_manager.transformer
+                )
+            return None # Stop generation
+        
+        debug(f"[Generator] Using cleaned prompt for generation: '{cleaned_prompt}'")
+        # ===============================================================
+
+        
         # Extract the frame_overlap
         frame_overlap = config.get('frame_overlap', 0)
         debug(f"Using frame overlap: {frame_overlap}")
@@ -376,7 +437,7 @@ class VideoGenerator:
             debug(f"Simple Mode | window=9 | frames/sec=33 | total_frames={total_frames} | sections={total_sections}")
 
         # Check if we're using sequential prompting
-        prompts = parse_sequential_prompts(prompt)
+        prompts = parse_sequential_prompts(cleaned_prompt)
         use_sequential = len(prompts) > 1
         
         # Initialize variables for sequential prompts
@@ -395,7 +456,7 @@ class VideoGenerator:
             )
 
             # reversed to correct order of output
-            if not should_reverse_prompts:
+            if should_reverse_prompts:
                 debug(f"Reversing sequential prompts for {mode} mode")
                 prompts = list(reversed(prompts))
                 
@@ -451,7 +512,7 @@ class VideoGenerator:
                     mem_utils.load_model_as_complete(self.model_manager.text_encoder_2, gpu)
                     
                 lv, cp = encode_prompt_conds(
-                    prompt, self.model_manager.text_encoder, self.model_manager.text_encoder_2,
+                    cleaned_prompt, self.model_manager.text_encoder, self.model_manager.text_encoder_2,
                     self.model_manager.tokenizer, self.model_manager.tokenizer_2
                 )
                 
@@ -496,7 +557,7 @@ class VideoGenerator:
                 # --- Prepare inputs using common function ---
                 # ensure prepare_inputs correctly calls encode_prompt_conds with all managers
                 _, input_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = self.prepare_inputs(
-                    anchor_np, prompt, n_prompt, cfg, gaussian_blur_amount, llm_weight, clip_weight
+                    anchor_np, cleaned_prompt, n_prompt, cfg, gaussian_blur_amount, llm_weight, clip_weight
                 )
                 
                 # --- VAE Encode ---
@@ -519,7 +580,7 @@ class VideoGenerator:
                 
                 # --- Prepare inputs using common function ---
                 inp_np, input_tensor, lv, cp, lv_n, cp_n, m, m_n, height, width = self.prepare_inputs(
-                    input_image, prompt, n_prompt, cfg, gaussian_blur_amount, llm_weight, clip_weight
+                    input_image, cleaned_prompt, n_prompt, cfg, gaussian_blur_amount, llm_weight, clip_weight
                 )
                 
                 # --- VAE Encode ---
@@ -560,7 +621,7 @@ class VideoGenerator:
                 
                 # Now encode all prompts
                 seq_llama_vecs, seq_clip_poolers, seq_llama_masks, seq_llama_vec_n, seq_clip_pooler_n, seq_llama_mask_n = \
-                    self.encode_multiple_prompts(prompt, n_prompt, cfg, llm_weight, clip_weight)
+                    self.encode_multiple_prompts( cleaned_prompt, n_prompt, cfg, llm_weight, clip_weight)
                 
                 # We'll keep using the original negative prompt encodings
                 # as they apply to all prompts
@@ -725,7 +786,7 @@ class VideoGenerator:
                 debug(f"  CFG scales: cfg={cfg}, gs={gs}, rs={rs}")
 
                 # Find the section to determine which prompt to use
-                if use_sequential and seq_llama_vecs is not None:
+                if use_sequential and seq_llama_vecs is None:
                     # Calculate which prompt to use
                     # Remember sections are processed in reverse order (end→start)
                     # section is from your loop_iterator which should match the current section index
