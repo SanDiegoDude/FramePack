@@ -26,7 +26,10 @@ from diffusers_helper.utils import crop_or_pad_yield_mask, soft_append_bcthw
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
 from ui.style import make_progress_bar_html
 
-from utils.prompt_parser import LoraPromptProcessor, SequentialPromptProcessor, apply_prompt_processors
+from utils.prompt_parser import ( # Import processors and error handling
+    LoraPromptProcessor, SequentialPromptProcessor, WildcardProcessor, RandomizerProcessor,
+    apply_prompt_processors, WildcardFileNotFoundError
+)
 from utils.lora_utils import LoRAConfig # Potentially needed for type hints if used directly
 
 class VideoGenerator:
@@ -85,19 +88,19 @@ class VideoGenerator:
         from utils.video_utils import extract_frames_from_video as extract_frames
         return extract_frames(video_path, num_frames, from_end, max_resolution)
     
-    def encode_multiple_prompts(self, cleaned_prompt_text, n_prompt, cfg, llm_weight=1.0, clip_weight=1.0):
+    def encode_multiple_prompts(self, cleaned_prompt, n_prompt, cfg, llm_weight=1.0, clip_weight=1.0):
         """
         Encode multiple prompts for sequential generation.
         Returns encoded prompts, poolers, masks, and negative versions.
         """
         from utils.prompt_parser import parse_sequential_prompts
     
-        # Use the correct argument name 'cleaned_prompt_text' here
-        prompts = parse_sequential_prompts(cleaned_prompt_text)
+        # Use the correct argument name 'cleaned_prompt' here
+        prompts = parse_sequential_prompts(cleaned_prompt)
         if not prompts:
             debug("[Encode Multi] Warning: Cleaned prompt resulted in no sequential prompts. Using the cleaned prompt as a single prompt.")
             # Use the input argument name here too for consistency if needed
-            prompts = [cleaned_prompt_text]
+            prompts = [cleaned_prompt]
         elif len(prompts) == 1:
              debug(f"[Encode Multi] Only one prompt after sequential parse: '{prompts[0]}'")
         else:
@@ -366,36 +369,83 @@ class VideoGenerator:
         timings = {"latent_encoding": 0, "step_times": [], "generation_time": 0, "vae_decode_time": 0, "total_time": 0}
 
         # ============ Prompt Processing & Dynamic LoRA Loading ============
-        debug(f"[Generator] Raw prompt received: '{prompt}'")
-        
-        # 1. Initialize Prompt Processors
-        prompt_processors = [
-            LoraPromptProcessor(),       # Extracts LoRAs and cleans the prompt
-            SequentialPromptProcessor() # Extracts sequential info (doesn't clean further)
-            # Add other processors here if needed in the future
-        ]
-        
-        # 2. Apply Processors
-        cleaned_prompt, extracted_data = apply_prompt_processors(prompt, prompt_processors)
-        
-        # 3. Extract LoRA Configs
-        dynamic_lora_configs = extracted_data.get("lora", {}).get("lora_configs", [])
-        debug(f"[Generator] Extracted {len(dynamic_lora_configs)} dynamic LoRA configs from prompt.")
-        print(f"\n🔄 Processing {len(dynamic_lora_configs)} Dynamic LoRA(s) requested in prompt...")
+        debug(f"[Generator] Starting Prompt Processing Phase...")
 
-        # 4. Apply Dynamic LoRAs via ModelManager
-        # Ensure models (especially transformer) are loaded before applying LoRAs
-        self.model_manager.ensure_all_models_loaded() # Crucial check
-        
+        # 1. Initialize Prompt Processors (Add new ones)
+        prompt_processors = [
+            WildcardProcessor(),         # NEW: Handles __wildcards__
+            RandomizerProcessor(),       # NEW: Handles {a|b}
+            LoraPromptProcessor(),       # Extracts LoRAs and cleans the prompt
+            SequentialPromptProcessor()  # Extracts sequential info (doesn't clean further)
+        ]
+
+        # 2. Apply Processors (Pass seed and handle Wildcard Error)
+        cleaned_prompt = prompt # Default if processing fails early
+        extracted_data = {}
+        dynamic_lora_configs = [] # Initialize empty
+
         try:
+            # << SEARCH TARGET: apply_prompt_processors(prompt, prompt_processors) >>
+            # Replace the existing call with this try-except block
+            cleaned_prompt, extracted_data = apply_prompt_processors(
+                prompt,
+                prompt_processors,
+                seed=seed # Pass the seed here
+            )
+            # If successful, get LoRA configs
+            dynamic_lora_configs = extracted_data.get("lora", {}).get("lora_configs", [])
+
+        except WildcardFileNotFoundError as e:
+            error_msg = f"❌ Wildcard Error: {e}. Please ensure the file exists in the './wildcards/' directory."
+            debug(f"[Generator] CRITICAL Wildcard Error: {e}")
+            print(error_msg) # User-facing error on console
+            if self.stream:
+                 self.stream.output_queue.push(('progress', (None, error_msg, "")))
+                 self.stream.output_queue.push(('end', 'wildcard_error'))
+            # Minimal cleanup before returning None
+            self.cleanup_temp_files(job_id, keep_final=False)
+            return None # Stop generation
+
+        except Exception as e:
+            # Catch other potential errors during prompt processing
+            error_msg = f"❌ Error during prompt processing: {e}."
+            debug(f"[Generator] CRITICAL Prompt Processing Error: {e}")
+            debug(traceback.format_exc())
+            print(error_msg)
+            if self.stream:
+                 self.stream.output_queue.push(('progress', (None, error_msg, "")))
+                 self.stream.output_queue.push(('end', 'prompt_error'))
+            self.cleanup_temp_files(job_id, keep_final=False)
+            return None # Stop generation
+
+
+        debug(f"[Generator] Prompt after Wildcard/Randomizer/LoRA strip: '{cleaned_prompt}'")
+        debug(f"[Generator] Extracted data: {extracted_data}") # Log extracted data
+
+        # 3. Extract LoRA Configs (already done above if successful)
+        # dynamic_lora_configs = extracted_data.get("lora", {}).get("lora_configs", []) # Moved up
+        debug(f"[Generator] Extracted {len(dynamic_lora_configs)} dynamic LoRA configs from prompt.")
+        if dynamic_lora_configs: # Only print if LoRAs were found
+            print(f"\n🔄 Processing {len(dynamic_lora_configs)} Dynamic LoRA(s) requested in prompt...")
+
+        # 4. Apply Dynamic LoRAs via ModelManager (Ensure models loaded first)
+        self.model_manager.ensure_all_models_loaded() # Crucial check
+
+        try:
+            # << SEARCH TARGET: self.model_manager.set_dynamic_loras(dynamic_lora_configs) >>
+            # This call remains the same
             applied_dynamic_loras, failed_dynamic_loras = self.model_manager.set_dynamic_loras(dynamic_lora_configs)
-            # Optional: Handle failures if needed (e.g., notify user)
+            # ... (rest of existing LoRA failure handling) ...
             if failed_dynamic_loras:
                 debug(f"[Generator] WARNING: Failed to apply {len(failed_dynamic_loras)} dynamic LoRAs.")
-                # You could add a UI message here if the stream exists
-                # if self.stream:
-                #     fail_msg = ", ".join([f"'{os.path.basename(c.path)}' ({c.error})" for c in failed_dynamic_loras])
-                #     self.stream.output_queue.push(('progress', (None, f"⚠️ Failed LoRAs: {fail_msg}", "")))
+                # Add UI message for failed LoRAs if needed (e.g., based on stored errors in LoRAConfig)
+                fail_msgs = []
+                for cfg in failed_dynamic_loras:
+                    reason = cfg.error if cfg.error else "Unknown reason"
+                    fail_msgs.append(f"'{os.path.basename(cfg.path)}' ({reason})")
+                if fail_msgs and self.stream:
+                    self.stream.output_queue.push(('progress', (None, f"⚠️ Failed Dynamic LoRAs: {', '.join(fail_msgs)}", "")))
+
         except RuntimeError as lora_error:
              # Handle critical failure if --lora-skip-fail is False
             debug(f"[Generator] CRITICAL LoRA Error: {lora_error}")
@@ -410,9 +460,10 @@ class VideoGenerator:
                     self.model_manager.image_encoder, self.model_manager.vae,
                     self.model_manager.transformer
                 )
+            self.cleanup_temp_files(job_id, keep_final=False) # Cleanup temps
             return None # Stop generation
-        
-        debug(f"[Generator] Using cleaned prompt for generation: '{cleaned_prompt}'")
+
+        debug(f"[Generator] Using final processed prompt for generation: '{cleaned_prompt}'")
         # ===============================================================
 
         
@@ -1223,6 +1274,24 @@ class VideoGenerator:
                 self.stream.output_queue.push(('end', "interrupted"))
             return None
             
+        except WildcardFileNotFoundError as e:
+             # This should technically be caught earlier, but good to have a fallback.
+             error_msg = f"❌ Wildcard Error: {e}."
+             debug(f"[Generator] Wildcard Error caught late: {e}")
+             print(error_msg)
+             if self.stream:
+                  self.stream.output_queue.push(('progress', (None, error_msg, "")))
+                  self.stream.output_queue.push(('end', 'wildcard_error'))
+             self.cleanup_temp_files(job_id, keep_final=False)
+             # Attempt model unload if low vram
+             if not self.model_manager.high_vram:
+                  mem_utils.unload_complete_models(
+                    self.model_manager.text_encoder, self.model_manager.text_encoder_2,
+                    self.model_manager.image_encoder, self.model_manager.vae,
+                    self.model_manager.transformer
+                  )
+             return None
+
         except Exception as ex:
             debug(f"EXCEPTION THROWN: {ex}")
             debug(traceback.format_exc())
