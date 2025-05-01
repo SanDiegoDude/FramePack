@@ -212,7 +212,7 @@ class VideoGenerator:
         
         debug(f"[Prepare Inputs] Text Encoder device: {self.model_manager.text_encoder.device if self.model_manager.text_encoder else 'None'}")
         debug(f"[Prepare Inputs] Text Encoder 2 device: {self.model_manager.text_encoder_2.device if self.model_manager.text_encoder_2 else 'None'}")                          
-        debug(f"[Prepare Inputs] BEFORE POS ENCODE - Prompt: '{prompt}'")
+        debug(f"[Prepare Inputs] BEFORE POS ENCODE - Prompt: '{cleaned_prompt}'")
         
         lv, cp = encode_prompt_conds(
             cleaned_prompt, # Use the cleaned prompt here
