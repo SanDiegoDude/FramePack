@@ -10,7 +10,8 @@ The goal of this fork is to provide a more stable, extensible, and feature-rich 
 ## Key Features
 
 *   **Modular Architecture:** Codebase refactored into distinct UI, Core Generation, Model Management, and Utility layers for easier maintenance and development.
-*   **Multi-LoRA Support:** Load and apply multiple LoRA adapters simultaneously with adjustable weights via the command line.
+*   **Multi-LoRA Support:** Load and apply multiple LoRA adapters simultaneously with adjustable weights via the command line **and** dynamically via the prompt.
+*   **Dynamic LoRA Loading:** Specify LoRAs directly in the prompt text using `[path:weight]` syntax for on-the-fly experimentation. These LoRAs are loaded for the current generation and unloaded automatically if not requested again.
 *   **LoRA Diagnostics:** Inspect LoRA compatibility and structure without running a full generation using the `--lora-diagnose` flag.
 *   **Enhanced UI:** Includes first/last frame previews, drag-and-drop support for frames, a dedicated "Extend Video" button, and improved layout.
 *   **Improved Memory Management:** Refactored model manager aims for more robust handling of model loading/unloading, especially in low-VRAM scenarios.
@@ -88,32 +89,70 @@ python main.py [OPTIONS]
 *   `--inbrowser`: Launch internet browser to the UI automatically.
 *   `--port <number>`: Run on a specific network port.
 *   `--debug`: Enable detailed console logging for troubleshooting.
-*   `--lora <lora_list>`: Load one or more LoRA adapters (see below).
+*   `--lora <lora_list>`: Load one or more LoRA adapters **at startup** (these remain active for the session, see below).
 *   `--lora-skip-fail`: If loading multiple LoRAs, skip any that fail instead of stopping.
 *   `--lora-diagnose`: Load specified LoRAs, print info, and exit (no generation).
 
-**Multi-LoRA Usage (`--lora`):**
+**Startup LoRA Configuration (`--lora`):**
 
-The `--lora` argument accepts a comma-separated list of LoRA file paths. Append `:<weight>` to a path to specify a custom weight (default is `1.0`).
+The `--lora` argument accepts a comma-separated list of LoRA file paths to be loaded when the application starts. These LoRAs will remain active for all generations during the session unless the application is restarted. Append `:<weight>` to a path to specify a custom weight (default is `1.0`).
 
 ```bash
-# Load a single LoRA with default weight
-python main.py --lora "/path/to/style.safetensors" ...
+ # Load a single LoRA with default weight
+ python main.py --lora "/path/to/style.safetensors" ...
 
-# Load multiple LoRAs with default weights
-python main.py --lora "/path/to/style.safetensors,/path/to/char.safetensors" ...
+ # Load multiple LoRAs with default weights
+ python main.py --lora "/path/to/style.safetensors,/path/to/char.safetensors" ...
 
-# Load multiple LoRAs with custom weights
-python main.py --lora "/path/to/style.safetensors:0.7,/path/to/char.safetensors:0.9" ...
+ # Load multiple LoRAs with custom weights
+ python main.py --lora "/path/to/style.safetensors:0.7,/path/to/char.safetensors:0.9" ...
 
-# Load one default, one custom weight
-python main.py --lora "/path/to/style.safetensors,/path/to/char.safetensors:0.5" ...
+ # Load one default, one custom weight
+ python main.py --lora "/path/to/style.safetensors,/path/to/char.safetensors:0.5" ...
 
-# Diagnose LoRAs without generating
-python main.py --lora "/path/to/style.safetensors,/path/to/maybe_broken.safetensors" --lora-diagnose --lora-skip-fail
+ # Diagnose LoRAs without generating
+ python main.py --lora "/path/to/style.safetensors,/path/to/maybe_broken.safetensors" --lora-diagnose --lora-skip-fail
 ```
 
 *(Note: The old `--lora-weight` argument has been removed.)*
+
+
+**Dynamic LoRA Loading (Prompt Syntax):**
+
+In addition to loading LoRAs at startup, you can dynamically load specific LoRAs for individual generations directly within the main **Prompt** text box.
+
+*   **Syntax:** Use square brackets `[]` around the LoRA path. A weight can optionally be added after a colon `:`.
+    *   `[path/to/your/lora]` (Loads with default weight 1.0)
+    *   `[path/to/your/lora:0.75]` (Loads with weight 0.75)
+*   **Multiple LoRAs:** You can include multiple dynamic LoRAs anywhere in your prompt.
+    ```
+    [style_anime:0.6] [char_catgirl] A catgirl exploring a neon city [environment_cyberpunk:0.9]
+    ```
+*   **Path Details:**
+    *   Paths can be **absolute** (e.g., `[C:/Users/Me/loras/mylora]`, `[/home/user/loras/mylora]`) or **relative**.
+    *   Relative paths are searched relative to a `./loras/` directory within the project folder by default.
+    *   The `.safetensors` file extension is **optional** and will be added automatically if omitted.
+*   **Automatic Cleaning:** The `[lora:weight]` syntax will be automatically removed from the prompt text before it's sent to the text encoders. The cleaned prompt is used for generation.
+*   **Lifecycle:** Dynamically loaded LoRAs are active *only* for the generation requested by that specific prompt. They are automatically unloaded afterwards if not included in the next prompt, helping manage resources. LoRAs loaded via the `--lora` command-line flag remain active throughout the session.
+*   **Case Sensitivity:** LoRA path matching follows operating system rules:
+    *   **Windows:** Case-insensitive (e.g., `[MyLoRa]` can match `mylora.safetensors`).
+    *   **Linux/macOS:** Case-sensitive (e.g., `[MyLoRa]` only matches `MyLoRa.safetensors`).
+    *   **Best Practice:** Always use the exact filename case as it appears on your file system for consistency and to avoid issues.
+*   **Feedback:** The application console will print messages indicating which dynamic LoRAs are being loaded or if loading fails (e.g., file not found). TQDM progress bars may show for multiple loads.
+
+**Example Prompt:**
+
+```
+[style_illustration:0.8] A dragon flying over a castle; the dragon landing on a turret [char_dragon_detailed] [setting_fantasy_castle:0.5]
+```
+
+This prompt will:
+1.  Attempt to load `style_illustration` (weight 0.8), `char_dragon_detailed` (weight 1.0), and `setting_fantasy_castle` (weight 0.5) dynamically.
+2.  Use these LoRAs *in addition* to any LoRAs loaded via the `--lora` startup argument.
+3.  Use the cleaned prompts `"A dragon flying over a castle"` and `"the dragon landing on a turret"` for sequential generation.
+4.  Unload the three dynamic LoRAs after generation completes (unless the next prompt requests them again).
+```
+
 
 ## Modes & Workarounds
 
