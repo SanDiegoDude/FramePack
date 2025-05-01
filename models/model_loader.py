@@ -2,6 +2,7 @@
 import torch
 import os
 from utils.common import debug
+from tqdm import tqdm # Add tqdm for progress bars
 from utils.memory_utils import (
     cpu, gpu, unload_complete_models, load_model_as_complete,
     DynamicSwapInstaller, fake_diffusers_current_device, get_cuda_free_memory_gb,
@@ -75,16 +76,29 @@ class ModelManager:
             debug(f"Temporarily moving transformer to CPU for CLI LoRA loading (currently on {original_device})")
             self.transformer.to(cpu)
 
-        for idx, cfg in enumerate(self.cli_lora_configs):
+        # Determine if we need a progress bar
+        configs_to_load = self.cli_lora_configs
+        use_tqdm = len(configs_to_load) >= 1
+        iterable = tqdm(configs_to_load, desc="Loading CLI LoRAs", ncols=100, disable=not use_tqdm)
+        
+        for idx, cfg in enumerate(iterable): # Iterate using tqdm wrapper
             base_name = os.path.splitext(os.path.basename(cfg.path))[0]
             safe_name = safe_adapter_name(base_name)
             adapter_name = f"cli_{idx}_{safe_name}" # Prefix to distinguish
             cfg.adapter_name = adapter_name # Assign unique name
-
+        
+            # Update tqdm description if used
+            if use_tqdm:
+                 iterable.set_description(f"Loading CLI LoRA: {os.path.basename(cfg.path)[:25]}...")
+        
             try:
                 debug(f"Loading CLI LoRA: '{cfg.path}' as '{adapter_name}'")
-                # Pass self.high_vram hint for potential future optimization
                 load_lora(self.transformer, cfg.path, adapter_name=adapter_name)
+        
+                # --- USER VISIBLE PRINT ---
+                print(f"✅ Loaded CLI LoRA: '{os.path.basename(cfg.path)}' as adapter '{adapter_name}'")
+                # --------------------------
+        
                 self.applied_cli_loras.append(cfg)
                 applied_count += 1
             except Exception as e:
@@ -92,17 +106,24 @@ class ModelManager:
                 self.failed_cli_loras.append(cfg)
                 failed_count += 1
                 error_msg = f"CLI LoRA Load Failed: Could not load '{os.path.basename(cfg.path)}' as '{adapter_name}'. Reason: {e}"
-                debug(f"[WARN] {error_msg}")
+                # --- USER VISIBLE PRINT (Error) ---
+                print(f"❌ Failed to load CLI LoRA: '{os.path.basename(cfg.path)}'. Reason: {e}")
+                # ----------------------------------
+                debug(f"[WARN] {error_msg}") # Keep debug for details
                 if not self.lora_skip_fail:
                     debug("[ERROR] Stopping due to CLI LoRA load failure (--lora-skip-fail not set).")
-                     # Move transformer back before raising
                     if original_device != cpu:
                         debug(f"Moving transformer back to {original_device} before raising error.")
                         self.transformer.to(original_device)
                     raise RuntimeError(error_msg)
                 else:
                     debug("[WARN] Skipping failed CLI LoRA as --lora-skip-fail is set.")
-
+        
+        # Clear tqdm description line if it was used
+        if use_tqdm:
+            iterable.set_description("Finished loading CLI LoRAs")
+            iterable.close() # Ensure tqdm cleans up properly
+        
         debug(f"Finished loading CLI LoRAs: {applied_count} succeeded, {failed_count} failed.")
 
         # Update the combined active list
@@ -130,9 +151,10 @@ class ModelManager:
         if self.applied_cli_loras:
             print("Applied CLI LoRAs: " + ", ".join([f"{os.path.basename(c.path)} (w={c.weight}, name={c.adapter_name})" for c in self.applied_cli_loras]))
         if self.failed_cli_loras:
-            print("CLI LoRAs failed to load:")
-            for c in self.failed_cli_loras:
-                print(f"  {os.path.basename(c.path)} reason: {c.error}")
+             print("--- CLI LoRAs Failed to Load Summary ---")
+             for c in self.failed_cli_loras:
+                 print(f"  - {os.path.basename(c.path)} (Reason: {c.error})")
+             print("-----------------------------------------")
 
     def set_dynamic_loras(self, requested_configs: List[LoRAConfig]) -> Tuple[List[LoRAConfig], List[LoRAConfig]]:
         """
@@ -221,30 +243,61 @@ class ModelManager:
                 debug("Moving transformer to CPU for new dynamic LoRA loading.")
                 self.transformer.to(cpu)
 
-            for idx, cfg in enumerate(loras_to_load):
-                # Create a unique name based on path and maybe a counter/hash
+            # Inside set_dynamic_loras, within 'if loras_to_load:'
+            newly_loaded_loras = [] # Initialize here
+            
+            # Determine if we need a progress bar for *new* loads
+            use_tqdm = len(loras_to_load) >= 1
+            iterable = tqdm(loras_to_load, desc="Loading Dynamic LoRAs", ncols=100, disable=not use_tqdm)
+            
+            for idx, cfg in enumerate(iterable): # Iterate using tqdm wrapper
+                # Create a unique name
                 base_name = os.path.splitext(os.path.basename(cfg.path))[0]
                 safe_name = safe_adapter_name(base_name)
-                # Make name unique enough for dynamic changes
                 adapter_name = f"dyn_{safe_name}_{hash(cfg.path) % 10000}"
                 cfg.adapter_name = adapter_name
-
+            
+                # Update tqdm description if used
+                if use_tqdm:
+                     iterable.set_description(f"Loading Dynamic LoRA: {os.path.basename(cfg.path)[:25]}...")
+            
+                # Handle configs that failed normalization (don't try to load)
+                if cfg.error:
+                    debug(f"  - Skipping load for '{cfg.path}' due to previous error: {cfg.error}")
+                    # Add to failed_dynamic here directly if not already done
+                    if cfg not in failed_dynamic: # Avoid duplicates if error was set earlier
+                         failed_dynamic.append(cfg)
+                    # --- USER VISIBLE PRINT (Pre-fail) ---
+                    print(f"⚠️ Skipping Dynamic LoRA '{os.path.basename(cfg.path)}': {cfg.error}")
+                    # -------------------------------------
+                    continue # Skip to next requested config
+            
+                print(f"  ⏳ Attempting to load: '{os.path.basename(cfg.path)}'")
                 try:
                     debug(f"Loading dynamic LoRA: '{cfg.path}' as '{adapter_name}'")
                     load_lora(self.transformer, cfg.path, adapter_name=adapter_name)
+            
+                    # --- USER VISIBLE PRINT ---
+                    print(f"✅ Loaded Dynamic LoRA: '{os.path.basename(cfg.path)}' as adapter '{adapter_name}' (Weight: {cfg.weight})")
+                    # --------------------------
+            
                     newly_loaded_loras.append(cfg)
                 except Exception as e:
                     cfg.error = str(e)
                     failed_dynamic.append(cfg)
                     error_msg = f"Dynamic LoRA Load Failed: Could not load '{os.path.basename(cfg.path)}' as '{adapter_name}'. Reason: {e}"
-                    debug(f"[WARN] {error_msg}")
-                    if not self.lora_skip_fail:
-                        debug("[ERROR] Stopping due to dynamic LoRA load failure (--lora-skip-fail not set).")
-                        if original_device != cpu:
-                             self.transformer.to(original_device)
-                        raise RuntimeError(error_msg)
-                    else:
-                        debug("[WARN] Skipping failed dynamic LoRA as --lora-skip-fail is set.")
+                    # --- USER VISIBLE PRINT (Error) ---
+                    print(f"❌ Failed to load Dynamic LoRA: '{os.path.basename(cfg.path)}'. Reason: {e}")
+                    # ----------------------------------
+                    debug(f"[WARN] {error_msg}") # Keep debug for details
+                    # No need to raise RuntimeError here, it's handled after the loop
+            
+            # Clear tqdm description line if it was used
+            if use_tqdm:
+                iterable.set_description("Finished loading dynamic LoRAs")
+                iterable.close()
+            
+            # --- END Perform Loading ---
 
             # Move back to original device
             if original_device != cpu:
@@ -287,10 +340,83 @@ class ModelManager:
                  debug(f"Note: Could not explicitly disable adapters (might be okay): {e}")
 
 
-        debug(f"Dynamic LoRA update complete. Active dynamic: {len(self.dynamic_lora_configs)}, Failed this run: {len(failed_dynamic)}")
-        return self.dynamic_lora_configs, self.failed_dynamic_loras
+        # --- Final Check for Failures ---
+        # After attempting to load all requested dynamic LoRAs, check if any failed
+        if failed_dynamic and not self.lora_skip_fail:
+             # ... (error message creation) ...
+             combined_error_msg = f"Failed to apply {len(failed_dynamic)} required dynamic LoRA(s): {', '.join([f'{os.path.basename(c.path)} ({c.error})' for c in failed_dynamic])}" # Simplified formatting
+             debug(f"[ERROR] {combined_error_msg} -- Halting generation as --lora-skip-fail is not set.")
+             
+             # --- Ensure Correct Device Before Raising ---
+             # Move to intended final device *before* raising the error to leave state consistent
+             final_target_device = gpu if self.high_vram else cpu
+             if hasattr(self.transformer, 'device') and self.transformer.device != final_target_device:
+                 debug(f"Ensuring transformer is on {final_target_device} before raising LoRA error.")
+                 try:
+                     self.transformer.to(final_target_device)
+                 except Exception as move_e:
+                      debug(f"Could not move transformer to {final_target_device} before raising error: {move_e}")
+             # --- End Ensure Device Before Raising ---
 
-    # --- Rest of the ModelManager class ---
+             raise RuntimeError(combined_error_msg) # Raise the error
+
+        # --- Apply Adapters (if successful or skipping failures) ---
+        # Update the combined active list (should happen regardless of failure if skipping)
+        self._update_active_loras()
+
+        # Re-apply *all* currently active adapters (CLI + dynamic) with potentially updated weights
+        if self._active_loras:
+            adapter_names = [c.adapter_name for c in self._active_loras if c.adapter_name]
+            adapter_weights = [c.weight for c in self._active_loras if c.adapter_name]
+            debug(f"Applying {len(adapter_names)} total adapters (CLI + Dynamic) with weights: {adapter_weights}")
+            
+            # Ensure transformer is on the correct target device before setting adapters
+            target_device = gpu if self.high_vram else cpu # Re-calculate target here
+            if not hasattr(self.transformer, 'device') or self.transformer.device != target_device:
+                 debug(f"Ensuring transformer is on {target_device} before set_adapters.")
+                 try: # Add try-except for robustness
+                      self.transformer.to(target_device)
+                 except Exception as move_e:
+                      debug(f"ERROR moving transformer to {target_device} before set_adapters: {move_e}")
+                      # If move fails here, set_adapters will likely fail too, but let it try
+            
+            try: # Add try-except for robustness
+                set_adapters(self.transformer, adapter_names, adapter_weights)
+                debug("Adapters set successfully.")
+            except Exception as set_adapter_e:
+                 debug(f"ERROR setting adapters: {set_adapter_e}")
+                 # Decide how to handle this - maybe raise another error?
+                 # For now, just log it. Generation might fail later.
+
+        else:
+            # If no LoRAs are active, attempt to disable adapters
+            try:
+                debug("No active LoRAs. Attempting to disable adapter layers.")
+                if hasattr(self.transformer, 'disable_adapter_layers'):
+                    self.transformer.disable_adapter_layers()
+                # Maybe need transformer.enable_adapter_layers() here if disable affects base weights? Test needed.
+            except Exception as e:
+                 debug(f"Note: Could not explicitly disable adapters (might be okay): {e}")
+
+        # --- Final Device Placement ---
+        # ENSURE the transformer is on the correct device *before returning* to generate_video
+        final_target_device = gpu if self.high_vram else cpu
+        if hasattr(self.transformer, 'device') and self.transformer.device != final_target_device:
+             debug(f"Final check: Moving transformer to target device {final_target_device} before returning.")
+             try:
+                  self.transformer.to(final_target_device)
+             except Exception as move_e:
+                  debug(f"ERROR during final move to {final_target_device}: {move_e}")
+                  # If this fails, subsequent steps in generate_video will likely fail.
+        elif not hasattr(self.transformer, 'device'):
+             debug("Transformer has no device attribute at final check.") # Should not happen if loaded
+        else:
+             debug(f"Transformer already on final target device {final_target_device}.")
+
+
+        debug(f"Dynamic LoRA update complete. Active dynamic: {len(self.dynamic_lora_configs)}, Failed this run: {len(failed_dynamic)}")
+        # Return the lists of applied and failed dynamic LoRAs for this run
+        return self.dynamic_lora_configs, self.failed_dynamic_loras
 
     def ensure_all_models_loaded(self):
         """If any required model is None, reload all models (auto-heals from accidental None)."""

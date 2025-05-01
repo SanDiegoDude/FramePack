@@ -381,7 +381,8 @@ class VideoGenerator:
         # 3. Extract LoRA Configs
         dynamic_lora_configs = extracted_data.get("lora", {}).get("lora_configs", [])
         debug(f"[Generator] Extracted {len(dynamic_lora_configs)} dynamic LoRA configs from prompt.")
-        
+        print(f"\n🔄 Processing {len(dynamic_lora_configs)} Dynamic LoRA(s) requested in prompt...")
+
         # 4. Apply Dynamic LoRAs via ModelManager
         # Ensure models (especially transformer) are loaded before applying LoRAs
         self.model_manager.ensure_all_models_loaded() # Crucial check

@@ -28,14 +28,14 @@ class LoraPromptProcessor(PromptProcessor):
     # Regex explanation:
     # \[             # Match opening square bracket
     # (              # Start capture group 1 (path)
-    #   [^:\]]+     # Match one or more characters that are NOT ':' or ']'
+    #   .+?          # Match one or more characters (.+?) non-greedily
     # )              # End capture group 1
     # (?:            # Start non-capturing group for optional weight
     #   :            # Match the colon separator
     #   (\d+\.?\d*) # Capture group 2 (weight): one or more digits, optional decimal part
     # )?             # End non-capturing group, make it optional
     # \]             # Match closing square bracket
-    LORA_REGEX = re.compile(r"\[([^:\]]+?)(?::(\d+\.?\d*))?\]")
+    LORA_REGEX = re.compile(r"\[(.+?)(?::(\d+\.?\d*))?\]")
 
     def __init__(self):
         super().__init__("lora")
@@ -64,6 +64,10 @@ class LoraPromptProcessor(PromptProcessor):
         if potential_path_rel_st.is_file():
              return str(potential_path_rel_st.resolve())
 
+        debug(f"[LoraParser] LoRA file not found for spec: '{path_fragment}' (checked . and .safetensors)")
+        # --- USER VISIBLE PRINT ---
+        print(f"⚠️ Warning: Could not find LoRA file specified as '{path_fragment}'. Will skip loading this LoRA.")
+        # --------------------------
         debug(f"[LoraParser] LoRA file not found for spec: '{path_fragment}' (checked . and .safetensors)")
         return None # Indicate not found
 
