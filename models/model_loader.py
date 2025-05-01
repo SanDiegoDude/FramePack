@@ -2,6 +2,7 @@
 import torch
 import os
 from utils.common import debug
+from tqdm import tqdm # Add tqdm for progress bars
 from utils.memory_utils import (
     cpu, gpu, unload_complete_models, load_model_as_complete,
     DynamicSwapInstaller, fake_diffusers_current_device, get_cuda_free_memory_gb,
@@ -75,16 +76,29 @@ class ModelManager:
             debug(f"Temporarily moving transformer to CPU for CLI LoRA loading (currently on {original_device})")
             self.transformer.to(cpu)
 
-        for idx, cfg in enumerate(self.cli_lora_configs):
+        # Determine if we need a progress bar
+        configs_to_load = self.cli_lora_configs
+        use_tqdm = len(configs_to_load) > 1
+        iterable = tqdm(configs_to_load, desc="Loading CLI LoRAs", ncols=100, disable=not use_tqdm)
+        
+        for idx, cfg in enumerate(iterable): # Iterate using tqdm wrapper
             base_name = os.path.splitext(os.path.basename(cfg.path))[0]
             safe_name = safe_adapter_name(base_name)
             adapter_name = f"cli_{idx}_{safe_name}" # Prefix to distinguish
             cfg.adapter_name = adapter_name # Assign unique name
-
+        
+            # Update tqdm description if used
+            if use_tqdm:
+                 iterable.set_description(f"Loading CLI LoRA: {os.path.basename(cfg.path)[:25]}...")
+        
             try:
                 debug(f"Loading CLI LoRA: '{cfg.path}' as '{adapter_name}'")
-                # Pass self.high_vram hint for potential future optimization
                 load_lora(self.transformer, cfg.path, adapter_name=adapter_name)
+        
+                # --- USER VISIBLE PRINT ---
+                print(f"✅ Loaded CLI LoRA: '{os.path.basename(cfg.path)}' as adapter '{adapter_name}'")
+                # --------------------------
+        
                 self.applied_cli_loras.append(cfg)
                 applied_count += 1
             except Exception as e:
@@ -92,17 +106,24 @@ class ModelManager:
                 self.failed_cli_loras.append(cfg)
                 failed_count += 1
                 error_msg = f"CLI LoRA Load Failed: Could not load '{os.path.basename(cfg.path)}' as '{adapter_name}'. Reason: {e}"
-                debug(f"[WARN] {error_msg}")
+                # --- USER VISIBLE PRINT (Error) ---
+                print(f"❌ Failed to load CLI LoRA: '{os.path.basename(cfg.path)}'. Reason: {e}")
+                # ----------------------------------
+                debug(f"[WARN] {error_msg}") # Keep debug for details
                 if not self.lora_skip_fail:
                     debug("[ERROR] Stopping due to CLI LoRA load failure (--lora-skip-fail not set).")
-                     # Move transformer back before raising
                     if original_device != cpu:
                         debug(f"Moving transformer back to {original_device} before raising error.")
                         self.transformer.to(original_device)
                     raise RuntimeError(error_msg)
                 else:
                     debug("[WARN] Skipping failed CLI LoRA as --lora-skip-fail is set.")
-
+        
+        # Clear tqdm description line if it was used
+        if use_tqdm:
+            iterable.set_description("Finished loading CLI LoRAs")
+            iterable.close() # Ensure tqdm cleans up properly
+        
         debug(f"Finished loading CLI LoRAs: {applied_count} succeeded, {failed_count} failed.")
 
         # Update the combined active list
@@ -130,9 +151,10 @@ class ModelManager:
         if self.applied_cli_loras:
             print("Applied CLI LoRAs: " + ", ".join([f"{os.path.basename(c.path)} (w={c.weight}, name={c.adapter_name})" for c in self.applied_cli_loras]))
         if self.failed_cli_loras:
-            print("CLI LoRAs failed to load:")
-            for c in self.failed_cli_loras:
-                print(f"  {os.path.basename(c.path)} reason: {c.error}")
+             print("--- CLI LoRAs Failed to Load Summary ---")
+             for c in self.failed_cli_loras:
+                 print(f"  - {os.path.basename(c.path)} (Reason: {c.error})")
+             print("-----------------------------------------")
 
     def set_dynamic_loras(self, requested_configs: List[LoRAConfig]) -> Tuple[List[LoRAConfig], List[LoRAConfig]]:
         """
