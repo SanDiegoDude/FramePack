@@ -243,30 +243,61 @@ class ModelManager:
                 debug("Moving transformer to CPU for new dynamic LoRA loading.")
                 self.transformer.to(cpu)
 
-            for idx, cfg in enumerate(loras_to_load):
-                # Create a unique name based on path and maybe a counter/hash
+            # Inside set_dynamic_loras, within 'if loras_to_load:'
+            newly_loaded_loras = [] # Initialize here
+            
+            # Determine if we need a progress bar for *new* loads
+            use_tqdm = len(loras_to_load) > 1
+            iterable = tqdm(loras_to_load, desc="Loading Dynamic LoRAs", ncols=100, disable=not use_tqdm)
+            
+            for idx, cfg in enumerate(iterable): # Iterate using tqdm wrapper
+                # Create a unique name
                 base_name = os.path.splitext(os.path.basename(cfg.path))[0]
                 safe_name = safe_adapter_name(base_name)
-                # Make name unique enough for dynamic changes
                 adapter_name = f"dyn_{safe_name}_{hash(cfg.path) % 10000}"
                 cfg.adapter_name = adapter_name
-
+            
+                # Update tqdm description if used
+                if use_tqdm:
+                     iterable.set_description(f"Loading Dynamic LoRA: {os.path.basename(cfg.path)[:25]}...")
+            
+                # Handle configs that failed normalization (don't try to load)
+                if cfg.error:
+                    debug(f"  - Skipping load for '{cfg.path}' due to previous error: {cfg.error}")
+                    # Add to failed_dynamic here directly if not already done
+                    if cfg not in failed_dynamic: # Avoid duplicates if error was set earlier
+                         failed_dynamic.append(cfg)
+                    # --- USER VISIBLE PRINT (Pre-fail) ---
+                    # Optional: Print pre-existing failures? Could be noisy.
+                    # print(f"⚠️ Skipping Dynamic LoRA '{os.path.basename(cfg.path)}': {cfg.error}")
+                    # -------------------------------------
+                    continue # Skip to next requested config
+            
                 try:
                     debug(f"Loading dynamic LoRA: '{cfg.path}' as '{adapter_name}'")
                     load_lora(self.transformer, cfg.path, adapter_name=adapter_name)
+            
+                    # --- USER VISIBLE PRINT ---
+                    print(f"✅ Loaded Dynamic LoRA: '{os.path.basename(cfg.path)}' as adapter '{adapter_name}' (Weight: {cfg.weight})")
+                    # --------------------------
+            
                     newly_loaded_loras.append(cfg)
                 except Exception as e:
                     cfg.error = str(e)
                     failed_dynamic.append(cfg)
                     error_msg = f"Dynamic LoRA Load Failed: Could not load '{os.path.basename(cfg.path)}' as '{adapter_name}'. Reason: {e}"
-                    debug(f"[WARN] {error_msg}")
-                    if not self.lora_skip_fail:
-                        debug("[ERROR] Stopping due to dynamic LoRA load failure (--lora-skip-fail not set).")
-                        if original_device != cpu:
-                             self.transformer.to(original_device)
-                        raise RuntimeError(error_msg)
-                    else:
-                        debug("[WARN] Skipping failed dynamic LoRA as --lora-skip-fail is set.")
+                    # --- USER VISIBLE PRINT (Error) ---
+                    print(f"❌ Failed to load Dynamic LoRA: '{os.path.basename(cfg.path)}'. Reason: {e}")
+                    # ----------------------------------
+                    debug(f"[WARN] {error_msg}") # Keep debug for details
+                    # No need to raise RuntimeError here, it's handled after the loop
+            
+            # Clear tqdm description line if it was used
+            if use_tqdm:
+                iterable.set_description("Finished loading dynamic LoRAs")
+                iterable.close()
+            
+            # --- END Perform Loading ---
 
             # Move back to original device
             if original_device != cpu:
