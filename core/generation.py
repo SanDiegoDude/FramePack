@@ -477,7 +477,7 @@ class VideoGenerator:
             end_latent = None # Only for keyframes
             height, width = 0, 0
 
-             if mode == "keyframes":
+         if mode == "keyframes":
                 if end_frame is None: raise ValueError("Keyframes mode requires End Frame.")
                 end_H, end_W, _= end_frame.shape
                 height, width = find_nearest_bucket(end_H, end_W, resolution=640)
