@@ -78,7 +78,7 @@ class ModelManager:
 
         # Determine if we need a progress bar
         configs_to_load = self.cli_lora_configs
-        use_tqdm = len(configs_to_load) > 1
+        use_tqdm = len(configs_to_load) >= 1
         iterable = tqdm(configs_to_load, desc="Loading CLI LoRAs", ncols=100, disable=not use_tqdm)
         
         for idx, cfg in enumerate(iterable): # Iterate using tqdm wrapper
@@ -247,7 +247,7 @@ class ModelManager:
             newly_loaded_loras = [] # Initialize here
             
             # Determine if we need a progress bar for *new* loads
-            use_tqdm = len(loras_to_load) > 1
+            use_tqdm = len(loras_to_load) >= 1
             iterable = tqdm(loras_to_load, desc="Loading Dynamic LoRAs", ncols=100, disable=not use_tqdm)
             
             for idx, cfg in enumerate(iterable): # Iterate using tqdm wrapper
