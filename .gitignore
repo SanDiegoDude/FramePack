@@ -2,6 +2,7 @@ hf_download/
 outputs/
 repo/
 loras/
+wildcards/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
