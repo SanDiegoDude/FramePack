@@ -65,6 +65,10 @@ class LoraPromptProcessor(PromptProcessor):
              return str(potential_path_rel_st.resolve())
 
         debug(f"[LoraParser] LoRA file not found for spec: '{path_fragment}' (checked . and .safetensors)")
+        # --- USER VISIBLE PRINT ---
+        print(f"⚠️ Warning: Could not find LoRA file specified as '{path_fragment}'. Will skip loading this LoRA.")
+        # --------------------------
+        debug(f"[LoraParser] LoRA file not found for spec: '{path_fragment}' (checked . and .safetensors)")
         return None # Indicate not found
 
     def extract_data(self, prompt_text: str) -> Dict[str, Any]:
