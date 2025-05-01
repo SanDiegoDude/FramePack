@@ -342,26 +342,77 @@ class ModelManager:
 
         # --- Final Check for Failures ---
         # After attempting to load all requested dynamic LoRAs, check if any failed
-        # This includes failures from path normalization (file not found) AND load_lora() exceptions
         if failed_dynamic and not self.lora_skip_fail:
-             # Collect error messages for clarity
-            error_details = [f"'{os.path.basename(c.path)}': {c.error}" for c in failed_dynamic]
-            combined_error_msg = f"Failed to apply {len(failed_dynamic)} required dynamic LoRA(s): {', '.join(error_details)}"
-            debug(f"[ERROR] {combined_error_msg} -- Halting generation as --lora-skip-fail is not set.")
-            # Ensure transformer is on its intended device before raising, prevents potential state issues
-            target_device = gpu if self.high_vram else cpu
-            if hasattr(self.transformer, 'device') and self.transformer.device != target_device:
-                try:
-                    self.transformer.to(target_device)
-                except Exception as move_e:
-                     debug(f"Could not move transformer to {target_device} before raising error: {move_e}")
-            raise RuntimeError(combined_error_msg) # Raise the error to be caught by generate_video
+             # ... (error message creation) ...
+             combined_error_msg = f"Failed to apply {len(failed_dynamic)} required dynamic LoRA(s): {', '.join([f'{os.path.basename(c.path)} ({c.error})' for c in failed_dynamic])}" # Simplified formatting
+             debug(f"[ERROR] {combined_error_msg} -- Halting generation as --lora-skip-fail is not set.")
+             
+             # --- Ensure Correct Device Before Raising ---
+             # Move to intended final device *before* raising the error to leave state consistent
+             final_target_device = gpu if self.high_vram else cpu
+             if hasattr(self.transformer, 'device') and self.transformer.device != final_target_device:
+                 debug(f"Ensuring transformer is on {final_target_device} before raising LoRA error.")
+                 try:
+                     self.transformer.to(final_target_device)
+                 except Exception as move_e:
+                      debug(f"Could not move transformer to {final_target_device} before raising error: {move_e}")
+             # --- End Ensure Device Before Raising ---
 
-        # Update the combined active list (moved slightly earlier, no functional change)
+             raise RuntimeError(combined_error_msg) # Raise the error
+
+        # --- Apply Adapters (if successful or skipping failures) ---
+        # Update the combined active list (should happen regardless of failure if skipping)
         self._update_active_loras()
 
-        # Re-apply *all* currently active adapters (CLI + dynamic)
-        # ... (rest of the adapter application logic remains the same) ...
+        # Re-apply *all* currently active adapters (CLI + dynamic) with potentially updated weights
+        if self._active_loras:
+            adapter_names = [c.adapter_name for c in self._active_loras if c.adapter_name]
+            adapter_weights = [c.weight for c in self._active_loras if c.adapter_name]
+            debug(f"Applying {len(adapter_names)} total adapters (CLI + Dynamic) with weights: {adapter_weights}")
+            
+            # Ensure transformer is on the correct target device before setting adapters
+            target_device = gpu if self.high_vram else cpu # Re-calculate target here
+            if not hasattr(self.transformer, 'device') or self.transformer.device != target_device:
+                 debug(f"Ensuring transformer is on {target_device} before set_adapters.")
+                 try: # Add try-except for robustness
+                      self.transformer.to(target_device)
+                 except Exception as move_e:
+                      debug(f"ERROR moving transformer to {target_device} before set_adapters: {move_e}")
+                      # If move fails here, set_adapters will likely fail too, but let it try
+            
+            try: # Add try-except for robustness
+                set_adapters(self.transformer, adapter_names, adapter_weights)
+                debug("Adapters set successfully.")
+            except Exception as set_adapter_e:
+                 debug(f"ERROR setting adapters: {set_adapter_e}")
+                 # Decide how to handle this - maybe raise another error?
+                 # For now, just log it. Generation might fail later.
+
+        else:
+            # If no LoRAs are active, attempt to disable adapters
+            try:
+                debug("No active LoRAs. Attempting to disable adapter layers.")
+                if hasattr(self.transformer, 'disable_adapter_layers'):
+                    self.transformer.disable_adapter_layers()
+                # Maybe need transformer.enable_adapter_layers() here if disable affects base weights? Test needed.
+            except Exception as e:
+                 debug(f"Note: Could not explicitly disable adapters (might be okay): {e}")
+
+        # --- Final Device Placement ---
+        # ENSURE the transformer is on the correct device *before returning* to generate_video
+        final_target_device = gpu if self.high_vram else cpu
+        if hasattr(self.transformer, 'device') and self.transformer.device != final_target_device:
+             debug(f"Final check: Moving transformer to target device {final_target_device} before returning.")
+             try:
+                  self.transformer.to(final_target_device)
+             except Exception as move_e:
+                  debug(f"ERROR during final move to {final_target_device}: {move_e}")
+                  # If this fails, subsequent steps in generate_video will likely fail.
+        elif not hasattr(self.transformer, 'device'):
+             debug("Transformer has no device attribute at final check.") # Should not happen if loaded
+        else:
+             debug(f"Transformer already on final target device {final_target_device}.")
+
 
         debug(f"Dynamic LoRA update complete. Active dynamic: {len(self.dynamic_lora_configs)}, Failed this run: {len(failed_dynamic)}")
         # Return the lists of applied and failed dynamic LoRAs for this run
