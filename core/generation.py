@@ -1311,6 +1311,13 @@ class VideoGenerator:
         finally:
             debug("in finally block, writing final summary/progress/end")
             t_end = time.time()
+
+            # --- Send final processed prompt ---
+            final_prompt_to_send = "Prompt processing failed." # Default if error occurred before prompt finalized
+            if 'cleaned_prompt' in locals():
+                 final_prompt_to_send = cleaned_prompt # Use the finalized prompt
+            if self.stream:
+                self.stream.output_queue.push(('final_prompt', final_prompt_to_send))
             
             # Use final state of history_pixels for summary
             if 'history_pixels' in locals() and history_pixels is not None:
