@@ -96,18 +96,18 @@ class WildcardProcessor(PromptProcessor):
             rng = random.Random(seed)
 
         processed_prompt = prompt_text
-        # Process iteratively to handle cases where wildcard result might contain another wildcard
         processed_something = True
         iterations = 0
         max_iterations = 10 # Safety break
 
         while processed_something and iterations < max_iterations:
             processed_something = False
+            # Use finditer on the current state of processed_prompt
             matches = list(self.WILDCARD_REGEX.finditer(processed_prompt))
             if not matches:
                 break
 
-            # Process one match per iteration to simplify replacement
+            # Process one match per iteration to simplify replacement logic
             match = matches[0]
             wildcard_name = match.group(1)
             debug(f"Processing wildcard: __{wildcard_name}__")
@@ -122,6 +122,7 @@ class WildcardProcessor(PromptProcessor):
                     debug(f"Wildcard '{wildcard_name}' resulted in empty replacement.")
 
                 # Replace only the first occurrence found in this iteration
+                # Use match start/end relative to the current processed_prompt
                 processed_prompt = processed_prompt[:match.start()] + replacement + processed_prompt[match.end():]
                 processed_something = True
 
@@ -140,6 +141,14 @@ class WildcardProcessor(PromptProcessor):
             debug(f"Warning: Wildcard processing reached max iterations ({max_iterations}). Potential recursive wildcards?")
 
         return processed_prompt
+
+    # --- NEW METHOD ---
+    def extract_data(self, prompt_text: str) -> Dict[str, Any]:
+        """Wildcards don't extract data, they only modify the prompt."""
+        # This explicitly overrides the base method and does nothing,
+        # preventing any accidental calls to Lora logic.
+        return {}
+    # --- END NEW METHOD ---
 
 # --- NEW: Randomizer Processor ---
 class RandomizerProcessor(PromptProcessor):
