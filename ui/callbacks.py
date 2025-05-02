@@ -351,8 +351,8 @@ def process(
                 gr.update(visible=False),                            # generation_stats
                 gr.update(visible=False, open=False),            # generation_stats_accordion 
                 gr.update(visible=False), # frame_thumbnails_group
-                gr.update(visible=False), # final_processed_prompt_display
-                gr.update(visible=False)  # final_prompt_accordion
+                gr.update(), # final_processed_prompt_display
+                gr.update()  # final_prompt_accordion
             )
             last_is_image = True
             last_img_path = img_filename
