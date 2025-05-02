@@ -484,6 +484,8 @@ def create_interface(model_manager, video_generator):
             llm_encoder_weight,
             clip_encoder_weight,
             clean_latent_weight,
+            batch_count, 
+            endless_run,  
         ]
         
         # Define output list including first/last frame images
@@ -504,8 +506,8 @@ def create_interface(model_manager, video_generator):
             generation_stats,           # 13
             generation_stats_accordion, # 14
             frame_thumbnails_group,     # 15
-            final_processed_prompt_display, # 16 - NEW
-            final_prompt_accordion      # 17 - NEW
+            final_processed_prompt_display, # 16 
+            final_prompt_accordion      # 17 
         ]
         
         prompt.submit(
