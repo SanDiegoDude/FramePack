@@ -266,7 +266,7 @@ def process(
             {last_desc if last_desc else ""}
                 """),
                 gr.update(visible=True, open=False),            # generation_stats_accordion 
-                gr.update(visible=True)                         # frame_thumbnails_group
+                gr.update(visible=True),                        # frame_thumbnails_group
                 gr.update(visible=False), # final_processed_prompt_display
                 gr.update(visible=False) # final_prompt_accordion
             )
