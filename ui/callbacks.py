@@ -351,7 +351,7 @@ def process(
                 gr.update(visible=False),                            # generation_stats
                 gr.update(visible=False, open=False),            # generation_stats_accordion 
                 gr.update(visible=False), # frame_thumbnails_group
-                gr.update(), # final_processed_prompt_display
+                gr.update(value=final_prompt_text), # final_processed_prompt_display
                 gr.update()  # final_prompt_accordion
             )
             last_is_image = True
