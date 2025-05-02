@@ -297,8 +297,17 @@ def create_interface(model_manager, video_generator):
                 )
                 
                 extend_button = gr.Button(value="Extend This Video", visible=False, elem_classes="extend-button")
-                
-                
+
+                # --- NEW: Final Processed Prompt Accordion ---
+                with gr.Accordion("Final Processed Prompt", open=False, visible=False) as final_prompt_accordion:
+                    final_processed_prompt_display = gr.Textbox(
+                        label="Prompt Sent to Model",
+                        lines=4,
+                        interactive=False, # Read-only
+                        show_copy_button=True
+                    )
+                # --- END NEW ---
+
                 with gr.Accordion("Generation Complete (Expand for details)", open=False, visible=False) as generation_stats_accordion:
                     generation_stats = gr.Markdown(
                         value="",
@@ -464,22 +473,24 @@ def create_interface(model_manager, video_generator):
         
         # Define output list including first/last frame images
         output_list = [
-            result_video,      # 0
-            result_image_html, # 1
-            preview_image,     # 2
-            progress_desc,     # 3
-            progress_bar,      # 4
-            start_button,      # 5
-            end_graceful_button,# 6 - replaced end_button
-            force_stop_button, # 7 - new button
-            seed,              # 8
-            first_frame,       # 9
-            last_frame,        # 10
-            extend_button,     # 11
-            note_message,      # 12
-            generation_stats,   # 13
-            generation_stats_accordion, #14
-            frame_thumbnails_group #15
+            result_video,               # 0
+            result_image_html,          # 1
+            preview_image,              # 2
+            progress_desc,              # 3
+            progress_bar,               # 4
+            start_button,               # 5
+            end_graceful_button,        # 6
+            force_stop_button,          # 7
+            seed,                       # 8
+            first_frame,                # 9
+            last_frame,                 # 10
+            extend_button,              # 11
+            note_message,               # 12
+            generation_stats,           # 13
+            generation_stats_accordion, # 14
+            frame_thumbnails_group,     # 15
+            final_processed_prompt_display, # 16 - NEW
+            final_prompt_accordion      # 17 - NEW
         ]
         
         prompt.submit(

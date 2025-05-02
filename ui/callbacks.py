@@ -149,7 +149,9 @@ def process(
         gr.update(visible=False),   # note_message - hidden at start
         gr.update(visible=False),    # generation_stats - hidden at start
         gr.update(visible=False), # generation_stats_accordian
-        gr.update(visible=False) # frame_thumbnails_group
+        gr.update(visible=False), # frame_thumbnails_group
+        gr.update(visible=False), # final_processed_prompt_display
+        gr.update(visible=False) # final_prompt_accordion
     )
     # Setup async stream
     stream = AsyncStream()
@@ -199,13 +201,24 @@ def process(
     last_desc = ""
     last_is_image = False
     last_img_path = None
+    final_prompt_text = "Not available" # NEW: Variable to hold the final prompt
+    last_stats = "" # Ensure last_stats is initialized
     
     # Process events from stream
     while True:
         flag, data = stream.output_queue.next()
         debug(f"Process: got queue event: {flag}, type(data): {type(data)}")
-        
-        if flag == 'file':
+
+        # --- NEW: Handle final_prompt flag ---
+        if flag == 'final_prompt':
+            final_prompt_text = data
+            debug(f"[UI] Received final prompt: '{final_prompt_text}'")
+            # No UI update needed here, just store it for the 'end' event
+            continue # Go to next event
+        # --- END NEW ---
+
+        # --- Existing handlers ---
+        elif flag == 'file':
             # Assign data first
             output_filename = data # Use a local variable for clarity in this block
             final_output_path = output_filename # Update the outer scope variable too
@@ -253,7 +266,9 @@ def process(
             {last_desc if last_desc else ""}
                 """),
                 gr.update(visible=True, open=False),            # generation_stats_accordion 
-                gr.update(visible=True)                         # frame_thumbnails_group
+                gr.update(visible=True),                        # frame_thumbnails_group
+                gr.update(visible=False), # final_processed_prompt_display
+                gr.update(visible=False) # final_prompt_accordion
             )
             last_is_image = False
             last_img_path = None
@@ -281,7 +296,9 @@ def process(
                     gr.update(visible=(segment_count_val > 1), value="Note: The ending actions will be generated before the starting actions due to the inverted sampling."),
                     gr.update(visible=False),        # generation_stats
                     gr.update(visible=False, open=False),            # generation_stats_accordion 
-                    gr.update(visible=False)                         # frame_thumbnails_group
+                    gr.update(visible=False), # frame_thumbnails_group
+                    gr.update(visible=False), # final_processed_prompt_display
+                    gr.update(visible=False)  # final_prompt_accordion
                 )
             else:
                 debug(f"[UI] Warning: Preview file not found: {preview_filename}")
@@ -309,7 +326,9 @@ def process(
                 gr.update(visible=(segment_count_val > 1), value="Note: The ending actions will be generated before the starting actions due to the inverted sampling."),
                 gr.update(visible=False),               # generation_stats
                 gr.update(visible=False, open=False),    # generation_stats_accordion 
-                gr.update(visible=False)                 # frame_thumbnails_group
+                gr.update(visible=False), # frame_thumbnails_group
+                gr.update(visible=False), # final_processed_prompt_display
+                gr.update(visible=False)  # final_prompt_accordion
             )
             
         elif flag == 'file_img':
@@ -331,16 +350,18 @@ def process(
                 gr.update(visible=False),                           # note_message
                 gr.update(visible=False),                            # generation_stats
                 gr.update(visible=False, open=False),            # generation_stats_accordion 
-                gr.update(visible=False)                         # frame_thumbnails_group
+                gr.update(visible=False), # frame_thumbnails_group
+                gr.update(value=final_prompt_text), # final_processed_prompt_display
+                gr.update()  # final_prompt_accordion
             )
             last_is_image = True
             last_img_path = img_filename
 
         elif flag == 'final_stats':
-            stats_text = data
-            last_stats = stats_text  # Store for future use
-            debug(f"[UI] Received final stats: {stats_text[:50]}...")
-            
+            last_stats = data
+            debug(f"[UI] Received final stats: {last_stats[:50]}...")
+            continue #Go to next event
+        
         elif flag == 'end':
             debug(f"Process: yielding end event. final_output_path = {final_output_path}, data = {data}")
             if data == "interrupted":
@@ -360,7 +381,9 @@ def process(
                     gr.update(visible=False),       # note_message
                     gr.update(visible=False),        # generation_stats
                     gr.update(visible=False, open=False),            # generation_stats_accordion 
-                    gr.update(visible=False)                         # frame_thumbnails_group
+                    gr.update(visible=False),       # frame_thumbnails_group
+                    gr.update(value=final_prompt_text, visible=True), # final_processed_prompt_display - show prompt even on error
+                    gr.update(visible=True)
                 )
                 
             elif data == "img" or last_is_image:  # special image end
@@ -380,7 +403,9 @@ def process(
                     gr.update(visible=False),       # note_message
                     gr.update(visible=False),        # generation_stats
                     gr.update(visible=False, open=False),            # generation_stats_accordion 
-                    gr.update(visible=False)                         # frame_thumbnails_group
+                    gr.update(visible=False),       # frame_thumbnails_group
+                    gr.update(value=final_prompt_text, visible=True), # final_processed_prompt_display
+                    gr.update(visible=True)         # final_prompt_accordion
                 )
                 
             else:
@@ -429,7 +454,9 @@ def process(
                     gr.update(visible=False),       # note_message
                     gr.update(visible=True, value=stats_display),  # generation_stats - updated with detailed stats
                     gr.update(visible=True, open=False),            # generation_stats_accordion
-                    gr.update(visible=bool(output_filename))         # frame_thumbnails_group - only show if we have output
+                    gr.update(visible=bool(output_filename)), # frame_thumbnails_group
+                    gr.update(value=final_prompt_text, visible=True), # final_processed_prompt_display
+                    gr.update(visible=True)         # final_prompt_accordion
                 )
                 
             debug("Process: end event, breaking loop.")
