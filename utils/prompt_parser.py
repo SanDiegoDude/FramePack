@@ -26,8 +26,27 @@ class PromptProcessor:
         return prompt_text
 
     def extract_data(self, prompt_text: str) -> Dict[str, Any]:
-        """Extract data from a prompt without modifying it"""
-        return {}
+        """Extracts LoRAConfig objects from the prompt."""
+        lora_configs = []
+        matches = self.LORA_REGEX.finditer(prompt_text)
+        for match in matches:
+            path_fragment = match.group(1)
+            weight_str = match.group(2)
+
+            # --- CORRECTED HANDLING of _normalize_path output ---
+            normalized_path, error_msg = self._normalize_path(path_fragment) # Get both path and error
+            weight = float(weight_str) if weight_str else 1.0
+
+            if normalized_path:
+                # Use the validated normalized_path string
+                lora_configs.append(LoRAConfig(path=normalized_path, weight=weight))
+            else:
+                # Store the original fragment and the error message
+                lora_configs.append(LoRAConfig(path=path_fragment, weight=weight, error=error_msg or "File not found"))
+            # --- END CORRECTION ---
+
+        debug(f"[LoraParser] Extracted LoRA configs: {lora_configs}")
+        return {"lora_configs": lora_configs}
 
 # --- NEW: Wildcard Processor ---
 class WildcardProcessor(PromptProcessor):
@@ -142,29 +161,47 @@ class RandomizerProcessor(PromptProcessor):
 
     def _process_match(self, match: re.Match, rng: random.Random) -> str:
         """Processes a single {..} block."""
-        content = match.group(1)
+        content_original = match.group(1) # Keep original for debugging if needed
+        content_remaining = content_original # Work with a copy
 
         # 1. Parse Count (N$$)
         count = 1
-        count_match = self.COUNT_REGEX.match(content)
+        count_match = self.COUNT_REGEX.match(content_remaining)
         if count_match:
             count = int(count_match.group(1))
-            # Remove the count specifier from the content
-            content = content[count_match.end():].lstrip()
+            # Remove the count specifier from the remaining content
+            content_remaining = content_remaining[count_match.end():].lstrip()
             debug(f"Randomizer: Found count specifier N={count}")
 
-        # 2. Parse Separator ($$sep$$)
+        # 2. Parse Separator ($$sep$$) - Apply regex to the *potentially modified* content_remaining
         separator = ", " # Default separator
-        sep_match = self.SEP_REGEX.match(content)
+        # Use search instead of match, as separator might not be at the very beginning
+        # And apply it to the string *after* potentially removing the count
+        sep_match = self.SEP_REGEX.search(content_remaining)
+        options_string = content_remaining # Default to the whole remaining string
         if sep_match:
-            separator = sep_match.group(1)
-            # Remove the separator specifier from the content
-            content = content[sep_match.end():].lstrip()
-            debug(f"Randomizer: Found separator specifier: '{separator}'")
+            # Ensure the separator is at the beginning of the options part
+            # We check if sep_match starts at index 0 of the remaining content
+            # (after stripping leading whitespace which SEP_REGEX includes)
+            temp_stripped_content = content_remaining.lstrip()
+            if temp_stripped_content.startswith(sep_match.group(0).lstrip()):
+                separator = sep_match.group(1) # Extract the separator text
+                # Remove the separator specifier *and* the pipe if it's right after
+                # This is tricky. Let's just remove the matched part for now.
+                # We'll split the remaining part by '|' later.
+                # Find where the options actually start after the separator definition.
+                options_start_index = content_remaining.find(sep_match.group(0)) + len(sep_match.group(0))
+                options_string = content_remaining[options_start_index:].lstrip()
 
-        # 3. Split options
-        options = [opt.strip() for opt in content.split('|') if opt.strip()]
-        debug(f"Randomizer: Options: {options}")
+                debug(f"Randomizer: Found separator specifier: '{separator}'")
+            else:
+                 debug(f"Randomizer: Found $$...$$ pattern but not at the start of options part. Ignoring.")
+
+
+        # 3. Split options from the final options_string
+        options = [opt.strip() for opt in options_string.split('|') if opt.strip()]
+        debug(f"Randomizer: Options derived from '{options_string}': {options}")
+
 
         if not options:
             debug("Randomizer: No valid options found, returning empty string.")
@@ -172,6 +209,7 @@ class RandomizerProcessor(PromptProcessor):
 
         # 4. Validate count
         num_options = len(options)
+        # Ensure count isn't less than 1 or more than available options
         actual_count = max(1, min(count, num_options))
         if actual_count != count:
             debug(f"Randomizer: Adjusted count from {count} to {actual_count} (num options: {num_options})")
