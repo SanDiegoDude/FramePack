@@ -6,6 +6,7 @@ import os
 import contextlib
 import sys
 from ui.style import get_css
+import json
 from utils.common import debug
 from utils.memory_utils import get_cuda_free_memory_gb, gpu
 
@@ -67,24 +68,251 @@ def create_interface(model_manager, video_generator, unload_on_end_flag=False):
         for values in process(*args, video_generator=video_generator, model_manager=model_manager):
             yield values
     
-    block = gr.Blocks(css=get_css()).queue()
+    paste_js = """
+async function handlePaste(event, promptElementId, modeElementId, imgInputId, startFrameId, endFrameId, hiddenTextboxId) {
+    const items = (event.clipboardData || event.originalEvent.clipboardData).items;
+    let imageBlob = null;
+    for (const item of items) {
+        if (item.type.startsWith('image/')) {
+            imageBlob = item.getAsFile();
+            break;
+        }
+    }
+
+    if (imageBlob) {
+        event.preventDefault(); // Prevent default paste action
+        console.log('Image pasted!');
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const base64Image = e.target.result;
+            // Find the hidden textbox Gradio component
+            const hiddenTextbox = document.getElementById(hiddenTextboxId);
+            if (hiddenTextbox) {
+                // Find the input element within the Gradio component
+                const textarea = hiddenTextbox.querySelector('textarea');
+                if (textarea) {
+                    // We need to trigger Gradio's update mechanism.
+                    // Setting the value and dispatching an input event usually works.
+                    const pasteData = JSON.stringify({
+                        imageData: base64Image,
+                        mode: document.querySelector('#' + modeElementId + ' input[type=radio]:checked')?.value || 'image2video', // Get current mode
+                        imgInputHasValue: !!document.querySelector('#' + imgInputId + ' img'), // Check if image inputs have content
+                        startFrameHasValue: !!document.querySelector('#' + startFrameId + ' img'),
+                        endFrameHasValue: !!document.querySelector('#' + endFrameId + ' img')
+                    });
+                    textarea.value = pasteData;
+                    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                    console.log('Sent base64 data to hidden Gradio textbox.');
+                } else {
+                     console.error('Could not find textarea within hidden Gradio component:', hiddenTextboxId);
+                }
+            } else {
+                 console.error('Could not find hidden Gradio component:', hiddenTextboxId);
+            }
+        };
+        reader.readAsDataURL(imageBlob);
+    } else {
+        console.log('Pasted content is not an image.');
+    }
+}
+
+// Function to attach the listener
+function attachPasteListener(promptElementId, modeElementId, imgInputId, startFrameId, endFrameId, hiddenTextboxId) {
+    const promptElement = document.getElementById(promptElementId);
+    if (promptElement) {
+        // Find the actual textarea inside the Gradio component
+        const textarea = promptElement.querySelector('textarea');
+        if (textarea) {
+             textarea.addEventListener('paste', (event) => handlePaste(event, promptElementId, modeElementId, imgInputId, startFrameId, endFrameId, hiddenTextboxId));
+             console.log('Paste listener attached to prompt textarea.');
+        } else {
+            console.error('Could not find textarea within prompt element:', promptElementId);
+            // Retry after a short delay in case Gradio renders it later
+            setTimeout(() => attachPasteListener(promptElementId, modeElementId, imgInputId, startFrameId, endFrameId, hiddenTextboxId), 500);
+        }
+    } else {
+        console.error('Could not find prompt element:', promptElementId);
+        // Retry after a short delay
+        setTimeout(() => attachPasteListener(promptElementId, modeElementId, imgInputId, startFrameId, endFrameId, hiddenTextboxId), 500);
+    }
+}
+"""
+
+lightbox_css = """
+/* Lightbox Structure */
+.lightbox-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    display: none; /* Hidden by default */
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+    cursor: pointer;
+}
+.lightbox-content {
+    position: relative;
+    background: #111;
+    padding: 20px;
+    border-radius: 5px;
+    max-width: 90vw;
+    max-height: 90vh;
+    display: flex; /* Use flexbox for centering */
+    justify-content: center;
+    align-items: center;
+    overflow: hidden; /* Prevent image overflow */
+    cursor: default;
+}
+.lightbox-content img {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;   /* Allow image to scale down */
+    height: auto;  /* Allow image to scale down */
+    object-fit: contain; /* Ensure the whole image is visible */
+    cursor: pointer; /* Indicate image is clickable */
+    user-select: none; /* Prevent text selection */
+    -webkit-user-drag: none; /* Prevent dragging */
+}
+.lightbox-close {
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    font-size: 2em;
+    color: white;
+    cursor: pointer;
+    text-shadow: 0 0 5px black;
+}
+/* Controls for zoom/toggle */
+.lightbox-controls {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.6);
+    padding: 5px 10px;
+    border-radius: 5px;
+    display: flex;
+    gap: 10px;
+}
+.lightbox-controls button {
+    background: #555;
+    color: white;
+    border: none;
+    padding: 5px 10px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+.lightbox-controls button:hover {
+    background: #777;
+}
+"""
+
+lightbox_js = """
+let isZoomed = false; // Track zoom state
+let originalWidth, originalHeight; // Store original dimensions
+
+function openLightbox(imgElement) {
+    const overlay = document.getElementById('lightbox-overlay');
+    const contentImg = document.getElementById('lightbox-image');
+    if (!overlay || !contentImg || !imgElement) return;
+
+    const src = imgElement.src;
+    if (!src || src.includes('placeholder.png')) return; // Don't open for placeholders
+
+    contentImg.src = src;
+    isZoomed = false; // Reset zoom state
+    contentImg.style.maxWidth = '100%';
+    contentImg.style.maxHeight = '100%';
+    contentImg.style.width = 'auto';
+    contentImg.style.height = 'auto';
+    contentImg.style.cursor = 'zoom-in'; // Initial state is fit-to-window
+
+    // Get original dimensions if available (might need onload event)
+    const tempImg = new Image();
+    tempImg.onload = () => {
+        originalWidth = tempImg.naturalWidth;
+        originalHeight = tempImg.naturalHeight;
+        console.log(`Original dims: ${originalWidth}x${originalHeight}`);
+    };
+    tempImg.src = src;
+
+
+    overlay.style.display = 'flex'; // Show the overlay
+}
+
+function closeLightbox() {
+    const overlay = document.getElementById('lightbox-overlay');
+    if (overlay) {
+        overlay.style.display = 'none'; // Hide the overlay
+    }
+}
+
+function toggleZoom() {
+    const contentImg = document.getElementById('lightbox-image');
+    if (!contentImg || !originalWidth || !originalHeight) return;
+
+    if (isZoomed) {
+        // Zoom out (fit to window)
+        contentImg.style.maxWidth = '100%';
+        contentImg.style.maxHeight = '100%';
+        contentImg.style.width = 'auto';
+        contentImg.style.height = 'auto';
+        contentImg.style.cursor = 'zoom-in';
+    } else {
+        // Zoom in (original size)
+        contentImg.style.maxWidth = originalWidth + 'px';
+        contentImg.style.maxHeight = originalHeight + 'px';
+        // Set width/height directly for 1:1 pixel mapping if possible within viewport constraints
+        contentImg.style.width = originalWidth + 'px';
+        contentImg.style.height = originalHeight + 'px';
+        contentImg.style.cursor = 'zoom-out';
+    }
+    isZoomed = !isZoomed;
+}
+
+// Close lightbox if clicking overlay (but not image)
+function handleOverlayClick(event) {
+     if (event.target.id === 'lightbox-overlay') {
+         closeLightbox();
+     }
+}
+
+// Add event listener for Escape key
+document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+        closeLightbox();
+    }
+});
+"""
+
+# Combine JS
+combined_js = paste_js + "\n\n" + lightbox_js
+
+# Add CSS parameter to Blocks
+block = gr.Blocks(css=get_css() + lightbox_css, js=combined_js).queue()
     
     with block:
         gr.Markdown('# FramePack Advanced Video Generator')
+        hidden_paste_textbox = gr.Textbox(visible=False, elem_id="hidden_paste_box") # For JS communication
         # Mode selector across the top
         with gr.Row():
             mode_selector = gr.Radio(
                 ["image2video", "text2video", "keyframes", "video_extension"],
                 value="image2video",
                 label="Mode",
-                elem_classes="mode-selector"
+                elem_classes="mode-selector",
+                elem_id="mode_selector_radio" # ID for JS
             )
         
         with gr.Row():
             # Left column for inputs
             with gr.Column(scale=2):
                 # Prompts at the top of left column
-                prompt = gr.Textbox(label="Prompt", value='', lines=3)
+                prompt = gr.Textbox(label="Prompt", value='', lines=3, elem_id="prompt_textbox")
                 with gr.Accordion("Negative Prompt", open=False):
                     n_prompt = gr.Textbox(
                         label="Negative Prompt - Requires CFG higher than 1.0 to take effect",
@@ -93,11 +321,8 @@ def create_interface(model_manager, video_generator, unload_on_end_flag=False):
                     )
                 
                 # Input sections for different modes
-                input_image = gr.Image(sources='upload', type="numpy", label="Image", elem_classes="input-image-container")
-                
-                # Keyframes mode controls
-                start_frame = gr.Image(sources='upload', type="numpy", label="Start Frame (Optional)",
-                                     elem_classes="keyframe-image-container", visible=False)
+                input_image = gr.Image(sources=['upload', 'clipboard'], type="numpy", label="Image", elem_classes="input-image-container", elem_id="input_image_component") # ID for JS check
+                start_frame = gr.Image(sources=['upload', 'clipboard'], type="numpy", label="Start Frame (Optional)", elem_classes="keyframe-image-container", visible=False, elem_id="start_frame_component") # ID for JS check
                 
                 with gr.Group(visible=False) as keyframes_options:
                     keyframe_weight = gr.Slider(
@@ -106,8 +331,7 @@ def create_interface(model_manager, video_generator, unload_on_end_flag=False):
                         info="Higher values prioritize start frame characteristics"
                     )
                 
-                end_frame = gr.Image(sources='upload', type="numpy", label="End Frame (Required)",
-                                   elem_classes="keyframe-image-container", visible=False)
+                end_frame = gr.Image(sources=['upload', 'clipboard'], type="numpy", label="End Frame (Required)", elem_classes="keyframe-image-container", visible=False, elem_id="end_frame_component") # ID for JS check
                 
                 # Wrap the video in a custom div for scrolling
                 with gr.Group(visible=False) as video_container:
@@ -305,9 +529,10 @@ def create_interface(model_manager, video_generator, unload_on_end_flag=False):
                     visible=False # Hide on startup
                 )
                 result_image_html = gr.Image(
-                    label='Single Frame Image', 
-                    elem_classes="result-container", 
-                    visible=False
+                    label='Single Frame Image',
+                    elem_classes="result-container clickable-image", # ADDED clickable-image
+                    visible=False,
+                    elem_id="result_image_output" # Added ID
                 )
                 
                 extend_button = gr.Button(value="Extend This Video", visible=False, elem_classes="extend-button")
@@ -341,18 +566,35 @@ def create_interface(model_manager, video_generator, unload_on_end_flag=False):
                     with gr.Row(elem_classes="frame-thumbnail-row"):
                         first_frame = gr.Image(
                             label="First Frame",
-                            elem_classes="frame-thumbnail",
+                            elem_classes="frame-thumbnail clickable-image", # ADDED clickable-image
                             visible=True,
                             show_download_button=True,
-                            container=True
+                            container=True,
+                            elem_id="first_frame_output" # Added ID
                         )
                         last_frame = gr.Image(
                             label="Last Frame",
-                            elem_classes="frame-thumbnail",
+                            elem_classes="frame-thumbnail clickable-image", # ADDED clickable-image
                             visible=True,
                             show_download_button=True,
-                            container=True
+                            container=True,
+                            elem_id="last_frame_output" # Added ID
                         )
+
+                with gr.HTML():
+                    lightbox_html = """
+                    <div id="lightbox-overlay" class="lightbox-overlay" onclick="handleOverlayClick(event)">
+                        <div class="lightbox-content">
+                            <span class="lightbox-close" onclick="closeLightbox()">×</span>
+                            <img id="lightbox-image" src="" alt="Lightbox Image" onclick="toggleZoom()" />
+                            <div class="lightbox-controls">
+                                 <button onclick="toggleZoom()">Toggle Zoom</button>
+                                 <button onclick="closeLightbox()">Close</button>
+                             </div>
+                        </div>
+                    </div>
+                    """
+                    gr.HTML(lightbox_html, visible=True) # Add the raw HTML
         
         # Memory management functions
         def unload_all_models():
@@ -535,3 +777,115 @@ def create_interface(model_manager, video_generator, unload_on_end_flag=False):
         )
     
     return block
+
+    def handle_image_paste_data(paste_data_json):
+            try:
+                if not paste_data_json or paste_data_json.strip() == "":
+                     return gr.update(), gr.update(), gr.update() # No change if empty
+
+                paste_data = json.loads(paste_data_json)
+                image_data = paste_data.get("imageData")
+                mode = paste_data.get("mode")
+                img_has_val = paste_data.get("imgInputHasValue")
+                start_has_val = paste_data.get("startFrameHasValue")
+                end_has_val = paste_data.get("endFrameHasValue")
+
+                if not image_data:
+                    return gr.update(), gr.update(), gr.update()
+
+                debug(f"Python: Handling pasted image for mode: {mode}")
+
+                if mode == "image2video":
+                    debug("Python: Pasting into image2video input.")
+                    return gr.update(value=image_data), gr.update(), gr.update()
+                elif mode == "keyframes":
+                    if not end_has_val:
+                        debug("Python: Pasting into keyframes END frame (empty).")
+                        return gr.update(), gr.update(), gr.update(value=image_data)
+                    elif not start_has_val:
+                        debug("Python: Pasting into keyframes START frame (end has value).")
+                        return gr.update(), gr.update(value=image_data), gr.update()
+                    else:
+                        debug("Python: Pasting into keyframes END frame (replacing).")
+                        return gr.update(), gr.update(), gr.update(value=image_data)
+                else: # text2video, video_extension - pasting doesn't apply directly
+                     debug(f"Python: Image pasted in mode '{mode}', no image input target.")
+                     return gr.update(), gr.update(), gr.update()
+
+            except Exception as e:
+                debug(f"Error processing pasted image data: {e}")
+                return gr.update(), gr.update(), gr.update() # No change on error
+
+        # Link the hidden textbox change event to the Python callback
+        hidden_paste_textbox.input(
+            fn=handle_image_paste_data,
+            inputs=[hidden_paste_textbox],
+            outputs=[input_image, start_frame, end_frame]
+        )
+
+        # --- Trigger JS attachment on load ---
+        block.load(
+            None, # No python function needed
+            [],   # No inputs
+            [],   # No outputs
+            # JS to run after Gradio elements are ready
+            _js="() => { attachPasteListener('prompt_textbox', 'mode_selector_radio', 'input_image_component', 'start_frame_component', 'end_frame_component', 'hidden_paste_box'); }"
+        )
+        block.load(
+            None, [], [],
+            _js="""
+            () => {{
+                attachPasteListener('prompt_textbox', 'mode_selector_radio', 'input_image_component', 'start_frame_component', 'end_frame_component', 'hidden_paste_box');
+
+                // Function to add lightbox listeners
+                function addLightboxListeners() {{
+                    document.querySelectorAll('.clickable-image').forEach(elem => {{
+                         // Find the actual img tag within the Gradio component
+                         const imgTag = elem.querySelector('img');
+                         if (imgTag) {{
+                             // Remove previous listener if any to prevent duplicates
+                             imgTag.removeEventListener('click', handleImageClick);
+                             // Add new listener
+                             imgTag.addEventListener('click', handleImageClick);
+                         }}
+                    }});
+                    console.log('Lightbox click listeners updated.');
+                }}
+
+                // Define the click handler
+                function handleImageClick(event) {{
+                    openLightbox(event.target);
+                }}
+
+                // Initial attachment
+                addLightboxListeners();
+
+                // Use MutationObserver to re-attach listeners when Gradio updates the DOM
+                // Target the output areas where these images appear
+                const observerTargetIds = ['result_image_output', 'first_frame_output', 'last_frame_output'];
+                observerTargetIds.forEach(id => {{
+                    const targetNode = document.getElementById(id);
+                    if (targetNode) {{
+                        const observer = new MutationObserver((mutationsList, observer) => {{
+                             // Re-scan for clickable images whenever the target node changes
+                             // Add a small delay to ensure Gradio has finished rendering
+                             setTimeout(addLightboxListeners, 100);
+                         }});
+                        observer.observe(targetNode, {{ childList: true, subtree: true }});
+                        console.log(`MutationObserver attached to #${id}`);
+                    }} else {{
+                         console.warn(`Could not find node #${id} for MutationObserver`);
+                         // Attempt to attach observer later if node isn't ready yet
+                         setTimeout(() => {{
+                             const laterNode = document.getElementById(id);
+                             if(laterNode) {{
+                                 const observer = new MutationObserver(() => {{ setTimeout(addLightboxListeners, 100); }});
+                                 observer.observe(laterNode, {{ childList: true, subtree: true }});
+                                 console.log(`MutationObserver attached later to #${id}`);
+                             }}
+                         }}, 1000); // Wait 1 second
+                    }}
+                }});
+            }}
+            """
+        )
