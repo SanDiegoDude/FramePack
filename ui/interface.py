@@ -50,7 +50,7 @@ def debug_aware_video_postprocess(self, y):
 gr.Video.postprocess = debug_aware_video_postprocess
 
 
-def create_interface(model_manager, video_generator):
+def create_interface(model_manager, video_generator, unload_on_end_flag=False):
     """Create and configure the Gradio interface"""
     from ui.callbacks import (
         process, request_graceful_end, force_immediate_stop, update_video_stats,
@@ -71,7 +71,7 @@ def create_interface(model_manager, video_generator):
     
     with block:
         gr.Markdown('# FramePack Advanced Video Generator')
-        
+        unload_on_end_state = gr.Checkbox(value=unload_on_end_flag, visible=False)
         # Mode selector across the top
         with gr.Row():
             mode_selector = gr.Radio(
@@ -485,7 +485,8 @@ def create_interface(model_manager, video_generator):
             clip_encoder_weight,
             clean_latent_weight,
             batch_count, 
-            endless_run,  
+            endless_run,
+            unload_on_end_state,
         ]
         
         # Define output list including first/last frame images
