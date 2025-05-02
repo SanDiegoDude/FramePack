@@ -71,7 +71,6 @@ def create_interface(model_manager, video_generator, unload_on_end_flag=False):
     
     with block:
         gr.Markdown('# FramePack Advanced Video Generator')
-        unload_on_end_state = gr.Checkbox(value=unload_on_end_flag, visible=False)
         # Mode selector across the top
         with gr.Row():
             mode_selector = gr.Radio(
@@ -201,11 +200,7 @@ def create_interface(model_manager, video_generator, unload_on_end_flag=False):
                 # Advanced Model Parameters
                 with gr.Accordion("Advanced Model Parameters", open=False):
                     use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
-                    gpu_memory_preservation = gr.Slider(
-                        label="GPU Inference Preserved Memory (GB)",
-                        minimum=6, maximum=128, value=6, step=0.1
-                    )
-                    
+                    unload_on_end_state = gr.Checkbox(label='Unload all models after end' value=unload_on_end_flag, visible=True)
                     llm_encoder_weight = gr.Slider(
                         label="LLM Encoder Weight",
                         minimum=0.0,
@@ -251,7 +246,11 @@ def create_interface(model_manager, video_generator, unload_on_end_flag=False):
                         value=0.0,
                         step=0.01
                     )
-                
+
+                    gpu_memory_preservation = gr.Slider(
+                        label="GPU Inference Preserved Memory (GB)",
+                        minimum=6, maximum=128, value=6, step=0.1
+                    )
                 # Memory management
                 with gr.Row():
                     unload_button = gr.Button(value="Unload All Models", variant="secondary")
