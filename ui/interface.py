@@ -264,7 +264,22 @@ def create_interface(model_manager, video_generator):
                 # Start/End buttons at top of right column
                 with gr.Row():
                     start_button = gr.Button(value="Start Generation", elem_classes="start-button")
-                
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        batch_count = gr.Number(
+                            label="Batch Count",
+                            value=1,
+                            minimum=1,
+                            step=1,
+                            precision=0,
+                            info="Number of videos to generate sequentially."
+                        )
+                    with gr.Column(scale=1):
+                        endless_run = gr.Checkbox(
+                            label="Endless Run",
+                            value=False,
+                            info="Keep generating until unchecked or stopped."
+                        )
                 with gr.Row():
                     with gr.Column(scale=1):
                         end_graceful_button = gr.Button(value="End Generation", 
