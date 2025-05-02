@@ -389,14 +389,17 @@ def apply_prompt_processors(prompt_text: str, processors: List[PromptProcessor],
             debug(f"Applying processor: {processor.name}")
             try:
                 # Extract data based on the *current* state of modified_prompt
-                # Extract data first, before the prompt is modified by process()
                 processor_data = processor.extract_data(modified_prompt)
                 if processor_data: # Only add if data was extracted
                     extracted_data[processor.name] = processor_data
 
-                # Process the prompt, passing the seed
-                # This can raise WildcardFileNotFoundError
-                modified_prompt = processor.process(modified_prompt, seed=seed)
+                # --- CORRECTED CALL ---
+                # Only pass seed if the processor type needs it
+                if isinstance(processor, (WildcardProcessor, RandomizerProcessor)):
+                    modified_prompt = processor.process(modified_prompt, seed=seed)
+                else:
+                    modified_prompt = processor.process(modified_prompt) # No seed needed
+                # --- END CORRECTION ---
 
                 debug(f"After {processor.name} processing - Prompt: '{modified_prompt}'")
                 if processor.name in extracted_data:
@@ -407,12 +410,11 @@ def apply_prompt_processors(prompt_text: str, processors: List[PromptProcessor],
                  debug(f"WildcardFileNotFoundError caught during processing: {e}")
                  raise e
             except Exception as e:
+                 # Catch other errors like the TypeError we saw
                  debug(f"Error during {processor.name} processing: {e}")
-                 # Optionally re-raise, log, or handle other errors differently
-                 # For now, let's log and continue if possible, but stop on wildcard errors
                  print(f"⚠️ Error applying prompt processor '{processor.name}': {e}")
-                 # Decide if you want to stop or continue on general errors
-                 # raise e # Uncomment to stop on any processor error
+                 # Re-raise other errors to stop processing if they occur
+                 raise e
 
     debug(f"Final result - Modified Prompt: '{modified_prompt}', All Extracted Data: {extracted_data}")
     return modified_prompt, extracted_data
