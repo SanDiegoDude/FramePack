@@ -26,27 +26,8 @@ class PromptProcessor:
         return prompt_text
 
     def extract_data(self, prompt_text: str) -> Dict[str, Any]:
-        """Extracts LoRAConfig objects from the prompt."""
-        lora_configs = []
-        matches = self.LORA_REGEX.finditer(prompt_text)
-        for match in matches:
-            path_fragment = match.group(1)
-            weight_str = match.group(2)
-
-            # --- CORRECTED HANDLING of _normalize_path output ---
-            normalized_path, error_msg = self._normalize_path(path_fragment) # Get both path and error
-            weight = float(weight_str) if weight_str else 1.0
-
-            if normalized_path:
-                # Use the validated normalized_path string
-                lora_configs.append(LoRAConfig(path=normalized_path, weight=weight))
-            else:
-                # Store the original fragment and the error message
-                lora_configs.append(LoRAConfig(path=path_fragment, weight=weight, error=error_msg or "File not found"))
-            # --- END CORRECTION ---
-
-        debug(f"[LoraParser] Extracted LoRA configs: {lora_configs}")
-        return {"lora_configs": lora_configs}
+        """Base method: Extract data from a prompt without modifying it. Returns empty dict."""
+        return {}
 
 # --- NEW: Wildcard Processor ---
 class WildcardProcessor(PromptProcessor):
@@ -282,48 +263,32 @@ class LoraPromptProcessor(PromptProcessor):
     # \]             # Match closing square bracket
     LORA_REGEX = re.compile(r"\[(.+?)(?::(\d+\.?\d*))?\]")
     LORA_DIRS = [Path("./loras/"), Path("./models/Lora/")]
-    
+
     def __init__(self):
         super().__init__("lora")
-        # Ensure potential directories exist (optional, helps user setup)
-        # for lora_dir in self.LORA_DIRS:
-        #     lora_dir.mkdir(parents=True, exist_ok=True)
+        # Optional directory creation can go here if needed
 
     def _normalize_path(self, path_fragment: str) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Tries to find the LoRA file, adding .safetensors if needed.
-        Checks absolute path first, then relative paths in common LoRA dirs.
-        Returns (found_path, error_message)
-        """
         path_fragment = path_fragment.strip()
-
-        # 1. Check if the provided path is absolute and exists
         potential_path_abs = Path(path_fragment)
         potential_path_abs_st = Path(f"{path_fragment}.safetensors")
-
         if potential_path_abs.is_file():
             return str(potential_path_abs.resolve()), None
         if potential_path_abs_st.is_file():
              return str(potential_path_abs_st.resolve()), None
-
-        # 2. Check relative paths in predefined LoRA directories
         for lora_dir in self.LORA_DIRS:
             potential_path_rel = lora_dir / path_fragment
             potential_path_rel_st = lora_dir / f"{path_fragment}.safetensors"
-
             if potential_path_rel.is_file():
                  return str(potential_path_rel.resolve()), None
             if potential_path_rel_st.is_file():
                  return str(potential_path_rel_st.resolve()), None
-
-        # 3. If not found anywhere
         error_msg = f"LoRA file not found for spec: '{path_fragment}' (checked absolute and relative in {self.LORA_DIRS})"
         debug(f"[LoraParser] {error_msg}")
-        # --- USER VISIBLE PRINT ---
         print(f"⚠️ Warning: Could not find LoRA file specified as '{path_fragment}'. Will skip loading this LoRA.")
-        # --------------------------
-        return None, error_msg # Indicate not found and provide reason
+        return None, error_msg
 
+    # --- CORRECTED LORA EXTRACT_DATA METHOD ---
     def extract_data(self, prompt_text: str) -> Dict[str, Any]:
         """Extracts LoRAConfig objects from the prompt."""
         lora_configs = []
@@ -332,23 +297,25 @@ class LoraPromptProcessor(PromptProcessor):
             path_fragment = match.group(1)
             weight_str = match.group(2)
 
-            normalized_path = self._normalize_path(path_fragment)
+            # Correctly unpack the tuple from _normalize_path
+            normalized_path, error_msg = self._normalize_path(path_fragment)
+            weight = float(weight_str) if weight_str else 1.0
+
             if normalized_path:
-                weight = float(weight_str) if weight_str else 1.0
+                # Use the validated normalized_path string
                 lora_configs.append(LoRAConfig(path=normalized_path, weight=weight))
             else:
-                # Store the failure attempt for potential error reporting later
+                # Store the original fragment and the error message
                 lora_configs.append(LoRAConfig(path=path_fragment, weight=weight, error=error_msg or "File not found"))
 
-
         debug(f"[LoraParser] Extracted LoRA configs: {lora_configs}")
+        # Return the dictionary structure expected by apply_prompt_processors
         return {"lora_configs": lora_configs}
+    # --- END CORRECTION ---
 
-    def process(self, prompt_text: str, seed: Optional[int] = None) -> str: # Added seed arg for consistency
-        """Removes the LoRA specifications from the prompt text."""
-        # Seed is not used here, but included for consistent interface
+    def process(self, prompt_text: str, seed: Optional[int] = None) -> str:
+        # ... (this method should be correct - removes LORA tags) ...
         cleaned_prompt = self.LORA_REGEX.sub("", prompt_text).strip()
-        # Clean up potential extra spaces left by removal
         cleaned_prompt = re.sub(r'\s{2,}', ' ', cleaned_prompt)
         debug(f"[LoraParser] Cleaned prompt: '{cleaned_prompt}'")
         return cleaned_prompt
