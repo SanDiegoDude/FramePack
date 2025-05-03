@@ -467,13 +467,40 @@ function addLightboxListeners() {
             f"""
             <script>
                 {all_javascript}
-
-                // Call the main attachment function after a delay
-                setTimeout(() => {{
-                    attachAllListeners('prompt_textbox', 'mode_selector_radio', 'input_image_component', 'start_frame_component', 'end_frame_component', 'hidden_paste_box');
-                }}, 500); // Delay in milliseconds
+                
+                // Call the main attachment function after DOM is fully loaded
+                document.addEventListener('DOMContentLoaded', function() {{
+                    console.log('DOM loaded, attaching listeners...');
+                    setTimeout(() => {{
+                        attachAllListeners('prompt_textbox', 'mode_selector_radio', 'input_image_component', 'start_frame_component', 'end_frame_component', 'hidden_paste_box');
+                    }}, 1000);
+                }});
+                
+                // Also attach on load as a fallback
+                window.addEventListener('load', function() {{
+                    console.log('Window loaded, attaching listeners...');
+                    setTimeout(() => {{
+                        attachAllListeners('prompt_textbox', 'mode_selector_radio', 'input_image_component', 'start_frame_component', 'end_frame_component', 'hidden_paste_box');
+                    }}, 1000);
+                }});
+                
+                // Set additional trigger for whenever Gradio's UI gets updated
+                const observer = new MutationObserver((mutations) => {{
+                    for(const mutation of mutations) {{
+                        if (mutation.addedNodes.length > 0) {{
+                            setTimeout(addLightboxListeners, 500);
+                        }}
+                    }}
+                }});
+                
+                // Start observing the document body for DOM changes
+                observer.observe(document.body, {{ childList: true, subtree: true }});
+                
+                // Initial call with delay
+                setTimeout(addLightboxListeners, 2000);
             </script>
             """,
+            elem_id="js_injection",
             visible=False
         )
 
