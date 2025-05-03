@@ -82,16 +82,17 @@ def process(
         
         # Process video extraction for video_extension mode
         if mode == "video_extension":
-            if input_video is None:
-                yield (
-                    gr.update(), gr.update(), gr.update(visible=False),
-                    "Error: Input video required for video extension mode.", gr.update(visible=False),
-                    gr.update(interactive=True), gr.update(interactive=False), gr.update(interactive=False),
-                    gr.update(), gr.update(visible=False), gr.update(visible=False),
-                    gr.update(visible=False), gr.update(visible=False),
-                    gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
-                )
-                break
+          if input_video is None:
+              yield (
+                  gr.update(), gr.update(), gr.update(visible=False),
+                  "Error: Input video required for video extension mode.", gr.update(visible=False),
+                  gr.update(interactive=True), gr.update(interactive=True), # Include endless_run_button
+                  gr.update(interactive=False), gr.update(interactive=False),
+                  gr.update(), gr.update(visible=False), gr.update(visible=False),
+                  gr.update(visible=False), gr.update(visible=False),
+                  gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+              )
+              break
                 
             try:
                 extracted_frames, _, _ = video_generator.extract_frames_from_video(
@@ -114,26 +115,28 @@ def process(
         
         # --- Input validation ---
         if mode == "image2video" and input_image is None:
-            yield (
-                gr.update(), gr.update(), gr.update(visible=False),
-                "Error: Image input required for image2video mode", gr.update(visible=False),
-                gr.update(interactive=True), gr.update(interactive=False), gr.update(interactive=False),
-                gr.update(), gr.update(visible=False), gr.update(visible=False),
-                gr.update(visible=False), gr.update(visible=False),
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
-            )
-            break
+          yield (
+              gr.update(), gr.update(), gr.update(visible=False),
+              "Error: Image input required for image2video mode", gr.update(visible=False),
+              gr.update(interactive=True), gr.update(interactive=True), # Include endless_run_button
+              gr.update(interactive=False), gr.update(interactive=False),
+              gr.update(), gr.update(visible=False), gr.update(visible=False),
+              gr.update(visible=False), gr.update(visible=False),
+              gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+          )
+          break
             
         if mode == "keyframes" and end_frame is None:
-            yield (
-                gr.update(), gr.update(), gr.update(visible=False),
-                "Error: End Frame required for keyframes mode", gr.update(visible=False),
-                gr.update(interactive=True), gr.update(interactive=False), gr.update(interactive=False),
-                gr.update(), gr.update(visible=False), gr.update(visible=False),
-                gr.update(visible=False), gr.update(visible=False),
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
-            )
-            break
+          yield (
+              gr.update(), gr.update(), gr.update(visible=False),
+              "Error: End Frame required for keyframes mode", gr.update(visible=False),
+              gr.update(interactive=True), gr.update(interactive=True), # Include endless_run_button 
+              gr.update(interactive=False), gr.update(interactive=False),
+              gr.update(), gr.update(visible=False), gr.update(visible=False),
+              gr.update(visible=False), gr.update(visible=False),
+              gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+          )
+          break
         
         # --- Initial UI Yield for this Batch Item ---
         # Keep previous outputs visible during new generation
