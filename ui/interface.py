@@ -335,11 +335,11 @@ function addLightboxListeners() {
                   mem_status = gr.Markdown("")
              with gr.Column(scale=2):
                   with gr.Row():
-                       with gr.Column(scale=4):
-                            start_button = gr.Button(value="Start Generation", elem_classes="start-button")
-                       with gr.Column(scale=1):
-                            batch_count = gr.Number(value=1, minimum=1, step=1, precision=0,
-                                                  label="Batch", show_label=False, container=False)
+                    with gr.Column(scale=7):  # Increased scale for start button
+                        start_button = gr.Button(value="Start Generation", elem_classes="start-button")
+                    with gr.Column(scale=1, min_width=50, max_width=70):  # Fixed narrow width for batch count
+                        batch_count = gr.Number(value=1, minimum=1, step=1, precision=0,
+                                              label="Batch", show_label=False, container=False)
                   with gr.Row():
                        endless_run_button = gr.Button(value="Endless Run", elem_classes="endless-run-button")
                   with gr.Row():
@@ -370,37 +370,52 @@ function addLightboxListeners() {
     # --- End of UI Layout Definition ---
 
         def normal_process_handler(*args):
-            """Handler for normal processing with batch count"""
-            from ui.callbacks import process
-            
-            # Convert positional args to a dictionary of named parameters
-            param_names = [
-                "mode", "input_image", "start_frame", "end_frame", "aspect_selector", 
-                "custom_w", "custom_h", "prompt", "n_prompt", "seed",
-                "latent_window_size", "segment_count", "steps", "cfg", "gs", "rs", 
-                "gpu_memory_preservation", "use_teacache", "lock_seed", "init_color",
-                "keyframe_weight", "input_video", "extension_direction", "extension_frames",
-                "frame_overlap", "trim_percentage", "gaussian_blur_amount", "llm_weight", 
-                "clip_weight", "clean_latent_weight", "batch_count", "unload_on_end_flag"
-            ]
-            
-            # Create a dictionary with parameter names and values
-            kwargs = {}
-            for i, arg in enumerate(args):
-                if i < len(param_names):
-                    kwargs[param_names[i]] = arg
-            
-            # Override any parameters and add the required ones
-            kwargs["endless_run"] = False
-            kwargs["video_generator"] = video_generator
-            kwargs["model_manager"] = model_manager
-            
-            # Rename parameters if needed
-            if "trim_percentage" in kwargs:
-                kwargs["trim_pct"] = kwargs.pop("trim_percentage")
-            
-            # Call process function with the named parameters
-            yield from process(**kwargs)
+        """Handler for normal processing with batch count"""
+        from ui.callbacks import process
+        
+        # Convert args to a list so we can modify
+        args_list = list(args)
+        
+        # Find the seed position (should be at index 9)
+        seed_pos = 9
+        lock_seed_pos = 18  # Position of lock_seed checkbox
+        
+        # If seed position is valid and lock_seed is not checked, randomize seed
+        if len(args_list) > seed_pos and len(args_list) > lock_seed_pos:
+            if not args_list[lock_seed_pos]:  # If lock_seed is False
+                # Generate new random seed
+                new_seed = int(time.time()) % 2**32
+                args_list[seed_pos] = new_seed
+                debug(f"Setting new random seed: {new_seed}")
+        
+        # Convert positional args to a dictionary of named parameters
+        param_names = [
+            "mode", "input_image", "start_frame", "end_frame", "aspect_selector", 
+            "custom_w", "custom_h", "prompt", "n_prompt", "seed",
+            "latent_window_size", "segment_count", "steps", "cfg", "gs", "rs", 
+            "gpu_memory_preservation", "use_teacache", "lock_seed", "init_color",
+            "keyframe_weight", "input_video", "extension_direction", "extension_frames",
+            "frame_overlap", "trim_percentage", "gaussian_blur_amount", "llm_weight", 
+            "clip_weight", "clean_latent_weight", "batch_count", "unload_on_end_flag"
+        ]
+        
+        # Create a dictionary with parameter names and values
+        kwargs = {}
+        for i, arg in enumerate(args_list):  # Use updated args_list
+            if i < len(param_names):
+                kwargs[param_names[i]] = arg
+        
+        # Add required parameters
+        kwargs["endless_run"] = False
+        kwargs["video_generator"] = video_generator
+        kwargs["model_manager"] = model_manager
+        
+        # Rename parameters if needed
+        if "trim_percentage" in kwargs:
+            kwargs["trim_pct"] = kwargs.pop("trim_percentage")
+        
+        # Call process function with the named parameters
+        yield from process(**kwargs)
         
         def endless_process_handler(*args):
             """Handler for endless processing"""
