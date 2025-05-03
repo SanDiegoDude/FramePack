@@ -371,23 +371,72 @@ function addLightboxListeners() {
 
         def normal_process_handler(*args):
             """Handler for normal processing with batch count"""
-            # No need to filter endless_run since it's not in args anymore
-            yield from process(*args, endless_run=False, 
-                             video_generator=video_generator, 
-                             model_manager=model_manager)
+            from ui.callbacks import process
+            
+            # Convert positional args to a dictionary of named parameters
+            param_names = [
+                "mode", "input_image", "start_frame", "end_frame", "aspect_selector", 
+                "custom_w", "custom_h", "prompt", "n_prompt", "seed",
+                "latent_window_size", "segment_count", "steps", "cfg", "gs", "rs", 
+                "gpu_memory_preservation", "use_teacache", "lock_seed", "init_color",
+                "keyframe_weight", "input_video", "extension_direction", "extension_frames",
+                "frame_overlap", "trim_percentage", "gaussian_blur_amount", "llm_weight", 
+                "clip_weight", "clean_latent_weight", "batch_count", "unload_on_end_flag"
+            ]
+            
+            # Create a dictionary with parameter names and values
+            kwargs = {}
+            for i, arg in enumerate(args):
+                if i < len(param_names):
+                    kwargs[param_names[i]] = arg
+            
+            # Override any parameters and add the required ones
+            kwargs["endless_run"] = False
+            kwargs["video_generator"] = video_generator
+            kwargs["model_manager"] = model_manager
+            
+            # Rename parameters if needed
+            if "trim_percentage" in kwargs:
+                kwargs["trim_pct"] = kwargs.pop("trim_percentage")
+            
+            # Call process function with the named parameters
+            yield from process(**kwargs)
         
         def endless_process_handler(*args):
             """Handler for endless processing"""
-            # Convert to list for batch_count modification
-            args_list = list(args)
+            from ui.callbacks import process
             
-            # Set batch_count=1 for endless mode (should be at the end, before unload_on_end)
-            batch_count_pos = len(args_list) - 1  # Position right before unload_on_end
-            args_list[batch_count_pos] = 1  # Set to 1
+            # Convert positional args to a dictionary of named parameters
+            param_names = [
+                "mode", "input_image", "start_frame", "end_frame", "aspect_selector", 
+                "custom_w", "custom_h", "prompt", "n_prompt", "seed",
+                "latent_window_size", "segment_count", "steps", "cfg", "gs", "rs", 
+                "gpu_memory_preservation", "use_teacache", "lock_seed", "init_color",
+                "keyframe_weight", "input_video", "extension_direction", "extension_frames",
+                "frame_overlap", "trim_percentage", "gaussian_blur_amount", "llm_weight", 
+                "clip_weight", "clean_latent_weight", "batch_count", "unload_on_end_flag"
+            ]
             
-            yield from process(*args_list, endless_run=True,
-                             video_generator=video_generator, 
-                             model_manager=model_manager)
+            # Create a dictionary with parameter names and values
+            kwargs = {}
+            for i, arg in enumerate(args):
+                if i < len(param_names):
+                    kwargs[param_names[i]] = arg
+            
+            # Override batch_count for endless mode
+            kwargs["batch_count"] = 1
+            
+            # Override any parameters and add the required ones
+            kwargs["endless_run"] = True
+            kwargs["video_generator"] = video_generator
+            kwargs["model_manager"] = model_manager
+            
+            # Rename parameters if needed
+            if "trim_percentage" in kwargs:
+                kwargs["trim_pct"] = kwargs.pop("trim_percentage")
+            
+            # Call process function with the named parameters
+            yield from process(**kwargs)
         
         # --- Python Callbacks & Event Handlers (Correctly Indented) ---
         def handle_image_paste_data(paste_data_json):
@@ -492,8 +541,6 @@ function addLightboxListeners() {
         start_button.click(fn=normal_process_handler, inputs=ips, outputs=output_list)
         endless_run_button.click(fn=endless_process_handler, inputs=ips, outputs=output_list) 
         
-        # Then update the button connection
-        endless_run_button.click(fn=endless_process_handler, inputs=ips, outputs=output_list)
         end_graceful_button.click(fn=request_graceful_end, outputs=[end_graceful_button, force_stop_button])
         force_stop_button.click(fn=force_immediate_stop, outputs=[end_graceful_button, force_stop_button])
 
