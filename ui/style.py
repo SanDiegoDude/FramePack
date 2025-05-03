@@ -32,10 +32,9 @@ def get_css():
         cursor: not-allowed !important;
     }
 
-    # Add this CSS block before the Frame Thumbnails section:
     /* Batch Count Input - narrow width */
     .batch-count input {
-        width: 50px !important;
+        width: 10% !important;
         padding: 4px !important;
         font-size: 14px !important;
         text-align: center !important;
