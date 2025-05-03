@@ -331,13 +331,13 @@ function addLightboxListeners() {
                        unload_button = gr.Button(value="Unload All Models", variant="secondary")
                        clear_cache_button = gr.Button(value="Clear CUDA Cache", variant="secondary")
                   mem_status = gr.Markdown("")
-             with gr.Column(scale=2):
-                  with gr.Row():
-                       with gr.Column(scale=6):
-                            start_button = gr.Button(value="Start Generation", elem_classes="start-button")
-                       with gr.Column(scale=1):
-                            batch_count = gr.Number(value=1, minimum=1, step=1, precision=0, 
-                                                  label="Batch", show_label=False, container=False)
+             with gr.Row(equal_height=True) as top_row:
+                start_button = gr.Button(value="Start Generation", elem_classes="start-button start-button-wide")
+                batch_count = gr.Number(
+                    value=1, minimum=1, step=1, precision=0,
+                    label="Batch", show_label=True, container=True,
+                    elem_classes="batch-input-narrow"
+                )
                   
                   with gr.Row():
                        endless_run_button = gr.Button(value="Endless Run", elem_classes="endless-run-button")
