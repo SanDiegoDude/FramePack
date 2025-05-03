@@ -335,11 +335,11 @@ function addLightboxListeners() {
                   mem_status = gr.Markdown("")
              with gr.Column(scale=2):
                   with gr.Row():
-                    with gr.Column(scale=7):  # Increased scale for start button
+                    with gr.Column(scale=9):  # Increased scale for start button
                         start_button = gr.Button(value="Start Generation", elem_classes="start-button")
-                    with gr.Column(scale=1, min_width=50, max_width=70):  # Fixed narrow width for batch count
                         batch_count = gr.Number(value=1, minimum=1, step=1, precision=0,
-                                              label="Batch", show_label=False, container=False)
+                          label="Batch", show_label=False, container=False,
+                          elem_classes="tiny-number")
                   with gr.Row():
                        endless_run_button = gr.Button(value="Endless Run", elem_classes="endless-run-button")
                   with gr.Row():
