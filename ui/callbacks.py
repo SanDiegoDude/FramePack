@@ -103,8 +103,8 @@ def process(
         # --- Initial UI Yield for this Batch Item ---
         # Keep previous final outputs visible, hide previews/progress for the new one
         yield (
-            gr.update(), # result_video (keep current video visible)
-            gr.update(), # result_image_html (keep current image visible)
+            gr.update(visible=True), # result_video (keep previous video visible if it exists)
+            gr.update(visible=True), # result_image_html (keep previous image visible if it exists)
             gr.update(visible=False), # preview_image (hide previous)
             f"Starting Generation{batch_progress_text}...", # progress_desc
             gr.update(visible=False), # progress_bar (hide previous)
@@ -112,15 +112,15 @@ def process(
             gr.update(interactive=True), # end_graceful_button
             gr.update(interactive=True), # force_stop_button
             gr.update(value=run_seed), # seed display
-            gr.update(), # first_frame (keep previous visible)
-            gr.update(), # last_frame (keep previous visible)
-            gr.update(), # extend_button (keep previous visible)
+            gr.update(visible=True), # first_frame (keep previous visible)
+            gr.update(visible=True), # last_frame (keep previous visible)
+            gr.update(visible=True), # extend_button (keep previous visible)
             gr.update(visible=False), # note_message (hide previous)
-            gr.update(), # generation_stats (keep previous visible)
-            gr.update(), # generation_stats_accordion (keep previous visible)
-            gr.update(), # frame_thumbnails_group (keep previous visible)
-            gr.update(), # final_processed_prompt_display (keep previous visible)
-            gr.update() # final_prompt_accordion (keep previous visible)
+            gr.update(visible=True), # generation_stats (keep previous visible)
+            gr.update(visible=True), # generation_stats_accordion (keep previous visible)
+            gr.update(visible=True), # frame_thumbnails_group (keep previous visible)
+            gr.update(visible=True), # final_processed_prompt_display (keep previous visible)
+            gr.update(visible=True) # final_prompt_accordion (keep previous visible)
         )
         # ------------------------------------------------
 
@@ -192,12 +192,24 @@ def process(
                 if flag == 'preview_video':
                      preview_val = data # Data is the preview image/video path
                 elif flag == 'progress':
-                     preview_val, desc_val, html_val = data # Unpack progress data
-                     if desc_val: last_desc = desc_val
+                    # Properly handle unpacking and potential object serialization issues
+                    if isinstance(data, tuple) and len(data) == 3:
+                        preview_val, desc_val, html_val = data
+                        # Ensure desc_val is properly stringified
+                        if desc_val is not None and not isinstance(desc_val, str):
+                            desc_val = str(desc_val)
+                        if desc_val: 
+                            last_desc = desc_val
+                    else:
+                        debug(f"Warning: Unexpected progress data format: {data}")
+                        preview_val = None
+                        desc_val = last_desc  # Use previous desc
+                        html_val = gr.update()  # Keep existing progress bar
 
                 # Yield updates: CLEAR old outputs, show new progress/preview
                 yield (
-                    gr.update(value=data if flag=='preview_video' else None, visible=(flag=='preview_video')), # result_video (show preview if video)
+                    gr.update(value=data if flag=='preview_video' else None, 
+                             visible=(flag=='preview_video' or (flag=='progress' and result_video.visible))), # result_video - keep visible if it was already showing
                     gr.update(visible=False),                       # result_image_html (clear image)
                     gr.update(value=preview_val, visible=True),     # preview_image (show new preview)
                     f"{desc_val}{batch_progress_text}",             # progress_desc
@@ -224,13 +236,13 @@ def process(
                 # Handle None frames with placeholders if needed
                 first_frame_img = first_frame_img if first_frame_img is not None else np.zeros((64, 64, 3), dtype=np.uint8)
                 last_frame_img = last_frame_img if last_frame_img is not None else np.zeros((64, 64, 3), dtype=np.uint8)
-
-                # Yield updates: Show final video, hide preview, show thumbnails
+            
+                # Yield updates: Show final video, hide preview & image output (but not other previous outputs)
                 yield (
                     gr.update(value=output_filename, visible=True), # result_video
-                    gr.update(visible=False),                       # result_image_html
+                    gr.update(visible=False),                       # result_image_html - hide image output
                     gr.update(visible=False),                       # preview_image (hide)
-                    gr.update(visible=False),                       # progress_desc (hide)
+                    f"Generation complete! Saved to: {os.path.basename(output_filename)}", # progress_desc - show helpful message
                     gr.update(visible=False),                       # progress_bar (hide)
                     gr.update(), # Buttons updated at 'end' event
                     gr.update(),
