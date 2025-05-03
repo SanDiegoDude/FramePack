@@ -41,26 +41,26 @@ def get_css():
         align-items: center;
     }
 
-    /* Batch Count Column */
     .batch-count-column {
-        flex-grow: 1 !important;
-        flex-shrink: 1 !important;
-        flex-basis: 0 !important;
+        display: flex !important;
+        align-items: stretch !important;
+        justify-content: flex-end;
         max-width: 70px !important;
         min-width: 50px !important;
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
+        height: auto !important;
     }
 
     /* Batch Count Input Field */
     .batch-count input {
         width: 100% !important;
-        height 100% !important;
-        padding: 4px 6px !important;
-        font-size: 14px !important;
+        height: 48px !important; /* Match button height (~16px padding + font + border) */
+        padding: 0 6px !important;
+        font-size: 16px !important;
         text-align: center;
+        border-radius: 5px !important;
+        box-sizing: border-box !important;
     }
+
    
     /* Endless Run Button (Blue) */
     .endless-run-button button {
