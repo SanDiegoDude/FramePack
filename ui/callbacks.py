@@ -45,50 +45,127 @@ def process(
     total_batch_count = int(batch_count) if not endless_run else float('inf')
     run_seed = seed
     
-    # Track previous generation output state
-    last_successful_output = None # Store the last good output path/data
-    last_is_video = False        # Track if last output was video
-    last_is_image = False        # Track if last output was image
-    previous_video_path = None   # Path to last video
-    previous_image_path = None   # Path to last image
-    preview_video_visible = False  # Track preview video visibility
-    last_first_frame = None      # Store last first frame thumbnail
-    last_last_frame = None       # Store last last frame thumbnail
-
-    while True: # Outer loop for batch/endless
-
-        # --- IMMEDIATE EXIT CHECKS ---
+    # Batch state tracking variables
+    last_output_filename = None
+    last_output_is_image = False
+    last_output_image_path = None
+    last_first_frame = None
+    last_last_frame = None
+    
+    # Main batch loop
+    while True:
+        # Check for exit conditions
         if _stop_requested_flag:
             debug("IMMEDIATE EXIT: Force stop flag detected at start of outer loop.")
             break
         if _graceful_stop_batch_flag:
-            debug("IMMEDIATE EXIT: Graceful stop flag detected at start of outer loop.")
+            debug("GRACEFUL EXIT: Graceful stop flag detected at start of outer loop.")
             break
         if not endless_run and current_batch_item >= total_batch_count:
-            debug(f"IMMEDIATE EXIT: Completed {current_batch_item}/{int(batch_count)} batch items.")
+            debug(f"NATURAL EXIT: Completed {current_batch_item}/{int(batch_count)} batch items.")
             break
-        # --- END IMMEDIATE EXIT CHECKS ---
-
+        
+        # Increment batch counter
         current_batch_item += 1
         batch_progress_text = f" (Batch {current_batch_item}/{int(batch_count)})" if not endless_run and batch_count > 1 else \
-                              f" (Endless Run - Item {current_batch_item})" if endless_run else ""
+                             f" (Endless Run - Item {current_batch_item})" if endless_run else ""
         debug(f"--- Starting Batch Item {current_batch_item} ---")
-
-        # Reset state for this *specific generation*
-        output_filename = None
+        
+        # Reset per-generation state
+        stream = None
         final_output_path = None
-        stream = None # Crucial: Reset stream for the new generation task
-
-        # Update seed (as before)
+        
+        # Update seed for this batch item
         if not lock_seed and current_batch_item > 1:
             run_seed = int(time.time()) % 2**32
             debug(f"New seed for batch item {current_batch_item}: {run_seed}")
-        elif current_batch_item > 1:
-            debug(f"Using locked seed {run_seed} for batch item {current_batch_item}")
-
-        # --- Prep logic (validation, video extract - keep user's code) ---
-        # ... (Your existing validation and video_extension logic here) ...
-        # Ensure `mode`, `input_image`, `start_frame`, `end_frame`, etc. are set correctly for this iteration
+        
+        # Process video extraction for video_extension mode
+        if mode == "video_extension":
+            if input_video is None:
+                yield (
+                    gr.update(), gr.update(), gr.update(visible=False),
+                    "Error: Input video required for video extension mode.", gr.update(visible=False),
+                    gr.update(interactive=True), gr.update(interactive=False), gr.update(interactive=False),
+                    gr.update(), gr.update(visible=False), gr.update(visible=False),
+                    gr.update(visible=False), gr.update(visible=False),
+                    gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+                )
+                break
+                
+            try:
+                extracted_frames, _, _ = video_generator.extract_frames_from_video(
+                    input_video, int(extension_frames), (extension_direction == "Forward"), 640
+                )
+                if extension_direction == "Forward":
+                    input_image = extracted_frames[-1]; orig_mode = mode; mode = "image2video"
+                else:
+                    end_frame = extracted_frames[0]; start_frame = None; orig_mode = mode; mode = "keyframes"
+            except Exception as e:
+                yield (
+                    gr.update(), gr.update(), gr.update(visible=False),
+                    f"Error extracting frames from video: {e}", gr.update(visible=False),
+                    gr.update(interactive=True), gr.update(interactive=False), gr.update(interactive=False),
+                    gr.update(), gr.update(visible=False), gr.update(visible=False),
+                    gr.update(visible=False), gr.update(visible=False),
+                    gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+                )
+                break
+        
+        # --- Input validation ---
+        if mode == "image2video" and input_image is None:
+            yield (
+                gr.update(), gr.update(), gr.update(visible=False),
+                "Error: Image input required for image2video mode", gr.update(visible=False),
+                gr.update(interactive=True), gr.update(interactive=False), gr.update(interactive=False),
+                gr.update(), gr.update(visible=False), gr.update(visible=False),
+                gr.update(visible=False), gr.update(visible=False),
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+            )
+            break
+            
+        if mode == "keyframes" and end_frame is None:
+            yield (
+                gr.update(), gr.update(), gr.update(visible=False),
+                "Error: End Frame required for keyframes mode", gr.update(visible=False),
+                gr.update(interactive=True), gr.update(interactive=False), gr.update(interactive=False),
+                gr.update(), gr.update(visible=False), gr.update(visible=False),
+                gr.update(visible=False), gr.update(visible=False),
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+            )
+            break
+        
+        # --- Initial UI Yield for this Batch Item ---
+        # Keep previous outputs visible during new generation
+        yield (
+            # Keep previous video visible if it exists
+            gr.update(value=last_output_filename if not last_output_is_image and last_output_filename else None, 
+                    visible=not last_output_is_image and last_output_filename is not None),
+            # Keep previous image visible if it exists
+            gr.update(value=last_output_image_path if last_output_is_image else None,
+                    visible=last_output_is_image),
+            gr.update(visible=False),  # preview_image
+            f"Starting Generation{batch_progress_text}...",  # progress_desc
+            gr.update(visible=False),  # progress_bar
+            gr.update(interactive=False),  # start_button
+            gr.update(interactive=True),  # end_graceful_button
+            gr.update(interactive=True),  # force_stop_button
+            gr.update(value=run_seed),  # seed display
+            # Keep frame thumbnails if they exist
+            gr.update(value=last_first_frame if last_first_frame is not None else None, 
+                    visible=last_first_frame is not None),
+            gr.update(value=last_last_frame if last_last_frame is not None else None, 
+                    visible=last_last_frame is not None),
+            gr.update(visible=not last_output_is_image and last_output_filename is not None),  # extend_button
+            gr.update(visible=False),  # note_message
+            gr.update(visible=True),  # generation_stats
+            gr.update(visible=True),  # generation_stats_accordion
+            gr.update(visible=not last_output_is_image and last_output_filename is not None),  # frame_thumbnails
+            gr.update(visible=True),  # final_processed_prompt
+            gr.update(visible=True)  # final_prompt_accordion
+        )
+        
+        # Calculate params for generation
         latent_window_size_val = latent_window_size if not hasattr(latent_window_size, 'value') else latent_window_size.value
         segment_count_val = segment_count if not hasattr(segment_count, 'value') else segment_count.value
         frame_overlap_val = frame_overlap if not hasattr(frame_overlap, 'value') else frame_overlap.value
@@ -96,360 +173,404 @@ def process(
         effective_frames = frames_per_section - min(frame_overlap_val, frames_per_section-1)
         adv_seconds = (segment_count_val * effective_frames) / 30.0
         selected_frames = segment_count_val * effective_frames
-        original_mode = mode # Store original mode before potential change in video_extension
-        if mode == "video_extension":
-             if input_video is None: return # Abort (error handled earlier)
-             try:
-                  extracted_frames, _, _ = video_generator.extract_frames_from_video(input_video, int(extension_frames), (extension_direction == "Forward"), 640)
-                  if extension_direction == "Forward":
-                       input_image = extracted_frames[-1]; mode = "image2video"
-                  else:
-                       end_frame = extracted_frames[0]; start_frame = None; mode = "keyframes"
-             except Exception as e: return # Abort (error handled earlier)
-        # --------------------------------------------------------------------
-
-        # --- Initial UI Yield for this Batch Item ---
-        debug(f"Preparing UI for batch {current_batch_item}: video={last_is_video}, image={last_is_image}")
+        original_mode = mode if 'orig_mode' not in locals() else orig_mode
         
-        # Yield updates: Keep previous final outputs visible, hide temporary elements
-        yield (
-            gr.update(value=previous_video_path if last_is_video else None, 
-                     visible=last_is_video), # result_video (keep previous if exists)
-            gr.update(value=previous_image_path if last_is_image else None,
-                     visible=last_is_image), # result_image_html (keep previous if exists)
-            gr.update(visible=False), # preview_image (hide previous)
-            f"Starting Generation{batch_progress_text}...", # progress_desc
-            gr.update(visible=False), # progress_bar (hide previous)
-            gr.update(interactive=False), # start_button
-            gr.update(interactive=True), # end_graceful_button
-            gr.update(interactive=True), # force_stop_button
-            gr.update(value=run_seed), # seed display
-            gr.update(value=last_first_frame if last_first_frame is not None else None, 
-                     visible=last_is_video), # first_frame
-            gr.update(value=last_last_frame if last_last_frame is not None else None, 
-                     visible=last_is_video), # last_frame
-            gr.update(visible=last_is_video), # extend_button
-            gr.update(visible=False), # note_message (hide previous)
-            gr.update(visible=True), # generation_stats (keep previous visible)
-            gr.update(visible=True), # generation_stats_accordion (keep previous visible)
-            gr.update(visible=last_is_video), # frame_thumbnails_group
-            gr.update(visible=True), # final_processed_prompt_display (keep previous visible)
-            gr.update(visible=True) # final_prompt_accordion (keep previous visible)
-        )
-        # ------------------------------------------------
-
-        # --- Validate required inputs based on mode ---
-        validation_error = None
-        if mode == "image2video" and input_image is None:
-            validation_error = "Error: Please provide an input image for image2video mode"
-        elif mode == "keyframes" and end_frame is None:
-            validation_error = "Error: Please provide an end frame for keyframes mode"
-        elif mode == "video_extension" and input_video is None:
-            validation_error = "Error: Please provide an input video for video extension mode"
-        
-        if validation_error:
-            debug(f"Validation error: {validation_error}")
-            yield (
-                gr.update(), gr.update(), gr.update(visible=False),
-                validation_error, # progress_desc
-                gr.update(visible=False), gr.update(interactive=True), 
-                gr.update(interactive=False), gr.update(interactive=False),
-                gr.update(), gr.update(visible=False), gr.update(visible=False),
-                gr.update(visible=False), gr.update(visible=True, value=validation_error),
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
-            )
-            return  # <-- Important: exit the generation process early
-        
-        # Setup and run generation (ensure video_generator.stream is set!)
+        # Setup and run generation
         stream = AsyncStream()
-        video_generator.stream = stream # *** IMPORTANT ***
-        config = { 'mode': mode, 'input_image': input_image, 'start_frame': start_frame, 'end_frame': end_frame, 'aspect': aspect_selector, 'custom_w': custom_w, 'custom_h': custom_h, 'prompt': prompt, 'n_prompt': n_prompt, 'seed': run_seed, 'use_adv': True, 'latent_window_size': latent_window_size_val, 'adv_seconds': adv_seconds, 'selected_frames': selected_frames, 'segment_count': segment_count_val, 'steps': steps, 'cfg': cfg, 'gs': gs, 'rs': rs, 'gpu_memory_preservation': gpu_memory_preservation, 'use_teacache': use_teacache, 'init_color': init_color, 'keyframe_weight': keyframe_weight, 'input_video': input_video, 'extension_direction': extension_direction, 'extension_frames': extension_frames, 'original_mode': original_mode, 'frame_overlap': frame_overlap_val, 'gaussian_blur_amount': gaussian_blur_amount, 'llm_weight': llm_weight, 'clip_weight': clip_weight, 'clean_latent_weight': clean_latent_weight, 'trim_percentage': trim_pct } # Added trim_pct
+        video_generator.stream = stream
+        config = {
+            'mode': mode, 'input_image': input_image, 'start_frame': start_frame, 'end_frame': end_frame, 
+            'aspect': aspect_selector, 'custom_w': custom_w, 'custom_h': custom_h, 
+            'prompt': prompt, 'n_prompt': n_prompt, 'seed': run_seed, 
+            'use_adv': True, 'latent_window_size': latent_window_size_val, 
+            'adv_seconds': adv_seconds, 'selected_frames': selected_frames, 
+            'segment_count': segment_count_val, 'steps': steps, 
+            'cfg': cfg, 'gs': gs, 'rs': rs, 
+            'gpu_memory_preservation': gpu_memory_preservation, 'use_teacache': use_teacache, 
+            'init_color': init_color, 'keyframe_weight': keyframe_weight, 
+            'input_video': input_video, 'extension_direction': extension_direction, 
+            'extension_frames': extension_frames, 'original_mode': original_mode, 
+            'frame_overlap': frame_overlap_val, 'gaussian_blur_amount': gaussian_blur_amount, 
+            'llm_weight': llm_weight, 'clip_weight': clip_weight, 
+            'clean_latent_weight': clean_latent_weight, 'trim_percentage': trim_pct
+        }
+        
         async_run(video_generator.generate_video, config)
-
-        # --- Inner Loop: Process Stream Events for *this* generation ---
+        
+        # Per-generation state variables
+        output_filename = None
         last_desc = ""
-        last_is_image = False
-        last_img_path = None
+        is_image_output = False
+        image_path = None
         final_prompt_text = "Prompt not received"
         last_stats = ""
-        generation_interrupted_flag = False # Reset for this generation
-
+        generation_interrupted = False
+        first_frame_img = None
+        last_frame_img = None
+        preview_video_visible = False
+        
+        # --- Inner Loop: Process Stream Events for this generation ---
         while True:
-            # Check for external stop signals FIRST
+            # Check for stop flags
             if _stop_requested_flag:
                 debug("INNER LOOP: Force stop flag detected.")
-                if stream: stream.input_queue.push('end') # Signal generator
-                generation_interrupted_flag = True
-                break # Exit inner loop
-
-            # Graceful batch stop doesn't break inner loop, generator handles 'graceful_end'
-            if _graceful_stop_batch_flag:
-                 debug("INNER LOOP: Graceful batch stop requested, allowing current generation to potentially finish gracefully.")
-                 # No break here, let 'end' event handle it or generator callback interrupt
-
-            if stream is None: debug("INNER LOOP: Stream is None."); generation_interrupted_flag = True; break
-
+                if stream: stream.input_queue.push('end')
+                generation_interrupted = True
+                break
+            
+            # Check for graceful stop (don't break inner loop)
+            if _graceful_stop_batch_flag and stream:
+                stream.input_queue.push('graceful_end')
+                debug("INNER LOOP: Sent graceful_end signal to generator.")
+            
             # Get next event
             flag, data = stream.output_queue.next()
             debug(f"Inner Loop: Event: {flag}, Data Type: {type(data)}")
-
-            # Handle non-UI updates first
-            if flag == 'final_prompt': final_prompt_text = data; continue
-            if flag == 'final_stats': last_stats = data; continue
-
-            # --- UI Updates ---
-            elif flag == 'preview_video' or flag == 'progress':
-                preview_val = None
-                desc_val = last_desc # Use previous desc if only preview video comes
-                html_val = gr.update() # Keep existing progress bar if only preview
             
-                if flag == 'preview_video':
-                    preview_val = data # Data is the preview image/video path
-                    preview_video_visible = True  # Mark preview as visible when we get a new one
-                    debug("Received preview_video, setting visibility flag")
-                elif flag == 'progress':
-                    # Properly handle unpacking and potential object serialization issues
-                    if isinstance(data, tuple) and len(data) == 3:
-                        preview_val, desc_val, html_val = data
-                        # Ensure desc_val is properly stringified
-                        if desc_val is not None and not isinstance(desc_val, str):
-                            desc_val = str(desc_val)
-                        if desc_val: last_desc = desc_val
-                    else:
-                        debug(f"Warning: Unexpected progress data format: {type(data)}")
-                        preview_val = None
-                        desc_val = last_desc  # Use previous desc
-                        html_val = gr.update()  # Keep existing progress bar
+            # Handle special flags that don't need UI updates
+            if flag == 'final_prompt':
+                final_prompt_text = data
+                debug(f"Received final prompt: '{final_prompt_text}'")
+                continue
+                
+            if flag == 'final_stats':
+                last_stats = data
+                debug(f"Received final stats: {last_stats[:50]}...")
+                continue
             
-                # Yield updates: Keep preview visible during progress updates
+            # Handle UI update flags
+            if flag == 'preview_video':
+                debug(f"Received preview video: {data}")
+                preview_video_visible = True
                 yield (
-                    gr.update(value=data if flag=='preview_video' else None, 
-                            visible=(flag=='preview_video' or preview_video_visible)), # Use tracked state
-                    gr.update(visible=False),                       # result_image_html (clear image)
-                    gr.update(value=preview_val, visible=True),     # preview_image (show new preview)
-                    f"{desc_val}{batch_progress_text}",             # progress_desc
-                    gr.update(value=html_val, visible=True),        # progress_bar
-                    gr.update(interactive=False),                   # start_button
-                    gr.update(interactive=not _graceful_stop_batch_flag), # end_graceful (allow stopping batch)
-                    gr.update(interactive=True),                    # force_stop (always allow)
-                    gr.update(),                                    # seed
-                    gr.update(visible=False),                       # first_frame (clear)
-                    gr.update(visible=False),                       # last_frame (clear)
-                    gr.update(visible=False),                       # extend_button (clear)
-                    gr.update(visible=(segment_count_val > 1), value="Note: Generating end before start..."), # note_message
-                    gr.update(visible=False),                       # generation_stats (clear)
-                    gr.update(visible=False, open=False),           # generation_stats_accordion
-                    gr.update(visible=False),                       # frame_thumbnails_group (clear)
-                    gr.update(visible=False),                       # final_processed_prompt_display
-                    gr.update(visible=False)                        # final_prompt_accordion
+                    gr.update(value=data, visible=True),  # result_video
+                    gr.update(visible=False),  # result_image_html
+                    gr.update(visible=False),  # preview_image
+                    "Generating video...",  # progress_desc
+                    gr.update(visible=True),  # progress_bar
+                    gr.update(interactive=False),  # start_button
+                    gr.update(interactive=True),  # end_graceful_button
+                    gr.update(interactive=True),  # force_stop_button
+                    gr.update(),  # seed
+                    gr.update(visible=False),  # first_frame
+                    gr.update(visible=False),  # last_frame
+                    gr.update(visible=False),  # extend_button
+                    gr.update(visible=(segment_count_val > 1), value="Note: Generating end before start..."),
+                    gr.update(visible=False),  # generation_stats
+                    gr.update(visible=False),  # generation_stats_accordion
+                    gr.update(visible=False),  # frame_thumbnails
+                    gr.update(visible=False),  # final_processed_prompt
+                    gr.update(visible=False)  # final_prompt_accordion
                 )
-
+            
+            elif flag == 'progress':
+                if isinstance(data, tuple) and len(data) == 3:
+                    preview_val, desc_val, html_val = data
+                    if desc_val is not None and not isinstance(desc_val, str):
+                        desc_val = str(desc_val)
+                    if desc_val:
+                        last_desc = desc_val
+                else:
+                    debug(f"Unexpected progress data format: {type(data)}")
+                    preview_val = None
+                    desc_val = last_desc
+                    html_val = gr.update()
+                
+                yield (
+                    gr.update(visible=preview_video_visible),  # Keep preview video visible if it was showing
+                    gr.update(visible=False),  # result_image_html
+                    gr.update(value=preview_val, visible=True),  # preview_image
+                    f"{desc_val}{batch_progress_text}",  # progress_desc
+                    gr.update(value=html_val, visible=True),  # progress_bar
+                    gr.update(interactive=False),  # start_button
+                    gr.update(interactive=True),  # end_graceful_button
+                    gr.update(interactive=True),  # force_stop_button
+                    gr.update(),  # seed
+                    gr.update(visible=False),  # first_frame
+                    gr.update(visible=False),  # last_frame
+                    gr.update(visible=False),  # extend_button
+                    gr.update(visible=(segment_count_val > 1), value="Note: Generating end before start..."),
+                    gr.update(visible=False),  # generation_stats
+                    gr.update(visible=False),  # generation_stats_accordion
+                    gr.update(visible=False),  # frame_thumbnails
+                    gr.update(visible=False),  # final_processed_prompt
+                    gr.update(visible=False)  # final_prompt_accordion
+                )
+            
             elif flag == 'file':
                 output_filename = data
-                last_successful_output = output_filename # Store for next iteration start
-                previous_video_path = output_filename    # Update video path state
-                last_is_video = True                     # Remember this was a video
-                last_is_image = False                    # Not an image
-                previous_image_path = None               # Clear previous image
+                is_image_output = False
+                image_path = None
                 
-                # Get frame thumbnails
+                # Save for next batch iteration
+                last_output_filename = output_filename
+                last_output_is_image = False
+                last_output_image_path = None
+                
+                # Extract frame thumbnails
                 first_frame_img, last_frame_img = extract_video_frames(output_filename)
-                # Handle None frames with placeholders if needed
-                first_frame_img = first_frame_img if first_frame_img is not None else np.zeros((64, 64, 3), dtype=np.uint8)
-                last_frame_img = last_frame_img if last_frame_img is not None else np.zeros((64, 64, 3), dtype=np.uint8)
-                
-                # Store frames for next batch
+                if first_frame_img is None:
+                    first_frame_img = np.zeros((64, 64, 3), dtype=np.uint8)
+                if last_frame_img is None:
+                    last_frame_img = np.zeros((64, 64, 3), dtype=np.uint8)
+                    
+                # Save for next batch iteration
                 last_first_frame = first_frame_img
                 last_last_frame = last_frame_img
                 
-                # Reset preview state
-                preview_video_visible = False
-            
-                # Yield updates: Show final video, hide preview/image
                 yield (
-                    gr.update(value=output_filename, visible=True), # result_video
-                    gr.update(visible=False),                       # result_image_html
-                    gr.update(visible=False),                       # preview_image (hide)
-                    gr.update(visible=False),                       # progress_desc (hide)
-                    gr.update(visible=False),                       # progress_bar (hide)
-                    gr.update(), # Buttons updated at 'end' event
-                    gr.update(),
-                    gr.update(),
-                    gr.update(), # seed
-                    gr.update(value=first_frame_img, visible=True), # first_frame
+                    gr.update(value=output_filename, visible=True),  # result_video
+                    gr.update(visible=False),  # result_image_html
+                    gr.update(visible=False),  # preview_image
+                    gr.update(visible=False),  # progress_desc
+                    gr.update(visible=False),  # progress_bar
+                    gr.update(interactive=False),  # start_button - updated in 'end'
+                    gr.update(interactive=True),  # end_graceful_button
+                    gr.update(interactive=True),  # force_stop_button
+                    gr.update(),  # seed
+                    gr.update(value=first_frame_img, visible=True),  # first_frame
                     gr.update(value=last_frame_img, visible=True),  # last_frame
-                    gr.update(visible=True),                        # extend_button
-                    gr.update(visible=False),                       # note_message
-                    gr.update(), # Stats updated at 'end'
-                    gr.update(),
-                    gr.update(visible=True),                        # frame_thumbnails_group
-                    gr.update(),
-                    gr.update()
+                    gr.update(visible=True),  # extend_button
+                    gr.update(visible=False),  # note_message
+                    gr.update(visible=False),  # generation_stats - updated in 'end'
+                    gr.update(visible=False),  # generation_stats_accordion
+                    gr.update(visible=True),  # frame_thumbnails
+                    gr.update(visible=False),  # final_processed_prompt
+                    gr.update(visible=False)  # final_prompt_accordion
                 )
-
+            
             elif flag == 'file_img':
-                (img_filename, html_link) = data
-                last_successful_output = img_filename # Store for next iteration start
-                previous_image_path = img_filename    # Update image path state 
-                last_is_image = True                  # Remember this was an image
-                last_is_video = False                 # Not a video
-                previous_video_path = None            # Clear previous video
+                (img_filename, _) = data
+                is_image_output = True
+                image_path = img_filename
                 
-                # Clear frame thumbnails as we don't have them for image outputs
+                # Save for next batch iteration
+                last_output_filename = None
+                last_output_is_image = True
+                last_output_image_path = img_filename
+                
+                # Clear frame thumbnails for image outputs
                 last_first_frame = None
                 last_last_frame = None
                 
-                # Reset preview state
-                preview_video_visible = False
-            
-                # Yield updates: Show final image, hide video/preview
                 yield (
-                    gr.update(visible=False),                       # result_video
-                    gr.update(value=img_filename, visible=True),    # result_image_html
-                    gr.update(visible=False),                       # preview_image (hide)
-                    gr.update(visible=False),                       # progress_desc (hide)
-                    gr.update(visible=False),                       # progress_bar (hide)
-                    gr.update(), # Buttons updated at 'end'
-                    gr.update(),
-                    gr.update(),
-                    gr.update(), # seed
-                    gr.update(visible=False),                       # first_frame (hide)
-                    gr.update(visible=False),                       # last_frame (hide)
-                    gr.update(visible=False),                       # extend_button (hide)
-                    gr.update(visible=False),                       # note_message
-                    gr.update(), # Stats updated at 'end'
-                    gr.update(),
-                    gr.update(visible=False),                       # frame_thumbnails_group (hide)
-                    gr.update(),
-                    gr.update()
+                    gr.update(visible=False),  # result_video
+                    gr.update(value=img_filename, visible=True),  # result_image_html
+                    gr.update(visible=False),  # preview_image
+                    gr.update(visible=False),  # progress_desc
+                    gr.update(visible=False),  # progress_bar
+                    gr.update(interactive=False),  # start_button - updated in 'end'
+                    gr.update(interactive=True),  # end_graceful_button
+                    gr.update(interactive=True),  # force_stop_button
+                    gr.update(),  # seed
+                    gr.update(visible=False),  # first_frame
+                    gr.update(visible=False),  # last_frame
+                    gr.update(visible=False),  # extend_button
+                    gr.update(visible=False),  # note_message
+                    gr.update(visible=False),  # generation_stats - updated in 'end'
+                    gr.update(visible=False),  # generation_stats_accordion
+                    gr.update(visible=False),  # frame_thumbnails
+                    gr.update(visible=False),  # final_processed_prompt
+                    gr.update(visible=False)  # final_prompt_accordion
                 )
-
+            
             elif flag == 'end':
-                debug(f"Inner Loop: Received 'end'. data = {data}")
-                is_error = (data == "wildcard_error" or data == "lora_error" or data == "prompt_error")
-                generation_interrupted_flag = generation_interrupted_flag or (data == "interrupted") or is_error
-
+                debug(f"Inner Loop: Received 'end' event with data={data}")
+                
+                # Check if generation was error/interrupted
+                is_error = (data == "wildcard_error" or data == "lora_error" or data == "prompt_error" or 
+                           data == "validation_error")
+                generation_interrupted = generation_interrupted or (data == "interrupted") or is_error
+                
                 if is_error:
                     debug(f"Generation error '{data}'. Signaling force stop.")
-                    _stop_requested_flag = True # Signal outer loop
-                    error_message = f"Error: {data}. Batch stopped."
-                    yield ( # Yield immediate error state
-                         gr.update(), gr.update(), gr.update(visible=False), error_message, gr.update(visible=False),
-                         gr.update(interactive=True), gr.update(interactive=False), gr.update(interactive=False),
-                         gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
-                         gr.update(visible=True, value=error_message), gr.update(visible=True, open=True), gr.update(visible=False),
-                         gr.update(value=final_prompt_text, visible=True), gr.update(visible=True)
+                    _stop_requested_flag = True
+                    yield (
+                        gr.update(visible=False),  # result_video
+                        gr.update(visible=False),  # result_image_html
+                        gr.update(visible=False),  # preview_image
+                        f"Error: {data}. Batch stopped.",  # progress_desc
+                        gr.update(visible=False),  # progress_bar
+                        gr.update(interactive=True),  # start_button
+                        gr.update(interactive=False),  # end_graceful_button
+                        gr.update(interactive=False),  # force_stop_button
+                        gr.update(),  # seed
+                        gr.update(visible=False),  # first_frame
+                        gr.update(visible=False),  # last_frame
+                        gr.update(visible=False),  # extend_button
+                        gr.update(visible=False),  # note_message
+                        gr.update(visible=True, value=f"Error: {data}. Batch stopped."),  # generation_stats
+                        gr.update(visible=True, open=True),  # generation_stats_accordion
+                        gr.update(visible=False),  # frame_thumbnails
+                        gr.update(value=final_prompt_text, visible=True),  # final_processed_prompt
+                        gr.update(visible=True)  # final_prompt_accordion
                     )
-                # No 'else' here, break happens below
-
-                # Break inner loop on any 'end' event (normal or interrupted/errored)
-                debug("Inner Loop: Breaking on 'end' event.")
+                elif generation_interrupted:
+                    # Handle normal interruptions
+                    yield (
+                        gr.update(visible=False),  # result_video
+                        gr.update(visible=False),  # result_image_html
+                        gr.update(visible=False),  # preview_image
+                        "Generation interrupted by user.",  # progress_desc
+                        gr.update(visible=False),  # progress_bar
+                        gr.update(interactive=True),  # start_button
+                        gr.update(interactive=False),  # end_graceful_button
+                        gr.update(interactive=False),  # force_stop_button
+                        gr.update(),  # seed
+                        gr.update(visible=False),  # first_frame
+                        gr.update(visible=False),  # last_frame
+                        gr.update(visible=False),  # extend_button
+                        gr.update(visible=False),  # note_message
+                        gr.update(visible=True, value="Generation interrupted by user."),  # generation_stats
+                        gr.update(visible=True, open=True),  # generation_stats_accordion
+                        gr.update(visible=False),  # frame_thumbnails
+                        gr.update(value=final_prompt_text, visible=True),  # final_processed_prompt
+                        gr.update(visible=True)  # final_prompt_accordion
+                    )
+                elif is_image_output:
+                    # Handle image output completion
+                    yield (
+                        gr.update(visible=False),  # result_video
+                        gr.update(value=image_path, visible=True),  # result_image_html
+                        gr.update(visible=False),  # preview_image
+                        gr.update(visible=False),  # progress_desc
+                        gr.update(visible=False),  # progress_bar
+                        gr.update(interactive=True),  # start_button
+                        gr.update(interactive=False),  # end_graceful_button
+                        gr.update(interactive=False),  # force_stop_button
+                        gr.update(),  # seed
+                        gr.update(visible=False),  # first_frame
+                        gr.update(visible=False),  # last_frame
+                        gr.update(visible=False),  # extend_button
+                        gr.update(visible=False),  # note_message
+                        gr.update(visible=True, value=f"Generated single image!<br><code>{image_path}</code>\n{last_stats}"),  # generation_stats
+                        gr.update(visible=True, open=False),  # generation_stats_accordion
+                        gr.update(visible=False),  # frame_thumbnails
+                        gr.update(value=final_prompt_text, visible=True),  # final_processed_prompt
+                        gr.update(visible=True)  # final_prompt_accordion
+                    )
+                else:
+                    # Handle video output completion
+                    stats_display = ""
+                    if output_filename and os.path.exists(output_filename):
+                        stats_display = f"""
+### Generation Complete{batch_progress_text}
+**Video saved as:** `{os.path.basename(output_filename)}`
+{last_stats}
+                        """
+                    else:
+                        stats_display = f"""
+### Generation Stopped
+No complete output was generated.
+{last_stats}
+                        """
+                        
+                    yield (
+                        gr.update(value=output_filename if output_filename else None, visible=bool(output_filename)),  # result_video
+                        gr.update(visible=False),  # result_image_html
+                        gr.update(visible=False),  # preview_image
+                        gr.update(visible=False),  # progress_desc
+                        gr.update(visible=False),  # progress_bar
+                        gr.update(interactive=True),  # start_button
+                        gr.update(interactive=False),  # end_graceful_button
+                        gr.update(interactive=False),  # force_stop_button
+                        gr.update(),  # seed
+                        gr.update(visible=bool(output_filename)),  # first_frame
+                        gr.update(visible=bool(output_filename)),  # last_frame
+                        gr.update(visible=bool(output_filename)),  # extend_button
+                        gr.update(visible=False),  # note_message
+                        gr.update(visible=True, value=stats_display),  # generation_stats
+                        gr.update(visible=True, open=False),  # generation_stats_accordion
+                        gr.update(visible=bool(output_filename)),  # frame_thumbnails
+                        gr.update(value=final_prompt_text, visible=True),  # final_processed_prompt
+                        gr.update(visible=True)  # final_prompt_accordion
+                    )
+                
+                # Exit inner loop for this generation
+                debug("Inner loop: breaking on 'end' event.")
                 break
-
-            else: # Handle unknown flags?
-                 debug(f"Inner Loop: Ignoring unknown flag '{flag}'")
-
-        # --- End of inner stream processing loop ---
-        debug(f"Inner loop finished for batch item {current_batch_item}. Interrupted={generation_interrupted_flag}")
-
-        # --- Post-Generation UI Update (before next loop iteration or final exit) ---
-        final_status_message = ""
-        # Use last_successful_output to retain visibility if current gen failed/was stopped
-        current_output_path = output_filename if output_filename else last_img_path
-        output_to_display = current_output_path if current_output_path else last_successful_output
-
-        show_final_output = bool(output_to_display) # Show if we have *any* output
-        show_as_image = last_is_image if current_output_path else (isinstance(output_to_display, str) and output_to_display.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')))
-        show_thumbnails = show_final_output and not show_as_image
-
-        # Determine final status message
-        if generation_interrupted_flag:
-            final_status_message = f"Generation Interrupted{batch_progress_text}."
-            if _graceful_stop_batch_flag: final_status_message += " Finishing batch."
-            if _stop_requested_flag: final_status_message = f"Generation Force Stopped{batch_progress_text}."
-        elif show_as_image:
-            final_status_message = f"Generated Image!{batch_progress_text}<br><code>{output_to_display}</code>"
-        elif show_thumbnails: # Video completed
-             stats_display = last_stats if last_stats else "No performance stats."
-             final_status_message = f"### Generation Complete{batch_progress_text}\n**Video:** `{os.path.basename(output_to_display)}`\n{stats_display}"
-        else: # Completed but no output saved? Or only preview?
-             stats_display = last_stats if last_stats else ""
-             final_status_message = f"### Generation Finished{batch_progress_text}\n{stats_display}"
-
-        # Determine button states for the *next* potential iteration or final state
-        is_last_item_planned = not endless_run and (current_batch_item >= total_batch_count) # Check if this was the last *planned*
-        is_stopping = _stop_requested_flag or _graceful_stop_batch_flag or is_last_item_planned
-
-        # Update UI with final status for *this* item
-        yield (
-            gr.update(value=output_to_display if show_thumbnails else None, visible=show_thumbnails),
-            gr.update(value=output_to_display if show_as_image else None, visible=show_as_image),
-            gr.update(visible=False), # preview_image (hide)
-            gr.update(visible=False), # progress_desc (hide)
-            gr.update(visible=False), # progress_bar (hide)
-            gr.update(interactive=is_stopping), # start_button
-            gr.update(interactive=not is_stopping), # end_graceful_button
-            gr.update(interactive=not is_stopping), # force_stop_button
-            gr.update(), # seed
-            gr.update(visible=show_thumbnails), # first_frame
-            gr.update(visible=show_thumbnails), # last_frame
-            gr.update(visible=show_thumbnails), # extend_button
-            gr.update(visible=False), # note_message
-            gr.update(visible=True, value=final_status_message), # generation_stats
-            gr.update(visible=True, open=generation_interrupted_flag), # Open accordion if interrupted/errored
-            gr.update(visible=show_thumbnails), # frame_thumbnails_group
-            gr.update(value=final_prompt_text, visible=True), # final_processed_prompt_display
-            gr.update(visible=True) # final_prompt_accordion
-        )
-
-        # --- Loop control checks (redundant with top checks, but safe) ---
-        if _stop_requested_flag: debug("Outer loop: Breaking due to force stop flag."); break
-        if _graceful_stop_batch_flag: debug("Outer loop: Breaking due to graceful stop flag."); break
-        if not endless_run and current_batch_item >= total_batch_count: debug("Outer loop: Breaking after finishing planned batches."); break
-        # --- End Loop control checks ---
-
-        debug(f"Outer loop: Continuing to next iteration.")
-        # Optional delay between batches: time.sleep(1)
-
+        
+        # --- End of inner stream loop for this generation ---
+        debug(f"Inner loop finished for batch item {current_batch_item}. Interrupted={generation_interrupted}")
+        
+        # Check for early exits in the batch sequence
+        if _stop_requested_flag:
+            debug("Outer loop: Breaking due to force stop flag.")
+            break
+            
+        # Check endless run checkbox state 
+        if endless_run and _graceful_stop_batch_flag:
+            debug("Graceful stop requested, ending endless run after current item.")
+        
+        # Continue to next batch item if there are more and we're not stopping
+        if (not endless_run and current_batch_item >= total_batch_count) or _graceful_stop_batch_flag:
+            debug("Outer loop: Breaking after finishing planned batches.")
+            break
+            
+        debug(f"Outer loop: Continuing to next batch iteration {current_batch_item + 1}.")
+    
     # --- End of outer batch/endless loop ---
     debug("--- Batch/Endless Run Finished ---")
+    
+    # Final message based on how we exited
     final_message = "Generation sequence finished."
-    if _stop_requested_flag: final_message = "Generation sequence force stopped."
-    if _graceful_stop_batch_flag: final_message = "Generation sequence stopped gracefully."
-
-    # Final unload logic (remains the same as previous version)
-    if unload_on_end_flag and not _stop_requested_flag:
+    if _stop_requested_flag: 
+        final_message = "Generation sequence force stopped."
+    if _graceful_stop_batch_flag: 
+        final_message = "Generation sequence stopped gracefully."
+    
+    # Reset flags for next run
+    _stop_requested_flag = False
+    _graceful_stop_batch_flag = False
+    
+    # Perform final unload if needed
+    if unload_on_end_flag:
         debug("Unloading models as unload_on_end is set and batch finished.")
         try:
-            yield ( gr.update(),gr.update(),gr.update(), f"{final_message} Models unloaded.", gr.update(visible=False), gr.update(interactive=True),gr.update(interactive=False),gr.update(interactive=False), gr.update(),gr.update(),gr.update(),gr.update(),gr.update(), gr.update(),gr.update(),gr.update(),gr.update(),gr.update() )
+            yield (
+                gr.update(), gr.update(), gr.update(), 
+                f"{final_message} Unloading models...", 
+                gr.update(visible=False), gr.update(interactive=False),
+                gr.update(interactive=False), gr.update(interactive=False), 
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), 
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+            )
             model_manager.unload_all_models()
             free_mem = get_cuda_free_memory_gb(gpu)
             mem_status_update = f"Models unloaded. Free VRAM: {free_mem:.1f} GB"
             debug(mem_status_update)
-            # Yield final state *after* unload
+            
+            # Final UI state after unload
             yield (
-                gr.update(), gr.update(), gr.update(), # outputs
-                mem_status_update, # progress desc
-                gr.update(visible=False), # progress bar
-                gr.update(interactive=True), # start button enabled
-                gr.update(interactive=False), # end graceful disabled
-                gr.update(interactive=False), # force stop disabled
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), # etc
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update() # stats, frames, prompt
+                gr.update(), gr.update(), gr.update(), 
+                mem_status_update, 
+                gr.update(visible=False), gr.update(interactive=True), 
+                gr.update(interactive=False), gr.update(interactive=False),
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), 
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
             )
         except Exception as e:
             debug(f"Error unloading models at end: {e}")
             yield (
-                 # ... yield error state ...
-                 gr.update(value=f"Error during final model unload: {e}"), # progress_desc
-                 # ... ensure buttons are interactive ...
+                gr.update(), gr.update(), gr.update(), 
+                f"Error during final model unload: {e}", 
+                gr.update(visible=False), gr.update(interactive=True), 
+                gr.update(interactive=False), gr.update(interactive=False),
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), 
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
             )
     else:
-         debug("Not unloading models.")
-         # Final UI yield to ensure buttons are in correct final state
-         yield ( gr.update(),gr.update(),gr.update(), final_message, gr.update(visible=False), gr.update(interactive=True),gr.update(interactive=False),gr.update(interactive=False), gr.update(),gr.update(),gr.update(),gr.update(),gr.update(), gr.update(),gr.update(),gr.update(),gr.update(),gr.update() )
-
-    # Clean up stream reference
+        # Final UI state without unload
+        yield (
+            gr.update(), gr.update(), gr.update(), 
+            final_message, 
+            gr.update(visible=False), gr.update(interactive=True), 
+            gr.update(interactive=False), gr.update(interactive=False),
+            gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), 
+            gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+        )
+    
+    # Clean up stream
     stream = None
 
 # --- Modify Stop Handlers ---
@@ -458,15 +579,16 @@ def request_graceful_end():
     """Request a graceful end to the current generation OR the entire batch/endless run."""
     global stream, _graceful_stop_batch_flag
   
+    debug("Requesting graceful stop for current generation and batch run.")
+    
+    # Signal the generator to end gracefully if running
     if stream:
-        debug("Requesting graceful stop for *current* generation via stream.")
         stream.input_queue.push('graceful_end')
     
-    # Signal the outer batch loop to stop after this item finishes
+    # Signal the batch loop to stop after current generation finishes
     _graceful_stop_batch_flag = True
-    debug("Signalled graceful stop for the entire batch/endless sequence.")
     
-    # Update button states: Disable graceful, keep force active (until current gen finishes)
+    # Update button states
     return gr.update(interactive=False), gr.update(interactive=True)
 
 def force_immediate_stop():
