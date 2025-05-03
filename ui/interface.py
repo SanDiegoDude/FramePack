@@ -331,42 +331,41 @@ function addLightboxListeners() {
                        unload_button = gr.Button(value="Unload All Models", variant="secondary")
                        clear_cache_button = gr.Button(value="Clear CUDA Cache", variant="secondary")
                   mem_status = gr.Markdown("")
-             with gr.Row():
-                 with gr.Column(scale=2):
-                      with gr.Row():
-                           with gr.Column(scale=6):
-                                start_button = gr.Button(value="Start Generation", elem_classes="start-button")
-                           with gr.Column(scale=1):
-                                batch_count = gr.Number(value=1, minimum=1, step=1, precision=0, 
-                                                      label="Batch", show_label=False, container=True)
-                      
-                      with gr.Row():
-                           endless_run_button = gr.Button(value="Endless Run", elem_classes="endless-run-button")
-                      
-                      with gr.Row():
-                           with gr.Column(scale=1):
-                                end_graceful_button = gr.Button(value="End Generation", interactive=False, 
-                                                             elem_classes="end-graceful-button")
-                           with gr.Column(scale=1):
-                                force_stop_button = gr.Button(value="Force Stop", interactive=False, 
-                                                           elem_classes="force-stop-button")
-                      progress_bar = gr.HTML(visible=False)
-                      progress_desc = gr.Markdown(visible=False)
-                      preview_image = gr.Image(label="Next Latents", height=200, visible=False)
-                      result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, elem_classes="result-container", interactive=False, loop=True, visible=False)
-                      result_image_html = gr.Image(label='Single Frame Image', elem_classes="result-container clickable-image", visible=False, elem_id="result_image_output")
-                      extend_button = gr.Button(value="Extend This Video", visible=False, elem_classes="extend-button")
-                      with gr.Accordion("Final Processed Prompt", open=False, visible=False) as final_prompt_accordion:
-                           final_processed_prompt_display = gr.Textbox(label="Prompt Sent to Model", lines=4, interactive=False, show_copy_button=True)
-                      with gr.Accordion("Generation Complete (Expand for details)", open=False, visible=False) as generation_stats_accordion:
-                           generation_stats = gr.Markdown(value="", elem_id="generation_stats")
-                      note_message = gr.Markdown(value="", visible=False, elem_id="sampling_note")
-                      with gr.Group(visible=False, elem_classes="frame-thumbnail-container") as frame_thumbnails_group:
-                           gr.Markdown("### Frame Comparison", elem_classes="frame-header")
-                           with gr.Row(elem_classes="frame-thumbnail-row"):
-                                first_frame = gr.Image(label="First Frame", elem_classes="frame-thumbnail clickable-image", visible=True, show_download_button=True, container=True, elem_id="first_frame_output")
-                                last_frame = gr.Image(label="Last Frame", elem_classes="frame-thumbnail clickable-image", visible=True, show_download_button=True, container=True, elem_id="last_frame_output")
-                      gr.HTML("""<div id="lightbox-overlay" class="lightbox-overlay" onclick="handleOverlayClick(event)"><div class="lightbox-content"><span class="lightbox-close" onclick="closeLightbox()">×</span><img id="lightbox-image" src="" alt="Lightbox Image" onclick="toggleZoom()" /><div class="lightbox-controls"><button onclick="toggleZoom()">Toggle Zoom</button><button onclick="closeLightbox()">Close</button></div></div></div>""")
+             with gr.Column(scale=2):
+                  with gr.Row():
+                       with gr.Column(scale=6):
+                            start_button = gr.Button(value="Start Generation", elem_classes="start-button")
+                       with gr.Column(scale=1):
+                            batch_count = gr.Number(value=1, minimum=1, step=1, precision=0, 
+                                                  label="Batch", show_label=False, container=True)
+                  
+                  with gr.Row():
+                       endless_run_button = gr.Button(value="Endless Run", elem_classes="endless-run-button")
+                  
+                  with gr.Row():
+                       with gr.Column(scale=1):
+                            end_graceful_button = gr.Button(value="End Generation", interactive=False, 
+                                                         elem_classes="end-graceful-button")
+                       with gr.Column(scale=1):
+                            force_stop_button = gr.Button(value="Force Stop", interactive=False, 
+                                                       elem_classes="force-stop-button")
+                  progress_bar = gr.HTML(visible=False)
+                  progress_desc = gr.Markdown(visible=False)
+                  preview_image = gr.Image(label="Next Latents", height=200, visible=False)
+                  result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, elem_classes="result-container", interactive=False, loop=True, visible=False)
+                  result_image_html = gr.Image(label='Single Frame Image', elem_classes="result-container clickable-image", visible=False, elem_id="result_image_output")
+                  extend_button = gr.Button(value="Extend This Video", visible=False, elem_classes="extend-button")
+                  with gr.Accordion("Final Processed Prompt", open=False, visible=False) as final_prompt_accordion:
+                       final_processed_prompt_display = gr.Textbox(label="Prompt Sent to Model", lines=4, interactive=False, show_copy_button=True)
+                  with gr.Accordion("Generation Complete (Expand for details)", open=False, visible=False) as generation_stats_accordion:
+                       generation_stats = gr.Markdown(value="", elem_id="generation_stats")
+                  note_message = gr.Markdown(value="", visible=False, elem_id="sampling_note")
+                  with gr.Group(visible=False, elem_classes="frame-thumbnail-container") as frame_thumbnails_group:
+                       gr.Markdown("### Frame Comparison", elem_classes="frame-header")
+                       with gr.Row(elem_classes="frame-thumbnail-row"):
+                            first_frame = gr.Image(label="First Frame", elem_classes="frame-thumbnail clickable-image", visible=True, show_download_button=True, container=True, elem_id="first_frame_output")
+                            last_frame = gr.Image(label="Last Frame", elem_classes="frame-thumbnail clickable-image", visible=True, show_download_button=True, container=True, elem_id="last_frame_output")
+                  gr.HTML("""<div id="lightbox-overlay" class="lightbox-overlay" onclick="handleOverlayClick(event)"><div class="lightbox-content"><span class="lightbox-close" onclick="closeLightbox()">×</span><img id="lightbox-image" src="" alt="Lightbox Image" onclick="toggleZoom()" /><div class="lightbox-controls"><button onclick="toggleZoom()">Toggle Zoom</button><button onclick="closeLightbox()">Close</button></div></div></div>""")
 
     # --- End of UI Layout Definition ---
 
