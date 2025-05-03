@@ -56,6 +56,7 @@ def get_css():
     /* Batch Count Input Field */
     .batch-count input {
         width: 100% !important;
+        height 100% !important;
         padding: 4px 6px !important;
         font-size: 14px !important;
         text-align: center;
