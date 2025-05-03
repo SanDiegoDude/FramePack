@@ -32,12 +32,33 @@ def get_css():
         cursor: not-allowed !important;
     }
 
-    /* Batch Count Input - narrow width */
+    /* Start Button Column */
+    .start-button-column {
+        flex-grow: 9 !important;
+        flex-shrink: 1 !important;
+        flex-basis: 0 !important;
+        display: flex;
+        align-items: center;
+    }
+
+    /* Batch Count Column */
+    .batch-count-column {
+        flex-grow: 1 !important;
+        flex-shrink: 1 !important;
+        flex-basis: 0 !important;
+        max-width: 70px !important;
+        min-width: 50px !important;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+    }
+
+    /* Batch Count Input Field */
     .batch-count input {
-        width: 10% !important;
-        padding: 4px !important;
+        width: 100% !important;
+        padding: 4px 6px !important;
         font-size: 14px !important;
-        text-align: center !important;
+        text-align: center;
     }
    
     /* Endless Run Button (Blue) */
