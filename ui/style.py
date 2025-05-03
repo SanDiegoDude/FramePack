@@ -31,6 +31,15 @@ def get_css():
         color: #ccc !important;
         cursor: not-allowed !important;
     }
+
+    # Add this CSS block before the Frame Thumbnails section:
+    /* Batch Count Input - narrow width */
+    .batch-count input {
+        width: 50px !important;
+        padding: 4px !important;
+        font-size: 14px !important;
+        text-align: center !important;
+    }
    
     /* Endless Run Button (Blue) */
     .endless-run-button button {
