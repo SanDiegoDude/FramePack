@@ -114,7 +114,7 @@ async function handlePaste(event, promptElementId, modeElementId, imgInputId, st
                         endFrameHasValue: !!document.querySelector('#' + endFrameId + ' img')
                     });
                     textarea.value = pasteData;
-                    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                    textarea.dispatchEvent(new Event('change', { bubbles: true }));
                     console.log('Sent base64 data to hidden Gradio textbox.');
                 } else { console.error('Could not find textarea within hidden Gradio component:', hiddenTextboxId); }
             } else { console.error('Could not find hidden Gradio component:', hiddenTextboxId); }
@@ -166,16 +166,25 @@ function toggleZoom() {
 }
 function handleOverlayClick(event) { if (event.target.id === 'lightbox-overlay') { closeLightbox(); } }
 document.addEventListener('keydown', function(event) { if (event.key === 'Escape') { closeLightbox(); } });
-function handleImageClick(event) { openLightbox(event.target); }
+function handleImageClick(event) {
+    console.log("handleImageClick triggered for:", event.target); // ADD LOGGING
+    openLightbox(event.target);
+}
 function addLightboxListeners() {
+    let foundClickable = 0; // ADD COUNTER
+    let foundImgTags = 0; // ADD COUNTER
     document.querySelectorAll('.clickable-image').forEach(elem => {
+        foundClickable++; // INCREMENT
         const imgTag = elem.querySelector('img');
         if (imgTag) {
-            imgTag.removeEventListener('click', handleImageClick);
-            imgTag.addEventListener('click', handleImageClick);
+            foundImgTags++; // INCREMENT
+            imgTag.removeEventListener('click', handleImageClick); // Remove previous
+            imgTag.addEventListener('click', handleImageClick); // Add new
+        } else {
+            // console.warn("Found .clickable-image but no img tag inside:", elem); // Optional Warning
         }
     });
-    // console.log('Lightbox click listeners updated.');
+    console.log(`addLightboxListeners: Found ${foundClickable} clickable elements, attached listener to ${foundImgTags} img tags.`); // ADD LOGGING
 }
 
 // --- Main Attachment Function ---
@@ -295,8 +304,10 @@ function attachAllListeners(promptId, modeId, imgId, startId, endId, hiddenId) {
 
         # --- Python Callbacks & Event Handlers (Correctly Indented) ---
         def handle_image_paste_data(paste_data_json):
+            debug(f"Python: handle_image_paste_data received raw data: '{paste_data_json}'") 
             try:
                 if not paste_data_json or paste_data_json.strip() == "":
+                    debug("Python: Paste data is empty, doing nothing.")
                     return gr.update(), gr.update(), gr.update() # No change if empty
 
                 paste_data = json.loads(paste_data_json)
