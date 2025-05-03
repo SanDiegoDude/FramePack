@@ -450,12 +450,13 @@ function addLightboxListeners() {
         extend_button.click(fn=setup_for_extension, inputs=[result_video], outputs=[mode_selector, input_video, input_image, start_frame, end_frame, video_container, video_extension_controls])
 
         # Define process inputs list
-        ips = [ mode_selector, input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h, prompt, n_prompt, seed, latent_window_size, segment_count, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color, keyframe_weight, input_video, extension_direction, extension_frames, overlap_slider, trim_percentage, gaussian_blur, llm_encoder_weight, clip_encoder_weight, clean_latent_weight, batch_count, endless_run, unload_on_end_state ]
+        ips = [ mode_selector, input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h, prompt, n_prompt, seed, latent_window_size, segment_count, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color, keyframe_weight, input_video, extension_direction, extension_frames, overlap_slider, trim_percentage, gaussian_blur, llm_encoder_weight, clip_encoder_weight, clean_latent_weight, batch_count, unload_on_end_state ]
         # Define process outputs list
         output_list = [ result_video, result_image_html, preview_image, progress_desc, progress_bar, start_button, end_graceful_button, force_stop_button, seed, first_frame, last_frame, extend_button, note_message, generation_stats, generation_stats_accordion, frame_thumbnails_group, final_processed_prompt_display, final_prompt_accordion ]
 
         prompt.submit(fn=process_wrapper, inputs=ips, outputs=output_list)
         start_button.click(fn=process_wrapper, inputs=ips, outputs=output_list)
+        endless_run_button.click(fn=endless_process_wrapper, inputs=ips, outputs=output_list) # NEW
         end_graceful_button.click(fn=request_graceful_end, outputs=[end_graceful_button, force_stop_button])
         force_stop_button.click(fn=force_immediate_stop, outputs=[end_graceful_button, force_stop_button])
 
