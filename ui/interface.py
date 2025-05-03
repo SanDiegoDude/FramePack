@@ -68,6 +68,18 @@ def create_interface(model_manager, video_generator, unload_on_end_flag=False):
 
     debug("Creating UI interface")
 
+    # --- Define Lightbox CSS ---
+    lightbox_css = """
+/* Lightbox Structure */
+.lightbox-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.8); display: none; justify-content: center; align-items: center; z-index: 1000; cursor: pointer; }
+.lightbox-content { position: relative; background: #111; padding: 20px; border-radius: 5px; max-width: 90vw; max-height: 90vh; display: flex; justify-content: center; align-items: center; overflow: hidden; cursor: default; }
+.lightbox-content img { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; cursor: pointer; user-select: none; -webkit-user-drag: none; }
+.lightbox-close { position: absolute; top: 10px; right: 15px; font-size: 2em; color: white; cursor: pointer; text-shadow: 0 0 5px black; }
+.lightbox-controls { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.6); padding: 5px 10px; border-radius: 5px; display: flex; gap: 10px; }
+.lightbox-controls button { background: #555; color: white; border: none; padding: 5px 10px; cursor: pointer; border-radius: 3px; }
+.lightbox-controls button:hover { background: #777; }
+"""
+    
     def process_wrapper(*args):
         for values in process(*args, video_generator=video_generator, model_manager=model_manager):
             yield values
