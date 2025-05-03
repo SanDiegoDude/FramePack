@@ -277,6 +277,8 @@ function attachAllListeners(promptId, modeId, imgId, startId, endId, hiddenId) {
                             gr.Markdown("""**Endless Run**<span style='font-size:0.9em; color:#999;'>Keep generating until unchecked or stopped.</span>""")
                        with gr.Column(scale=1, min_width=80):
                             endless_run = gr.Checkbox(value=False, show_label=False, container=False)
+                            from ui.callbacks import endless_run_checkbox_changed
+                            endless_run.change(fn=endless_run_checkbox_changed, inputs=[endless_run], outputs=[endless_run])
                   with gr.Row():
                        with gr.Column(scale=1):
                             end_graceful_button = gr.Button(value="End Generation", interactive=False, elem_classes="end-graceful-button")
