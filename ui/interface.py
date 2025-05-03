@@ -304,13 +304,37 @@ function attachAllListeners(promptId, modeId, imgId, startId, endId, hiddenId) {
                 with gr.Row():
                     start_button = gr.Button(value="Start Generation", elem_classes="start-button")
 
-                # User specified moving batch/endless here:
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        batch_count = gr.Number(label="Batch Count", value=1, minimum=1, step=1, precision=0, info="Number of videos to generate sequentially.")
-                    with gr.Column(scale=1):
-                        endless_run = gr.Checkbox(label="Endless Run", value=False, info="Keep generating until unchecked or stopped.")
+                # --- NEW Layout for Batch Count ---
+                with gr.Row(equal_height=True, variant="compact"): # Use compact variant for less padding
+                    with gr.Column(scale=3):
+                         gr.Markdown("""
+                         **Batch Count**
+                         <span style='font-size:0.9em; color:#999;'>Number of videos to generate sequentially.</span>
+                         """)
+                    with gr.Column(scale=1, min_width=80): # Ensure number input has some minimum width
+                        batch_count = gr.Number(
+                            value=1, minimum=1, step=1, precision=0,
+                            show_label=False, # Label is now in Markdown
+                            container=False # Remove container background/border
+                        )
+                # --- END NEW Layout ---
 
+                # --- NEW Layout for Endless Run ---
+                with gr.Row(equal_height=True, variant="compact"):
+                    with gr.Column(scale=3):
+                         gr.Markdown("""
+                         **Endless Run**
+                         <span style='font-size:0.9em; color:#999;'>Keep generating until unchecked or stopped.</span>
+                         """)
+                    with gr.Column(scale=1, min_width=80): # Align checkbox
+                        endless_run = gr.Checkbox(
+                            value=False,
+                            show_label=False, # Label is now in Markdown
+                            container=False # Remove container background/border
+                        )
+                # --- END NEW Layout ---
+
+                # Stop buttons row
                 with gr.Row():
                     with gr.Column(scale=1):
                         end_graceful_button = gr.Button(value="End Generation", interactive=False, elem_classes="end-graceful-button")
