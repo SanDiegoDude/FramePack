@@ -103,8 +103,8 @@ def process(
         # --- Initial UI Yield for this Batch Item ---
         # Keep previous final outputs visible, hide previews/progress for the new one
         yield (
-            gr.update(), # result_video (no change yet)
-            gr.update(), # result_image_html (no change yet)
+            gr.update(), # result_video (keep current video visible)
+            gr.update(), # result_image_html (keep current image visible)
             gr.update(visible=False), # preview_image (hide previous)
             f"Starting Generation{batch_progress_text}...", # progress_desc
             gr.update(visible=False), # progress_bar (hide previous)
@@ -112,15 +112,15 @@ def process(
             gr.update(interactive=True), # end_graceful_button
             gr.update(interactive=True), # force_stop_button
             gr.update(value=run_seed), # seed display
-            gr.update(), # first_frame (no change yet)
-            gr.update(), # last_frame (no change yet)
-            gr.update(), # extend_button (no change yet)
+            gr.update(), # first_frame (keep previous visible)
+            gr.update(), # last_frame (keep previous visible)
+            gr.update(), # extend_button (keep previous visible)
             gr.update(visible=False), # note_message (hide previous)
-            gr.update(), # generation_stats (no change yet)
-            gr.update(), # generation_stats_accordion (no change yet)
-            gr.update(), # frame_thumbnails_group (no change yet)
-            gr.update(), # final_processed_prompt_display (no change yet)
-            gr.update() # final_prompt_accordion (no change yet)
+            gr.update(), # generation_stats (keep previous visible)
+            gr.update(), # generation_stats_accordion (keep previous visible)
+            gr.update(), # frame_thumbnails_group (keep previous visible)
+            gr.update(), # final_processed_prompt_display (keep previous visible)
+            gr.update() # final_prompt_accordion (keep previous visible)
         )
         # ------------------------------------------------
 
