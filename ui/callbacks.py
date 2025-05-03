@@ -36,16 +36,18 @@ def process(
     global stream, _stop_requested_flag, _graceful_stop_batch_flag
   
     # --- Reset global flags at the start of a new 'Start Generation' click ---
-    # IMPORTANT: Always reset flags at the beginning of a new run sequence
     _stop_requested_flag = False
     _graceful_stop_batch_flag = False
     debug("Reset stop flags for new run sequence.")
     # --------------------------------------------------------------------
-
+  
     current_batch_item = 0
     total_batch_count = int(batch_count) if not endless_run else float('inf')
     run_seed = seed
     last_successful_output = None # Store the last good output path/data
+    
+    # Add tracking variables to maintain state between updates
+    preview_video_visible = False  # Track preview video visibility
 
     while True: # Outer loop for batch/endless
 
@@ -188,9 +190,10 @@ def process(
                 preview_val = None
                 desc_val = last_desc # Use previous desc if only preview video comes
                 html_val = gr.update() # Keep existing progress bar if only preview
-
+            
                 if flag == 'preview_video':
-                     preview_val = data # Data is the preview image/video path
+                    preview_val = data # Data is the preview image/video path
+                    preview_video_visible = True  # Mark preview as visible when we get a new one
                 elif flag == 'progress':
                     # Properly handle unpacking and potential object serialization issues
                     if isinstance(data, tuple) and len(data) == 3:
@@ -198,18 +201,17 @@ def process(
                         # Ensure desc_val is properly stringified
                         if desc_val is not None and not isinstance(desc_val, str):
                             desc_val = str(desc_val)
-                        if desc_val: 
-                            last_desc = desc_val
+                        if desc_val: last_desc = desc_val
                     else:
                         debug(f"Warning: Unexpected progress data format: {data}")
                         preview_val = None
                         desc_val = last_desc  # Use previous desc
                         html_val = gr.update()  # Keep existing progress bar
-
-                # Yield updates: CLEAR old outputs, show new progress/preview
+            
+                # Yield updates: Maintain preview video visibility during progress updates
                 yield (
                     gr.update(value=data if flag=='preview_video' else None, 
-                             visible=(flag=='preview_video' or (flag=='progress' and result_video.visible))), # result_video - keep visible if it was already showing
+                            visible=(flag=='preview_video' or (flag=='progress' and preview_video_visible))), # Use tracked state
                     gr.update(visible=False),                       # result_image_html (clear image)
                     gr.update(value=preview_val, visible=True),     # preview_image (show new preview)
                     f"{desc_val}{batch_progress_text}",             # progress_desc
@@ -236,6 +238,9 @@ def process(
                 # Handle None frames with placeholders if needed
                 first_frame_img = first_frame_img if first_frame_img is not None else np.zeros((64, 64, 3), dtype=np.uint8)
                 last_frame_img = last_frame_img if last_frame_img is not None else np.zeros((64, 64, 3), dtype=np.uint8)
+                
+                # Reset preview state
+                preview_video_visible = False
             
                 # Yield updates: Show final video, hide preview & image output (but not other previous outputs)
                 yield (
