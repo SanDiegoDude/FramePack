@@ -459,7 +459,12 @@ function addLightboxListeners() {
         ]
         prompt.submit(fn=process_wrapper, inputs=ips, outputs=output_list)
         start_button.click(fn=process_wrapper, inputs=ips, outputs=output_list)
-        endless_run_button.click(fn=endless_process_wrapper, inputs=ips, outputs=output_list) # NEW
+        def endless_run_click(*args):
+            """Wrapper to ensure video_generator and model_manager are passed to the endless_process_wrapper"""
+            return endless_process_wrapper(*args, video_generator=video_generator, model_manager=model_manager)
+        
+        # Then update the button connection
+        endless_run_button.click(fn=endless_run_click, inputs=ips, outputs=output_list)
         end_graceful_button.click(fn=request_graceful_end, outputs=[end_graceful_button, force_stop_button])
         force_stop_button.click(fn=force_immediate_stop, outputs=[end_graceful_button, force_stop_button])
 
