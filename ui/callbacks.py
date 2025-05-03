@@ -33,36 +33,13 @@ def process(
     """
     Main processing function for all generation modes with batch/endless support.
     """
-
-    def endless_run_checkbox_changed(is_checked):
-        """
-        Callback: Detect if endless_run checkbox is unchecked during endless run,
-        and set stop flag for graceful stop when unchecked (only if *was* checked).
-        """
-        global _graceful_stop_batch_flag
-        if not is_checked:
-            _graceful_stop_batch_flag = True
-            debug("Endless run checkbox UNCHECKED - will gracefully stop after current generation.")
-        return gr.update(value=is_checked)
-
-    
-    global stream, _stop_requested_flag
-
-    def endless_run_checkbox_changed(is_checked):
-    """
-    Callback: Detect if endless_run checkbox is unchecked during endless run,
-    and set stop flag for graceful stop when unchecked (only if *was* checked).
-    """
-    global _graceful_stop_batch_flag
-    if not is_checked:
-        _graceful_stop_batch_flag = True
-        debug("Endless run checkbox UNCHECKED - will gracefully stop after current generation.")
-    return gr.update(value=is_checked)
+    global stream, _stop_requested_flag, _graceful_stop_batch_flag
+  
     # --- Reset global flags at the start of a new 'Start Generation' click ---
-    if not _stop_requested_flag and not _graceful_stop_batch_flag: # Only reset if not already stopped mid-batch
-        debug("Resetting stop flags for new run sequence.")
-        _stop_requested_flag = False
-        _graceful_stop_batch_flag = False
+    # IMPORTANT: Always reset flags at the beginning of a new run sequence
+    _stop_requested_flag = False
+    _graceful_stop_batch_flag = False
+    debug("Reset stop flags for new run sequence.")
     # --------------------------------------------------------------------
 
     current_batch_item = 0
@@ -124,26 +101,26 @@ def process(
         # --------------------------------------------------------------------
 
         # --- Initial UI Yield for this Batch Item ---
-        # --- Initial UI Yield: Do NOT clear previous output video/image here ---
+        # Keep previous final outputs visible, hide previews/progress for the new one
         yield (
-            gr.update(),  # result_video (no change yet)
-            gr.update(),  # result_image_html (no change yet)
-            gr.update(visible=False),  # preview_image (hide previous)
-            f"Starting Generation{batch_progress_text}...",  # progress_desc
-            gr.update(visible=False),  # progress_bar (hide previous)
-            gr.update(interactive=False),  # start_button
-            gr.update(interactive=True),  # end_graceful_button
-            gr.update(interactive=True),  # force_stop_button
-            gr.update(value=run_seed),  # seed display
-            gr.update(),  # first_frame (no change yet)
-            gr.update(),  # last_frame (no change yet)
-            gr.update(),  # extend_button (no change yet)
-            gr.update(visible=False),  # note_message (hide previous)
-            gr.update(),  # generation_stats (no change yet)
-            gr.update(),  # generation_stats_accordion (no change yet)
-            gr.update(),  # frame_thumbnails_group (no change yet)
-            gr.update(),  # final_processed_prompt_display (no change yet)
-            gr.update()   # final_prompt_accordion (no change yet)
+            gr.update(), # result_video (no change yet)
+            gr.update(), # result_image_html (no change yet)
+            gr.update(visible=False), # preview_image (hide previous)
+            f"Starting Generation{batch_progress_text}...", # progress_desc
+            gr.update(visible=False), # progress_bar (hide previous)
+            gr.update(interactive=False), # start_button
+            gr.update(interactive=True), # end_graceful_button
+            gr.update(interactive=True), # force_stop_button
+            gr.update(value=run_seed), # seed display
+            gr.update(), # first_frame (no change yet)
+            gr.update(), # last_frame (no change yet)
+            gr.update(), # extend_button (no change yet)
+            gr.update(visible=False), # note_message (hide previous)
+            gr.update(), # generation_stats (no change yet)
+            gr.update(), # generation_stats_accordion (no change yet)
+            gr.update(), # frame_thumbnails_group (no change yet)
+            gr.update(), # final_processed_prompt_display (no change yet)
+            gr.update() # final_prompt_accordion (no change yet)
         )
         # ------------------------------------------------
 
@@ -198,7 +175,7 @@ def process(
 
                 # Yield updates: CLEAR old outputs, show new progress/preview
                 yield (
-                    gr.update(value=preview_val if flag=='preview_video' else None, visible=(flag=='preview_video')), # result_video (show preview if video)
+                    gr.update(value=data if flag=='preview_video' else None, visible=(flag=='preview_video')), # result_video (show preview if video)
                     gr.update(visible=False),                       # result_image_html (clear image)
                     gr.update(value=preview_val, visible=True),     # preview_image (show new preview)
                     f"{desc_val}{batch_progress_text}",             # progress_desc
@@ -431,15 +408,14 @@ def force_immediate_stop():
     """Force an immediate stop to the generation process and the entire batch."""
     global stream
     global _stop_requested_flag # Need access to the flag controlling the outer loop
-
+  
     debug("Requesting FORCE STOP.")
     _stop_requested_flag = True # Signal the outer loop and inner checks
-
+  
     if stream:
         debug("Pushing 'end' to stream for immediate generator stop.")
         stream.input_queue.push('end') # Tell the generator to stop ASAP
-
-    # Reset batch/endless UI elements immediately (handled by the yield in process)
+  
     # Return updates for both buttons: Disable both immediately
     return gr.update(interactive=False), gr.update(interactive=False)
 
