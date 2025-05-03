@@ -402,7 +402,7 @@ def process(
                 debug(f"Inner Loop: Received 'end' event with data={data}")
                 
                 # Check if generation was error/interrupted
-                is_error = (data == "wildcard_error" or data == "lora_error" or data == "prompt_error" or 
+                is_error = (data == "wildcard_error" or data == "lora_error" or data == "prompt_error" or
                            data == "validation_error")
                 generation_interrupted = generation_interrupted or (data == "interrupted") or is_error
                 
