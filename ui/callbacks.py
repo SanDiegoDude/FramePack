@@ -340,9 +340,9 @@ def process(
                 )
             
             elif flag == 'file_img':
-                (img_filename, _) = data
-                is_image_output = True
-                image_path = img_filename
+                # Properly unpack the data with the html_link
+                (img_filename, html_link) = data
+                debug(f"Process: yielding file_img/single image output: {img_filename}")
                 
                 # Save for next batch iteration
                 last_output_filename = None
@@ -353,25 +353,26 @@ def process(
                 last_first_frame = None
                 last_last_frame = None
                 
+                # Use the same approach from your working code
                 yield (
-                    gr.update(visible=False),  # result_video
-                    gr.update(value=img_filename, visible=True),  # result_image_html
-                    gr.update(visible=False),  # preview_image
-                    gr.update(visible=False),  # progress_desc
-                    gr.update(visible=False),  # progress_bar
-                    gr.update(interactive=False),  # start_button - updated in 'end'
-                    gr.update(interactive=True),  # end_graceful_button
-                    gr.update(interactive=True),  # force_stop_button
-                    gr.update(),  # seed
-                    gr.update(visible=False),  # first_frame
-                    gr.update(visible=False),  # last_frame
-                    gr.update(visible=False),  # extend_button
-                    gr.update(visible=False),  # note_message
-                    gr.update(visible=False),  # generation_stats - updated in 'end'
-                    gr.update(visible=False),  # generation_stats_accordion
-                    gr.update(visible=False),  # frame_thumbnails
-                    gr.update(visible=False),  # final_processed_prompt
-                    gr.update(visible=False)  # final_prompt_accordion
+                    gr.update(visible=False),                           # result_video
+                    gr.update(value=img_filename, visible=True),        # result_image_html - SET VALUE HERE
+                    gr.update(visible=False),                           # preview_image
+                    f"Generated single image!<br>Saved as <code>{img_filename}</code>",  # progress_desc - SHOW FILENAME
+                    gr.update(visible=False),                           # progress_bar
+                    gr.update(interactive=False),                       # start_button (will update in 'end')
+                    gr.update(interactive=True),                        # end_graceful_button
+                    gr.update(interactive=True),                        # force_stop_button
+                    gr.update(),                                        # seed
+                    gr.update(visible=False),                           # first_frame
+                    gr.update(visible=False),                           # last_frame
+                    gr.update(visible=False),                           # extend_button
+                    gr.update(visible=False),                           # note_message
+                    gr.update(visible=False),                           # generation_stats
+                    gr.update(visible=False, open=False),               # generation_stats_accordion
+                    gr.update(visible=False),                           # frame_thumbnails
+                    gr.update(visible=False),                           # final_processed_prompt
+                    gr.update(visible=False)                            # final_prompt_accordion
                 )
             
             elif flag == 'end':
@@ -428,26 +429,26 @@ def process(
                         gr.update(visible=True)  # final_prompt_accordion
                     )
                 elif is_image_output:
-                    # Handle image output completion
+                    # Use the approach from your working code - DON'T set value again, just visibility
                     yield (
-                        gr.update(visible=False),  # result_video
-                        gr.update(value=image_path, visible=True),  # result_image_html
-                        gr.update(visible=False),  # preview_image
-                        gr.update(visible=False),  # progress_desc
-                        gr.update(visible=False),  # progress_bar
-                        gr.update(interactive=True),  # start_button
-                        gr.update(interactive=False),  # end_graceful_button
-                        gr.update(interactive=False),  # force_stop_button
-                        gr.update(),  # seed
-                        gr.update(visible=False),  # first_frame
-                        gr.update(visible=False),  # last_frame
-                        gr.update(visible=False),  # extend_button
-                        gr.update(visible=False),  # note_message
+                        gr.update(visible=False),                           # result_video
+                        gr.update(visible=True),                            # result_image_html - KEEP VISIBLE ONLY
+                        gr.update(visible=False),                           # preview_image
+                        f"Generated single image!<br><a href=\"file/{image_path}\" target=\"_blank\">Click here to open full size in new tab.</a><br><code>{image_path}</code>",  # progress_desc - INCLUDE LINK
+                        gr.update(visible=False),                           # progress_bar
+                        gr.update(interactive=True, value="Start Generation"), # start_button 
+                        gr.update(interactive=False, value="End Generation"),  # end_graceful_button
+                        gr.update(interactive=False, value="Force Stop"),      # force_stop_button
+                        gr.update(),                                        # seed
+                        gr.update(visible=False),                           # first_frame
+                        gr.update(visible=False),                           # last_frame
+                        gr.update(visible=False),                           # extend_button
+                        gr.update(visible=False),                           # note_message
                         gr.update(visible=True, value=f"Generated single image!<br><code>{image_path}</code>\n{last_stats}"),  # generation_stats
-                        gr.update(visible=True, open=False),  # generation_stats_accordion
-                        gr.update(visible=False),  # frame_thumbnails
-                        gr.update(value=final_prompt_text, visible=True),  # final_processed_prompt
-                        gr.update(visible=True)  # final_prompt_accordion
+                        gr.update(visible=True, open=False),                # generation_stats_accordion
+                        gr.update(visible=False),                           # frame_thumbnails
+                        gr.update(value=final_prompt_text, visible=True),   # final_processed_prompt
+                        gr.update(visible=True)                             # final_prompt_accordion
                     )
                 else:
                     # Handle video output completion
