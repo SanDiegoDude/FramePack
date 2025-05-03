@@ -58,6 +58,28 @@ def debug_aware_video_postprocess(self, y):
 gr.Video.postprocess = debug_aware_video_postprocess
 
 
+def normal_process_handler(*args):
+    """Handler for normal processing with batch count"""
+    from ui.callbacks import process  # Import process function
+    # This must be a generator function that yields
+    yield from process(*args, endless_run=False, 
+                      video_generator=video_generator,
+                      model_manager=model_manager)
+
+def endless_process_handler(*args):
+    """Handler for endless processing"""
+    from ui.callbacks import process  # Import process function
+    
+    # Modify batch_count for endless mode (position 30)
+    args_list = list(args)
+    if len(args_list) > 30:  # batch_count is at position 30
+        args_list[30] = 1
+    
+    # This must be a generator function that yields
+    yield from process(*args_list, endless_run=True,
+                     video_generator=video_generator,
+                     model_manager=model_manager)
+
 def create_interface(model_manager, video_generator, unload_on_end_flag=False):
     from ui.callbacks import (
         process, request_graceful_end, force_immediate_stop, update_video_stats,
@@ -457,11 +479,9 @@ function addLightboxListeners() {
             generation_stats, generation_stats_accordion, frame_thumbnails_group, 
             final_processed_prompt_display, final_prompt_accordion
         ]
-        prompt.submit(fn=process_wrapper, inputs=ips, outputs=output_list)
-        start_button.click(fn=process_wrapper, inputs=ips, outputs=output_list)
-        def endless_run_click(*args):
-            """Wrapper to ensure video_generator and model_manager are passed to the endless_process_wrapper"""
-            return endless_process_wrapper(*args, video_generator=video_generator, model_manager=model_manager)
+        prompt.submit(fn=normal_process_handler, inputs=ips, outputs=output_list)
+        start_button.click(fn=normal_process_handler, inputs=ips, outputs=output_list)
+        endless_run_button.click(fn=endless_process_handler, inputs=ips, outputs=output_list)
         
         # Then update the button connection
         endless_run_button.click(fn=endless_run_click, inputs=ips, outputs=output_list)
