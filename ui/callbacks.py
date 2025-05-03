@@ -18,6 +18,22 @@ stream = None
 _stop_requested_flag = False
 _graceful_stop_batch_flag = False
 
+def process_wrapper(*args, video_generator=None, model_manager=None):
+    """Wrapper for normal generation with batch count"""
+    endless_run = False
+    return process(*args, endless_run=endless_run, video_generator=video_generator, model_manager=model_manager)
+
+def endless_process_wrapper(*args, video_generator=None, model_manager=None):
+    """Wrapper for endless generation"""
+    endless_run = True
+    # Set batch count to 1 when using endless mode - we don't need both
+    args_list = list(args)
+    # Find batch_count in args - it should be 5 positions from the end based on function signature
+    batch_count_position = -5  # Adjust if needed based on your args list
+    args_list[batch_count_position] = 1
+    
+    return process(*args_list, endless_run=endless_run, video_generator=video_generator, model_manager=model_manager)
+    
 def process(
     mode, input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h,
     prompt, n_prompt, seed,
@@ -148,6 +164,7 @@ def process(
             f"Starting Generation{batch_progress_text}...",  # progress_desc
             gr.update(visible=False),  # progress_bar
             gr.update(interactive=False),  # start_button
+            gr.update(interactive=False),  # endless_run_button 
             gr.update(interactive=True),  # end_graceful_button
             gr.update(interactive=True),  # force_stop_button
             gr.update(value=run_seed),  # seed display
@@ -249,6 +266,7 @@ def process(
                     "Generating video...",  # progress_desc
                     gr.update(visible=True),  # progress_bar
                     gr.update(interactive=False),  # start_button
+                    gr.update(interactive=False),  # endless_run_button 
                     gr.update(interactive=True),  # end_graceful_button
                     gr.update(interactive=True),  # force_stop_button
                     gr.update(),  # seed
@@ -283,6 +301,7 @@ def process(
                     f"{desc_val}{batch_progress_text}",  # progress_desc
                     gr.update(value=html_val, visible=True),  # progress_bar
                     gr.update(interactive=False),  # start_button
+                    gr.update(interactive=False),  # endless_run_button 
                     gr.update(interactive=True),  # end_graceful_button
                     gr.update(interactive=True),  # force_stop_button
                     gr.update(),  # seed
@@ -325,6 +344,7 @@ def process(
                     gr.update(visible=False),  # progress_desc
                     gr.update(visible=False),  # progress_bar
                     gr.update(interactive=False),  # start_button - updated in 'end'
+                    gr.update(interactive=False),  # endless_run_button 
                     gr.update(interactive=True),  # end_graceful_button
                     gr.update(interactive=True),  # force_stop_button
                     gr.update(),  # seed
@@ -363,6 +383,7 @@ def process(
                     f"Generated single image!<br>Saved as <code>{img_filename}</code>",  # progress_desc
                     gr.update(visible=False),                           # progress_bar
                     gr.update(interactive=True),                        # start_button - IMPORTANT: Make interactive immediately
+                    gr.update(interactive=True),                        # endless_run_button 
                     gr.update(interactive=False),                       # end_graceful_button
                     gr.update(interactive=False),                       # force_stop_button
                     gr.update(),                                        # seed
@@ -395,6 +416,7 @@ def process(
                         f"Error: {data}. Batch stopped.",  # progress_desc
                         gr.update(visible=False),  # progress_bar
                         gr.update(interactive=True),  # start_button
+                        gr.update(interactive=True),  # endless_run_button 
                         gr.update(interactive=False),  # end_graceful_button
                         gr.update(interactive=False),  # force_stop_button
                         gr.update(),  # seed
@@ -417,6 +439,7 @@ def process(
                         "Generation interrupted by user.",  # progress_desc
                         gr.update(visible=False),  # progress_bar
                         gr.update(interactive=True),  # start_button
+                        gr.update(interactive=True),  # endless_run_button 
                         gr.update(interactive=False),  # end_graceful_button
                         gr.update(interactive=False),  # force_stop_button
                         gr.update(),  # seed
@@ -443,6 +466,7 @@ def process(
                         f"Generated single image!<br><a href=\"file/{image_path}\" target=\"_blank\">Click here to open full size in new tab.</a><br><code>{image_path}</code>",  # progress_desc
                         gr.update(visible=False),                           # progress_bar
                         gr.update(interactive=True, value="Start Generation"), # start_button
+                        gr.update(interactive=True),                        # endless_run_button 
                         gr.update(interactive=False),                       # end_graceful_button
                         gr.update(interactive=False),                       # force_stop_button
                         gr.update(),                                        # seed
@@ -479,6 +503,7 @@ No complete output was generated.
                         gr.update(visible=False),  # progress_desc
                         gr.update(visible=False),  # progress_bar
                         gr.update(interactive=True),  # start_button
+                        gr.update(interactive=True),  # endless_run_button 
                         gr.update(interactive=False),  # end_graceful_button
                         gr.update(interactive=False),  # force_stop_button
                         gr.update(),  # seed
@@ -537,7 +562,7 @@ No complete output was generated.
             yield (
                 gr.update(), gr.update(), gr.update(), 
                 f"{final_message} Unloading models...", 
-                gr.update(visible=False), gr.update(interactive=False),
+                gr.update(visible=False), gr.update(interactive=False), gr.update(interactive=False),
                 gr.update(interactive=False), gr.update(interactive=False), 
                 gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), 
                 gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
@@ -552,7 +577,7 @@ No complete output was generated.
                 gr.update(), gr.update(), gr.update(), 
                 mem_status_update, 
                 gr.update(visible=False), gr.update(interactive=True), 
-                gr.update(interactive=False), gr.update(interactive=False),
+                gr.update(interactive=False), gr.update(interactive=False), gr.update(interactive=False),
                 gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), 
                 gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
             )
@@ -561,7 +586,7 @@ No complete output was generated.
             yield (
                 gr.update(), gr.update(), gr.update(), 
                 f"Error during final model unload: {e}", 
-                gr.update(visible=False), gr.update(interactive=True), 
+                gr.update(visible=False), gr.update(interactive=True), gr.update(interactive=True), 
                 gr.update(interactive=False), gr.update(interactive=False),
                 gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), 
                 gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
@@ -571,7 +596,7 @@ No complete output was generated.
         yield (
             gr.update(), gr.update(), gr.update(), 
             final_message, 
-            gr.update(visible=False), gr.update(interactive=True), 
+            gr.update(visible=False), gr.update(interactive=True), gr.update(interactive=True), 
             gr.update(interactive=False), gr.update(interactive=False),
             gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), 
             gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
