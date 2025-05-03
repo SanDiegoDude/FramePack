@@ -1,6 +1,7 @@
 import sys
 import json
 import random
+import time
 import os
 import contextlib
 import gradio as gr
@@ -420,7 +421,21 @@ function addLightboxListeners() {
         def endless_process_handler(*args):
             """Handler for endless processing"""
             from ui.callbacks import process
+            # Convert args to a list so we can modify
+            args_list = list(args)
             
+            # Find the seed position (should be at index 9)
+            seed_pos = 9
+            lock_seed_pos = 18  # Position of lock_seed checkbox
+            
+            # If seed position is valid and lock_seed is not checked, randomize seed
+            if len(args_list) > seed_pos and len(args_list) > lock_seed_pos:
+                if not args_list[lock_seed_pos]:  # If lock_seed is False
+                    # Generate new random seed
+                    new_seed = int(time.time()) % 2**32
+                    args_list[seed_pos] = new_seed
+                    debug(f"Setting new random seed: {new_seed}")
+                    
             # Convert positional args to a dictionary of named parameters
             param_names = [
                 "mode", "input_image", "start_frame", "end_frame", "aspect_selector", 
