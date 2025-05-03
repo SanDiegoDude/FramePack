@@ -340,11 +340,13 @@ def process(
                 )
             
             elif flag == 'file_img':
-                # Properly unpack the data with the html_link
+                # Unpack image path and HTML link
                 (img_filename, html_link) = data
                 debug(f"Process: yielding file_img/single image output: {img_filename}")
                 
-                # Save for next batch iteration
+                # Save state for batch tracking
+                is_image_output = True
+                image_path = img_filename
                 last_output_filename = None
                 last_output_is_image = True
                 last_output_image_path = img_filename
@@ -353,16 +355,16 @@ def process(
                 last_first_frame = None
                 last_last_frame = None
                 
-                # Use the same approach from your working code
+                # Match your working code exactly
                 yield (
                     gr.update(visible=False),                           # result_video
-                    gr.update(value=img_filename, visible=True),        # result_image_html - SET VALUE HERE
+                    gr.update(value=img_filename, visible=True),        # result_image_html - IMPORTANT: Set value AND visible
                     gr.update(visible=False),                           # preview_image
-                    f"Generated single image!<br>Saved as <code>{img_filename}</code>",  # progress_desc - SHOW FILENAME
+                    f"Generated single image!<br>Saved as <code>{img_filename}</code>",  # progress_desc
                     gr.update(visible=False),                           # progress_bar
-                    gr.update(interactive=False),                       # start_button (will update in 'end')
-                    gr.update(interactive=True),                        # end_graceful_button
-                    gr.update(interactive=True),                        # force_stop_button
+                    gr.update(interactive=True),                        # start_button - IMPORTANT: Make interactive immediately
+                    gr.update(interactive=False),                       # end_graceful_button
+                    gr.update(interactive=False),                       # force_stop_button
                     gr.update(),                                        # seed
                     gr.update(visible=False),                           # first_frame
                     gr.update(visible=False),                           # last_frame
@@ -371,8 +373,8 @@ def process(
                     gr.update(visible=False),                           # generation_stats
                     gr.update(visible=False, open=False),               # generation_stats_accordion
                     gr.update(visible=False),                           # frame_thumbnails
-                    gr.update(visible=False),                           # final_processed_prompt
-                    gr.update(visible=False)                            # final_prompt_accordion
+                    gr.update(value=final_prompt_text, visible=True),   # final_processed_prompt
+                    gr.update(visible=True)                             # final_prompt_accordion
                 )
             
             elif flag == 'end':
@@ -428,17 +430,21 @@ def process(
                         gr.update(value=final_prompt_text, visible=True),  # final_processed_prompt
                         gr.update(visible=True)  # final_prompt_accordion
                     )
+                
                 elif is_image_output:
-                    # Use the approach from your working code - DON'T set value again, just visibility
+                    # For image output, focus on displaying the stats, but don't try to set image value again
+                    debug(f"End event for image output: {image_path}")
+                    
+                    # Match your working code more closely
                     yield (
                         gr.update(visible=False),                           # result_video
-                        gr.update(visible=True),                            # result_image_html - KEEP VISIBLE ONLY
+                        gr.update(visible=True),                            # result_image_html - KEEP VISIBLE
                         gr.update(visible=False),                           # preview_image
-                        f"Generated single image!<br><a href=\"file/{image_path}\" target=\"_blank\">Click here to open full size in new tab.</a><br><code>{image_path}</code>",  # progress_desc - INCLUDE LINK
+                        f"Generated single image!<br><a href=\"file/{image_path}\" target=\"_blank\">Click here to open full size in new tab.</a><br><code>{image_path}</code>",  # progress_desc
                         gr.update(visible=False),                           # progress_bar
-                        gr.update(interactive=True, value="Start Generation"), # start_button 
-                        gr.update(interactive=False, value="End Generation"),  # end_graceful_button
-                        gr.update(interactive=False, value="Force Stop"),      # force_stop_button
+                        gr.update(interactive=True, value="Start Generation"), # start_button
+                        gr.update(interactive=False),                       # end_graceful_button
+                        gr.update(interactive=False),                       # force_stop_button
                         gr.update(),                                        # seed
                         gr.update(visible=False),                           # first_frame
                         gr.update(visible=False),                           # last_frame
