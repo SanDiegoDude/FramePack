@@ -17,28 +17,7 @@ import json
 stream = None
 _stop_requested_flag = False
 _graceful_stop_batch_flag = False
-
-def process_wrapper(*args, video_generator=None, model_manager=None):
-    """Wrapper for normal generation with batch count"""
-    # Use yield from to properly delegate to the process generator
-    yield from process(*args, endless_run=False, video_generator=video_generator, model_manager=model_manager)
-
-def endless_process_wrapper(*args, video_generator=None, model_manager=None):
-    """Wrapper for endless generation"""
-    # Clone args to a list (mutable)
-    args_list = list(args)
-    
-    # Ensure batch_count=1 (position 30)
-    if len(args_list) > 30:  # batch_count is the 31st parameter (index 30)
-        args_list[30] = 1
-    
-    # Remove endless_run if it's in args_list (position 31)
-    if len(args_list) > 31:  # endless_run is the 32nd parameter (index 31)
-        args_list = args_list[:31] + args_list[32:]
-    
-    # Use yield from to properly delegate to the process generator
-    yield from process(*args_list, endless_run=True, video_generator=video_generator, model_manager=model_manager)
-    
+   
 def process(
     mode, input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h,
     prompt, n_prompt, seed,
