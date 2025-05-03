@@ -371,19 +371,22 @@ function addLightboxListeners() {
 
         def normal_process_handler(*args):
             """Handler for normal processing with batch count"""
+            # No need to filter endless_run since it's not in args anymore
             yield from process(*args, endless_run=False, 
-                            video_generator=video_generator,
-                            model_manager=model_manager)
-    
+                             video_generator=video_generator, 
+                             model_manager=model_manager)
+        
         def endless_process_handler(*args):
             """Handler for endless processing"""
-            # Modify batch_count for endless mode (position 30)
+            # Convert to list for batch_count modification
             args_list = list(args)
-            if len(args_list) > 30:  # batch_count is at position 30
-                args_list[30] = 1
+            
+            # Set batch_count=1 for endless mode (should be at the end, before unload_on_end)
+            batch_count_pos = len(args_list) - 1  # Position right before unload_on_end
+            args_list[batch_count_pos] = 1  # Set to 1
             
             yield from process(*args_list, endless_run=True,
-                             video_generator=video_generator,
+                             video_generator=video_generator, 
                              model_manager=model_manager)
         
         # --- Python Callbacks & Event Handlers (Correctly Indented) ---
@@ -467,7 +470,16 @@ function addLightboxListeners() {
         extend_button.click(fn=setup_for_extension, inputs=[result_video], outputs=[mode_selector, input_video, input_image, start_frame, end_frame, video_container, video_extension_controls])
 
         # Define process inputs list
-        ips = [ mode_selector, input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h, prompt, n_prompt, seed, latent_window_size, segment_count, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, lock_seed, init_color, keyframe_weight, input_video, extension_direction, extension_frames, overlap_slider, trim_percentage, gaussian_blur, llm_encoder_weight, clip_encoder_weight, clean_latent_weight, batch_count, unload_on_end_state ]
+        ips = [
+            mode_selector, input_image, start_frame, end_frame, aspect_selector, 
+            custom_w, custom_h, prompt, n_prompt, seed, 
+            latent_window_size, segment_count, steps, cfg, gs, rs, 
+            gpu_memory_preservation, use_teacache, lock_seed, init_color, 
+            keyframe_weight, input_video, extension_direction, extension_frames, 
+            overlap_slider, trim_percentage, gaussian_blur, llm_encoder_weight, 
+            clip_encoder_weight, clean_latent_weight, batch_count, 
+            unload_on_end_state
+        ]
         # Define process outputs list
         output_list = [
             result_video, result_image_html, preview_image, progress_desc, progress_bar, 
