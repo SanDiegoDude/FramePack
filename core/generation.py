@@ -319,7 +319,6 @@ class VideoGenerator:
     @torch.no_grad()
     def generate_video(self, config):
         """Main video generation function"""
-        
         # Import prompt parser
         from utils.prompt_parser import parse_sequential_prompts
         
@@ -328,6 +327,35 @@ class VideoGenerator:
         input_image = config.get('input_image', None) # Can be None for text2video
         start_frame = config.get('start_frame', None)
         end_frame = config.get('end_frame', None)
+        
+        # --- EARLY VALIDATION OF REQUIRED INPUTS ---
+        # Validate required inputs based on mode before any expensive operations
+        if mode == "image2video" and input_image is None:
+            error_msg = "Error: Image input is required for image2video mode"
+            debug(f"[Generator] {error_msg}")
+            # Signal the UI if we have a stream
+            if self.stream:
+                self.stream.output_queue.push(('progress', (None, error_msg, "")))
+                self.stream.output_queue.push(('end', 'validation_error'))
+            return None
+            
+        if mode == "keyframes" and end_frame is None:
+            error_msg = "Error: End Frame is required for keyframes mode"
+            debug(f"[Generator] {error_msg}")
+            # Signal the UI if we have a stream
+            if self.stream:
+                self.stream.output_queue.push(('progress', (None, error_msg, "")))
+                self.stream.output_queue.push(('end', 'validation_error'))
+            return None
+        
+        if mode == "video_extension" and config.get('input_video') is None:
+            error_msg = "Error: Input video is required for video extension mode"
+            debug(f"[Generator] {error_msg}")
+            # Signal the UI if we have a stream
+            if self.stream:
+                self.stream.output_queue.push(('progress', (None, error_msg, "")))
+                self.stream.output_queue.push(('end', 'validation_error'))
+            return None
         aspect = config.get('aspect', '1:1')
         custom_w = config.get('custom_w', 768)
         custom_h = config.get('custom_h', 768)
