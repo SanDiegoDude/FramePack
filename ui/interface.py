@@ -330,24 +330,25 @@ function addLightboxListeners() {
                        unload_button = gr.Button(value="Unload All Models", variant="secondary")
                        clear_cache_button = gr.Button(value="Clear CUDA Cache", variant="secondary")
                   mem_status = gr.Markdown("")
+             with gr.Row():
              with gr.Column(scale=2):
                   with gr.Row():
-                       start_button = gr.Button(value="Start Generation", elem_classes="start-button")
-                  with gr.Row(equal_height=True, variant="compact"):
-                       with gr.Column(scale=3):
-                            gr.Markdown("""**Batch Count**<span style='font-size:0.9em; color:#999;'>Number of videos to generate sequentially.</span>""")
-                       with gr.Column(scale=1, min_width=80):
-                            batch_count = gr.Number(value=1, minimum=1, step=1, precision=0, show_label=False, container=False)
-                  with gr.Row(equal_height=True, variant="compact"):
-                       with gr.Column(scale=3):
-                            gr.Markdown("""**Endless Run**<span style='font-size:0.9em; color:#999;'>Keep generating until unchecked or stopped.</span>""")
-                       with gr.Column(scale=1, min_width=80):
-                            endless_run = gr.Checkbox(value=False, show_label=False, container=False)
+                       with gr.Column(scale=6):
+                            start_button = gr.Button(value="Start Generation", elem_classes="start-button")
+                       with gr.Column(scale=1):
+                            batch_count = gr.Number(value=1, minimum=1, step=1, precision=0, 
+                                                  label="Batch", show_label=True, container=True)
+                  
+                  with gr.Row():
+                       endless_run_button = gr.Button(value="Endless Run", elem_classes="endless-run-button")
+                  
                   with gr.Row():
                        with gr.Column(scale=1):
-                            end_graceful_button = gr.Button(value="End Generation", interactive=False, elem_classes="end-graceful-button")
+                            end_graceful_button = gr.Button(value="End Generation", interactive=False, 
+                                                         elem_classes="end-graceful-button")
                        with gr.Column(scale=1):
-                            force_stop_button = gr.Button(value="Force Stop", interactive=False, elem_classes="force-stop-button")
+                            force_stop_button = gr.Button(value="Force Stop", interactive=False, 
+                                                       elem_classes="force-stop-button")
                   progress_bar = gr.HTML(visible=False)
                   progress_desc = gr.Markdown(visible=False)
                   preview_image = gr.Image(label="Next Latents", height=200, visible=False)
