@@ -124,6 +124,28 @@ def process(
         )
         # ------------------------------------------------
 
+        # --- Validate required inputs based on mode ---
+        validation_error = None
+        if mode == "image2video" and input_image is None:
+            validation_error = "Error: Please provide an input image for image2video mode"
+        elif mode == "keyframes" and end_frame is None:
+            validation_error = "Error: Please provide an end frame for keyframes mode"
+        elif mode == "video_extension" and input_video is None:
+            validation_error = "Error: Please provide an input video for video extension mode"
+        
+        if validation_error:
+            debug(f"Validation error: {validation_error}")
+            yield (
+                gr.update(), gr.update(), gr.update(visible=False),
+                validation_error, # progress_desc
+                gr.update(visible=False), gr.update(interactive=True), 
+                gr.update(interactive=False), gr.update(interactive=False),
+                gr.update(), gr.update(visible=False), gr.update(visible=False),
+                gr.update(visible=False), gr.update(visible=True, value=validation_error),
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+            )
+            return  # <-- Important: exit the generation process early
+        
         # Setup and run generation (ensure video_generator.stream is set!)
         stream = AsyncStream()
         video_generator.stream = stream # *** IMPORTANT ***
