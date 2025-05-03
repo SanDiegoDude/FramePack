@@ -16,7 +16,7 @@ def get_css():
     /* Start Button (Green) */
     .start-button button {
         width: 100% !important;
-        background: linear-gradient(to bottom, #28a745, #218838) !important; /* Nicer green gradient */
+        background: linear-gradient(to bottom, #28a745, #218838) !important;
         border-color: #1e7e34 !important;
         color: white !important;
         font-size: 1.2em !important;
@@ -31,6 +31,31 @@ def get_css():
         color: #ccc !important;
         cursor: not-allowed !important;
     }
+    /* Endless Run Button (Blue) */
+    .endless-run-button button {
+        width: 100% !important;
+        background: linear-gradient(to bottom, #3575D3, #2955A3) !important; 
+        border-color: #1F4890 !important;
+        color: white !important;
+        font-size: 1.2em !important;
+        padding: 16px !important;
+        margin-bottom: 10px !important;
+        border-radius: 5px !important;
+        text-shadow: 1px 1px 1px rgba(0,0,0,0.3);
+    }
+    
+    .endless-run-button button:disabled {
+        background: linear-gradient(to bottom, #496F9E, #37517A) !important;
+        border-color: #2F4368 !important;
+        color: #ccc !important;
+        cursor: not-allowed !important;
+    }
+    
+    .endless-run-button button:hover:not(:disabled) {
+         background: linear-gradient(to bottom, #4185E6, #3064B7) !important;
+         border-color: #223D75 !important;
+    }
+    
     .start-button button:hover:not(:disabled) {
          background: linear-gradient(to bottom, #2ebf4f, #24973e) !important;
          border-color: #1a702f !important;
