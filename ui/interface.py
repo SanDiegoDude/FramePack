@@ -478,7 +478,7 @@ function addLightboxListeners() {
         endless_run_button.click(fn=endless_process_handler, inputs=ips, outputs=output_list) 
         
         # Then update the button connection
-        endless_run_button.click(fn=endless_run_click, inputs=ips, outputs=output_list)
+        endless_run_button.click(fn=endless_process_handler, inputs=ips, outputs=output_list)
         end_graceful_button.click(fn=request_graceful_end, outputs=[end_graceful_button, force_stop_button])
         force_stop_button.click(fn=force_immediate_stop, outputs=[end_graceful_button, force_stop_button])
 
