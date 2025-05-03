@@ -82,8 +82,8 @@ def process(
         
         # Process video extraction for video_extension mode
         if mode == "video_extension":
-          if input_video is None:
-              yield (
+            if input_video is None:
+               yield (
                   gr.update(), gr.update(), gr.update(visible=False),
                   "Error: Input video required for video extension mode.", gr.update(visible=False),
                   gr.update(interactive=True), gr.update(interactive=True), # Include endless_run_button
@@ -91,8 +91,8 @@ def process(
                   gr.update(), gr.update(visible=False), gr.update(visible=False),
                   gr.update(visible=False), gr.update(visible=False),
                   gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
-              )
-              break
+               )
+               break
                 
             try:
                 extracted_frames, _, _ = video_generator.extract_frames_from_video(
