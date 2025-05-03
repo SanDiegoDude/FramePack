@@ -90,15 +90,19 @@ def create_interface(model_manager, video_generator, unload_on_end_flag=False):
 async function handlePaste(event, promptElementId, modeElementId, imgInputId, startFrameId, endFrameId, hiddenTextboxId) {
     const items = (event.clipboardData || event.originalEvent.clipboardData).items;
     let imageBlob = null;
+    console.log('Paste detected, checking for image...');
+    
     for (const item of items) {
         if (item.type.startsWith('image/')) {
             imageBlob = item.getAsFile();
+            console.log('Image detected in clipboard!');
             break;
         }
     }
+    
     if (imageBlob) {
         event.preventDefault();
-        console.log('Image pasted!');
+        console.log('Processing pasted image');
         const reader = new FileReader();
         reader.onload = function(e) {
             const base64Image = e.target.result;
@@ -106,21 +110,34 @@ async function handlePaste(event, promptElementId, modeElementId, imgInputId, st
             if (hiddenTextbox) {
                 const textarea = hiddenTextbox.querySelector('textarea');
                 if (textarea) {
+                    console.log('Sending pasted image data to backend...');
+                    const currentMode = document.querySelector('#' + modeElementId + ' input[type=radio]:checked')?.value || 'image2video';
+                    const imgInputHasValue = !!document.querySelector('#' + imgInputId + ' img');
+                    const startFrameHasValue = !!document.querySelector('#' + startFrameId + ' img');
+                    const endFrameHasValue = !!document.querySelector('#' + endFrameId + ' img');
+                    
                     const pasteData = JSON.stringify({
                         imageData: base64Image,
-                        mode: document.querySelector('#' + modeElementId + ' input[type=radio]:checked')?.value || 'image2video',
-                        imgInputHasValue: !!document.querySelector('#' + imgInputId + ' img'),
-                        startFrameHasValue: !!document.querySelector('#' + startFrameId + ' img'),
-                        endFrameHasValue: !!document.querySelector('#' + endFrameId + ' img')
+                        mode: currentMode,
+                        imgInputHasValue: imgInputHasValue,
+                        startFrameHasValue: startFrameHasValue,
+                        endFrameHasValue: endFrameHasValue
                     });
+                    
                     textarea.value = pasteData;
                     textarea.dispatchEvent(new Event('change', { bubbles: true }));
-                    console.log('Sent base64 data to hidden Gradio textbox.');
-                } else { console.error('Could not find textarea within hidden Gradio component:', hiddenTextboxId); }
-            } else { console.error('Could not find hidden Gradio component:', hiddenTextboxId); }
+                    console.log('Sent base64 data to hidden Gradio textbox');
+                } else { 
+                    console.error('Could not find textarea within hidden Gradio component:', hiddenTextboxId); 
+                }
+            } else { 
+                console.error('Could not find hidden Gradio component:', hiddenTextboxId); 
+            }
         };
         reader.readAsDataURL(imageBlob);
-    } else { console.log('Pasted content is not an image.'); }
+    } else { 
+        console.log('Pasted content is not an image'); 
+    }
 }
 
 function attachPasteListener(promptElementId, modeElementId, imgInputId, startFrameId, endFrameId, hiddenTextboxId) {
@@ -143,72 +160,121 @@ function attachPasteListener(promptElementId, modeElementId, imgInputId, startFr
 // --- Lightbox Functions ---
 let isZoomed = false;
 let originalWidth, originalHeight;
-
+  
 function openLightbox(imgElement) {
+    if (!imgElement) return;
+    console.log("openLightbox called for", imgElement.src);
+    
     const overlay = document.getElementById('lightbox-overlay');
     const contentImg = document.getElementById('lightbox-image');
-    if (!overlay || !contentImg || !imgElement) return;
+    if (!overlay || !contentImg) {
+        console.error("Missing lightbox DOM elements:", overlay, contentImg);
+        return;
+    }
+    
     const src = imgElement.src;
-    if (!src || src.includes('placeholder.png') || !src.startsWith('http') && !src.startsWith('file:') && !src.startsWith('data:')) return;
-    contentImg.src = src; isZoomed = false;
-    contentImg.style.maxWidth = '100%'; contentImg.style.maxHeight = '100%';
-    contentImg.style.width = 'auto'; contentImg.style.height = 'auto'; contentImg.style.cursor = 'zoom-in';
+    if (!src || src.includes('placeholder.png') || (!src.startsWith('http') && !src.startsWith('file:') && !src.startsWith('data:'))) {
+        console.log("Invalid image source:", src);
+        return;
+    }
+    
+    // Set image source and reset zoom state
+    contentImg.src = src; 
+    isZoomed = false;
+    contentImg.style.maxWidth = '100%'; 
+    contentImg.style.maxHeight = '100%';
+    contentImg.style.width = 'auto'; 
+    contentImg.style.height = 'auto'; 
+    contentImg.style.cursor = 'zoom-in';
+    
+    // Load image dimensions
     const tempImg = new Image();
-    tempImg.onload = () => { originalWidth = tempImg.naturalWidth; originalHeight = tempImg.naturalHeight; console.log(`Original dims: ${originalWidth}x${originalHeight}`); };
-    tempImg.src = src; overlay.style.display = 'flex';
-}
-function closeLightbox() { const overlay = document.getElementById('lightbox-overlay'); if (overlay) { overlay.style.display = 'none'; } }
-function toggleZoom() {
-    const contentImg = document.getElementById('lightbox-image'); if (!contentImg || !originalWidth || !originalHeight) return;
-    if (isZoomed) { contentImg.style.maxWidth = '100%'; contentImg.style.maxHeight = '100%'; contentImg.style.width = 'auto'; contentImg.style.height = 'auto'; contentImg.style.cursor = 'zoom-in'; }
-    else { contentImg.style.maxWidth = originalWidth + 'px'; contentImg.style.maxHeight = originalHeight + 'px'; contentImg.style.width = originalWidth + 'px'; contentImg.style.height = originalHeight + 'px'; contentImg.style.cursor = 'zoom-out'; }
-    isZoomed = !isZoomed;
-}
-function handleOverlayClick(event) { if (event.target.id === 'lightbox-overlay') { closeLightbox(); } }
-document.addEventListener('keydown', function(event) { if (event.key === 'Escape') { closeLightbox(); } });
-function handleImageClick(event) {
-    console.log("handleImageClick triggered for:", event.target); // ADD LOGGING
-    openLightbox(event.target);
-}
-function addLightboxListeners() {
-    let foundClickable = 0; // ADD COUNTER
-    let foundImgTags = 0; // ADD COUNTER
-    document.querySelectorAll('.clickable-image').forEach(elem => {
-        foundClickable++; // INCREMENT
-        const imgTag = elem.querySelector('img');
-        if (imgTag) {
-            foundImgTags++; // INCREMENT
-            imgTag.removeEventListener('click', handleImageClick); // Remove previous
-            imgTag.addEventListener('click', handleImageClick); // Add new
-        } else {
-            // console.warn("Found .clickable-image but no img tag inside:", elem); // Optional Warning
-        }
-    });
-    console.log(`addLightboxListeners: Found ${foundClickable} clickable elements, attached listener to ${foundImgTags} img tags.`); // ADD LOGGING
+    tempImg.onload = () => { 
+        originalWidth = tempImg.naturalWidth; 
+        originalHeight = tempImg.naturalHeight; 
+        console.log(`Image dimensions: ${originalWidth}x${originalHeight}`); 
+    };
+    tempImg.src = src; 
+    
+    // Show overlay
+    overlay.style.display = 'flex';
+    console.log("Lightbox opened");
 }
 
-// --- Main Attachment Function ---
-function attachAllListeners(promptId, modeId, imgId, startId, endId, hiddenId) {
-    console.log("Executing attachAllListeners (HTML injection)...");
-    attachPasteListener(promptId, modeId, imgId, startId, endId, hiddenId);
-    addLightboxListeners(); // Initial call
-    const observerTargetIds = ['result_image_output', 'first_frame_output', 'last_frame_output'];
-    observerTargetIds.forEach(id => {
-        const targetNode = document.getElementById(id);
-        if (targetNode) {
-            const observer = new MutationObserver(() => { setTimeout(addLightboxListeners, 150); });
-            observer.observe(targetNode, { childList: true, subtree: true });
-        } else {
-             setTimeout(() => {
-                const laterNode = document.getElementById(id);
-                if(laterNode) {
-                    const observer = new MutationObserver(() => { setTimeout(addLightboxListeners, 150); });
-                    observer.observe(laterNode, { childList: true, subtree: true });
-                } else { console.error(`Still could not find node #${id} for observer.`); }
-             }, 1500);
-        }
+function closeLightbox() { 
+    const overlay = document.getElementById('lightbox-overlay'); 
+    if (overlay) { 
+        overlay.style.display = 'none'; 
+        console.log("Lightbox closed");
+    } 
+}
+
+function toggleZoom() {
+    const contentImg = document.getElementById('lightbox-image'); 
+    if (!contentImg || !originalWidth || !originalHeight) return;
+    
+    if (isZoomed) { 
+        contentImg.style.maxWidth = '100%'; 
+        contentImg.style.maxHeight = '100%'; 
+        contentImg.style.width = 'auto'; 
+        contentImg.style.height = 'auto'; 
+        contentImg.style.cursor = 'zoom-in'; 
+    } else { 
+        contentImg.style.maxWidth = 'none'; 
+        contentImg.style.maxHeight = 'none'; 
+        contentImg.style.width = originalWidth + 'px'; 
+        contentImg.style.height = originalHeight + 'px'; 
+        contentImg.style.cursor = 'zoom-out'; 
+    }
+    isZoomed = !isZoomed;
+    console.log("Zoom toggled:", isZoomed);
+}
+
+function handleOverlayClick(event) { 
+    if (event.target.id === 'lightbox-overlay') { 
+        closeLightbox(); 
+    } 
+}
+
+function handleImageClick(event) {
+    console.log("Image clicked:", event.target);
+    event.preventDefault();
+    event.stopPropagation();
+    openLightbox(event.target);
+}
+
+function addLightboxListeners() {
+    console.log("Setting up lightbox listeners");
+    
+    // Target specific image containers
+    const targetSelectors = [
+        '#result_image_output img', 
+        '#first_frame_output img', 
+        '#last_frame_output img',
+        '.clickable-image img'
+    ];
+    
+    let attachedCount = 0;
+    
+    // For each selector, find all matching elements and attach listeners
+    targetSelectors.forEach(selector => {
+        const elements = document.querySelectorAll(selector);
+        console.log(`Found ${elements.length} elements for selector: ${selector}`);
+        
+        elements.forEach(img => {
+            if (img && img.tagName === 'IMG') {
+                // Remove existing listeners to prevent duplicates
+                img.removeEventListener('click', handleImageClick);
+                // Add the click listener
+                img.addEventListener('click', handleImageClick);
+                // Make the image appear clickable
+                img.style.cursor = 'pointer';
+                attachedCount++;
+            }
+        });
     });
-    console.log("attachAllListeners finished (HTML injection).");
+    
+    console.log(`Attached lightbox listeners to ${attachedCount} images`);
 }
 """
 
@@ -277,8 +343,6 @@ function attachAllListeners(promptId, modeId, imgId, startId, endId, hiddenId) {
                             gr.Markdown("""**Endless Run**<span style='font-size:0.9em; color:#999;'>Keep generating until unchecked or stopped.</span>""")
                        with gr.Column(scale=1, min_width=80):
                             endless_run = gr.Checkbox(value=False, show_label=False, container=False)
-                            from ui.callbacks import endless_run_checkbox_changed
-                            endless_run.change(fn=endless_run_checkbox_changed, inputs=[endless_run], outputs=[endless_run])
                   with gr.Row():
                        with gr.Column(scale=1):
                             end_graceful_button = gr.Button(value="End Generation", interactive=False, elem_classes="end-graceful-button")
@@ -306,28 +370,34 @@ function attachAllListeners(promptId, modeId, imgId, startId, endId, hiddenId) {
 
         # --- Python Callbacks & Event Handlers (Correctly Indented) ---
         def handle_image_paste_data(paste_data_json):
-            debug(f"Python: handle_image_paste_data received raw data: '{paste_data_json}'") 
+            """
+            Process image data pasted into the UI and route it to the appropriate image input.
+            """
+            debug(f"Python: handle_image_paste_data received data of length: {len(paste_data_json) if paste_data_json else 0}")
             try:
                 if not paste_data_json or paste_data_json.strip() == "":
                     debug("Python: Paste data is empty, doing nothing.")
                     return gr.update(), gr.update(), gr.update() # No change if empty
-
+        
                 paste_data = json.loads(paste_data_json)
                 image_data = paste_data.get("imageData")
                 mode = paste_data.get("mode")
                 img_has_val = paste_data.get("imgInputHasValue")
                 start_has_val = paste_data.get("startFrameHasValue")
                 end_has_val = paste_data.get("endFrameHasValue")
-
+        
                 if not image_data:
+                    debug("Python: No image data in paste")
                     return gr.update(), gr.update(), gr.update()
-
+        
                 debug(f"Python: Handling pasted image for mode: {mode}")
-
+                
+                # Process based on mode
                 if mode == "image2video":
                     debug("Python: Pasting into image2video input.")
                     return gr.update(value=image_data), gr.update(), gr.update()
                 elif mode == "keyframes":
+                    # Logic for keyframes - fill end frame first, then start frame
                     if not end_has_val:
                         debug("Python: Pasting into keyframes END frame (empty).")
                         return gr.update(), gr.update(), gr.update(value=image_data)
@@ -340,9 +410,11 @@ function attachAllListeners(promptId, modeId, imgId, startId, endId, hiddenId) {
                 else: # text2video, video_extension - pasting doesn't apply directly
                      debug(f"Python: Image pasted in mode '{mode}', no image input target.")
                      return gr.update(), gr.update(), gr.update()
-
+        
             except Exception as e:
                 debug(f"Error processing pasted image data: {e}")
+                import traceback
+                debug(traceback.format_exc())
                 gr.Warning(f"Failed to process pasted image: {e}")
                 return gr.update(), gr.update(), gr.update() # No change on error
 
