@@ -226,10 +226,45 @@ function attachAllListeners(promptId, modeId, imgId, startId, endId, hiddenId) {
 }
 """
 
-    # Combine JS
-    combined_js = paste_js + "\n\n" + lightbox_js
+    # Combine JS - Define helpers first, then the main attachment function globally
+    combined_js = f"""
+// --- Paste Helper ---
+{paste_js}
 
-    # Add CSS parameter to Blocks
+// --- Lightbox Helper ---
+{lightbox_js}
+
+// --- Main Attachment Function (will be called by block.load) ---
+function attachAllListeners(promptId, modeId, imgId, startId, endId, hiddenId) {{
+    console.log("Executing attachAllListeners...");
+    // Attach Paste Listener
+    attachPasteListener(promptId, modeId, imgId, startId, endId, hiddenId);
+
+    // Attach Lightbox Listeners (initial + observer)
+    addLightboxListeners(); // Initial call
+
+    const observerTargetIds = ['result_image_output', 'first_frame_output', 'last_frame_output'];
+    observerTargetIds.forEach(id => {{
+        const targetNode = document.getElementById(id);
+        if (targetNode) {{
+            const observer = new MutationObserver(() => {{ setTimeout(addLightboxListeners, 150); }});
+            observer.observe(targetNode, {{ childList: true, subtree: true }});
+        }} else {{
+             // Retry attachment later
+             setTimeout(() => {{
+                const laterNode = document.getElementById(id);
+                if(laterNode) {{
+                    const observer = new MutationObserver(() => {{ setTimeout(addLightboxListeners, 150); }});
+                    observer.observe(laterNode, {{ childList: true, subtree: true }});
+                }} else {{ console.error(`Still could not find node #${{id}} for observer.`); }}
+             }}, 1500);
+        }}
+    }});
+    console.log("attachAllListeners finished.");
+}}
+"""
+
+    # Add CSS and the combined JS to Blocks
     block = gr.Blocks(css=get_css() + lightbox_css, js=combined_js).queue()
 
     # --- Start Building the UI Layout ---
@@ -495,7 +530,7 @@ function attachAllListeners(promptId, modeId, imgId, startId, endId, hiddenId) {
         block.load(
             None, [], [],
             # Use the combined attachAllListeners function
-            js="() => { attachAllListeners('prompt_textbox', 'mode_selector_radio', 'input_image_component', 'start_frame_component', 'end_frame_component', 'hidden_paste_box'); }"
+            js="() => attachAllListeners('prompt_textbox', 'mode_selector_radio', 'input_image_component', 'start_frame_component', 'end_frame_component', 'hidden_paste_box')"
         )
 
     # Return the fully constructed block
