@@ -97,7 +97,8 @@ def main():
         video_generator = VideoGenerator(model_manager, outputs_folder=outputs_folder)
         
         # Create and launch Gradio interface
-        debug("Setting up user interface...")
+        import gradio
+        debug(f"Using Gradio Version: {gradio.__version__}")
         interface = create_interface(model_manager, video_generator, unload_on_end_flag=args.unload_on_end)
         
         # Launch the interface
