@@ -52,25 +52,6 @@ except AttributeError:
     original_video_postprocess = lambda self, y: y
     debug("Warning: Could not find original gr.Video.postprocess")
 
-def normal_process_handler(*args):
-    """Handler for normal processing with batch count"""
-    # This must be a generator function that yields
-    yield from process(*args, endless_run=False, 
-                      video_generator=video_generator,
-                      model_manager=model_manager)
-
-def endless_process_handler(*args):
-    """Handler for endless processing"""
-    # Modify batch_count for endless mode (position 30)
-    args_list = list(args)
-    if len(args_list) > 30:  # batch_count is at position 30
-        args_list[30] = 1
-    
-    # This must be a generator function that yields
-    yield from process(*args_list, endless_run=True,
-                     video_generator=video_generator,
-                     model_manager=model_manager)
-
 def debug_aware_video_postprocess(self, y):
     """Wrapper around Gradio's Video postprocess that respects the debug flag"""
     with suppress_output_if_not_debug():
@@ -85,9 +66,9 @@ def create_interface(model_manager, video_generator, unload_on_end_flag=False):
         process, request_graceful_end, force_immediate_stop, update_video_stats,
         switch_mode, show_custom, show_init_color,
         update_overlap_slider, setup_for_extension,
-        toggle_init_color_for_backward,
+        toggle_init_color_for_backward
     )
-
+    
     debug("Creating UI interface")
 
     # --- Define Lightbox CSS ---
@@ -388,6 +369,23 @@ function addLightboxListeners() {
 
     # --- End of UI Layout Definition ---
 
+        def normal_process_handler(*args):
+            """Handler for normal processing with batch count"""
+            yield from process(*args, endless_run=False, 
+                            video_generator=video_generator,
+                            model_manager=model_manager)
+    
+        def endless_process_handler(*args):
+            """Handler for endless processing"""
+            # Modify batch_count for endless mode (position 30)
+            args_list = list(args)
+            if len(args_list) > 30:  # batch_count is at position 30
+                args_list[30] = 1
+            
+            yield from process(*args_list, endless_run=True,
+                             video_generator=video_generator,
+                             model_manager=model_manager)
+        
         # --- Python Callbacks & Event Handlers (Correctly Indented) ---
         def handle_image_paste_data(paste_data_json):
             """
