@@ -13,17 +13,14 @@ def get_css():
         font-size: 1.1em !important;
         padding: 8px 12px !important;
     }
-    /* Start Button (Green) */
-    .start-button button {
-        width: 100% !important;
-        background: linear-gradient(to bottom, #28a745, #218838) !important;
+    /* Start Button - Green */
+    .start-button-column .start-button button {
+        background-color: #28a745 !important;
         border-color: #1e7e34 !important;
         color: white !important;
         font-size: 1.2em !important;
         padding: 16px !important;
-        margin-bottom: 10px !important;
         border-radius: 5px !important;
-        text-shadow: 1px 1px 1px rgba(0,0,0,0.3);
     }
     .start-button button:disabled {
         background: linear-gradient(to bottom, #5a8f69, #4d7a5a) !important; /* Desaturated green */
@@ -62,17 +59,11 @@ def get_css():
     }
 
    
-    /* Endless Run Button (Blue) */
+    /* Endless Run - Blue */
     .endless-run-button button {
-        width: 100% !important;
-        background: linear-gradient(to bottom, #3575D3, #2955A3) !important; 
-        border-color: #1F4890 !important;
+        background-color: #3575D3 !important;
+        border-color: #2955A3 !important;
         color: white !important;
-        font-size: 1.2em !important;
-        padding: 16px !important;
-        margin-bottom: 10px !important;
-        border-radius: 5px !important;
-        text-shadow: 1px 1px 1px rgba(0,0,0,0.3);
     }
     
     .endless-run-button button:disabled {
@@ -92,15 +83,11 @@ def get_css():
          border-color: #1a702f !important;
     }
 
-    /* End Graceful Button (Yellow) */
+    /* End Generation - Yellow */
     .end-graceful-button button {
-        width: 100% !important;
-        background: linear-gradient(to bottom, #ffc107, #e0a800) !important; /* Amber yellow gradient */
-        border-color: #d39e00 !important;
-        color: #333 !important; /* Darker text for yellow */
-        font-size: 1.1em !important;
-        padding: 10px !important;
-        border-radius: 5px !important;
+        background-color: #ffc107 !important;
+        border-color: #e0a800 !important;
+        color: #333 !important;
     }
     .end-graceful-button button:disabled {
         background: linear-gradient(to bottom, #a68b3a, #8c732f) !important; /* Desaturated yellow */
@@ -114,16 +101,11 @@ def get_css():
      }
 
 
-    /* Force Stop Button (Crimson/Red) */
+    /* Force Stop - Red */
     .force-stop-button button {
-        width: 100% !important;
-        background: linear-gradient(to bottom, #dc3545, #c82333) !important; /* Red gradient */
-        border-color: #bd2130 !important;
+        background-color: #dc3545 !important;
+        border-color: #c82333 !important;
         color: white !important;
-        font-size: 1.1em !important;
-        padding: 10px !important;
-        border-radius: 5px !important;
-        text-shadow: 1px 1px 1px rgba(0,0,0,0.3);
     }
     .force-stop-button button:disabled {
         background: linear-gradient(to bottom, #9a535a, #824750) !important; /* Desaturated red */
