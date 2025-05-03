@@ -424,7 +424,7 @@ with block:
             # Advanced Model Parameters
             with gr.Accordion("Advanced Model Parameters", open=False):
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True)
-                unload_on_end_state = gr.Checkbox(label='Unload all models after end' value=unload_on_end_flag, visible=True)
+                unload_on_end_state = gr.Checkbox(label='Unload all models after end', value=unload_on_end_flag, visible=True)
                 llm_encoder_weight = gr.Slider(
                     label="LLM Encoder Weight",
                     minimum=0.0,
