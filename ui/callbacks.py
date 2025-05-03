@@ -44,10 +44,16 @@ def process(
     current_batch_item = 0
     total_batch_count = int(batch_count) if not endless_run else float('inf')
     run_seed = seed
-    last_successful_output = None # Store the last good output path/data
     
-    # Add tracking variables to maintain state between updates
+    # Track previous generation output state
+    last_successful_output = None # Store the last good output path/data
+    last_is_video = False        # Track if last output was video
+    last_is_image = False        # Track if last output was image
+    previous_video_path = None   # Path to last video
+    previous_image_path = None   # Path to last image
     preview_video_visible = False  # Track preview video visibility
+    last_first_frame = None      # Store last first frame thumbnail
+    last_last_frame = None       # Store last last frame thumbnail
 
     while True: # Outer loop for batch/endless
 
@@ -103,10 +109,14 @@ def process(
         # --------------------------------------------------------------------
 
         # --- Initial UI Yield for this Batch Item ---
-        # Keep previous final outputs visible, hide previews/progress for the new one
+        debug(f"Preparing UI for batch {current_batch_item}: video={last_is_video}, image={last_is_image}")
+        
+        # Yield updates: Keep previous final outputs visible, hide temporary elements
         yield (
-            gr.update(visible=True), # result_video (keep previous video visible if it exists)
-            gr.update(visible=True), # result_image_html (keep previous image visible if it exists)
+            gr.update(value=previous_video_path if last_is_video else None, 
+                     visible=last_is_video), # result_video (keep previous if exists)
+            gr.update(value=previous_image_path if last_is_image else None,
+                     visible=last_is_image), # result_image_html (keep previous if exists)
             gr.update(visible=False), # preview_image (hide previous)
             f"Starting Generation{batch_progress_text}...", # progress_desc
             gr.update(visible=False), # progress_bar (hide previous)
@@ -114,13 +124,15 @@ def process(
             gr.update(interactive=True), # end_graceful_button
             gr.update(interactive=True), # force_stop_button
             gr.update(value=run_seed), # seed display
-            gr.update(visible=True), # first_frame (keep previous visible)
-            gr.update(visible=True), # last_frame (keep previous visible)
-            gr.update(visible=True), # extend_button (keep previous visible)
+            gr.update(value=last_first_frame if last_first_frame is not None else None, 
+                     visible=last_is_video), # first_frame
+            gr.update(value=last_last_frame if last_last_frame is not None else None, 
+                     visible=last_is_video), # last_frame
+            gr.update(visible=last_is_video), # extend_button
             gr.update(visible=False), # note_message (hide previous)
             gr.update(visible=True), # generation_stats (keep previous visible)
             gr.update(visible=True), # generation_stats_accordion (keep previous visible)
-            gr.update(visible=True), # frame_thumbnails_group (keep previous visible)
+            gr.update(visible=last_is_video), # frame_thumbnails_group
             gr.update(visible=True), # final_processed_prompt_display (keep previous visible)
             gr.update(visible=True) # final_prompt_accordion (keep previous visible)
         )
@@ -194,6 +206,7 @@ def process(
                 if flag == 'preview_video':
                     preview_val = data # Data is the preview image/video path
                     preview_video_visible = True  # Mark preview as visible when we get a new one
+                    debug("Received preview_video, setting visibility flag")
                 elif flag == 'progress':
                     # Properly handle unpacking and potential object serialization issues
                     if isinstance(data, tuple) and len(data) == 3:
@@ -203,15 +216,15 @@ def process(
                             desc_val = str(desc_val)
                         if desc_val: last_desc = desc_val
                     else:
-                        debug(f"Warning: Unexpected progress data format: {data}")
+                        debug(f"Warning: Unexpected progress data format: {type(data)}")
                         preview_val = None
                         desc_val = last_desc  # Use previous desc
                         html_val = gr.update()  # Keep existing progress bar
             
-                # Yield updates: Maintain preview video visibility during progress updates
+                # Yield updates: Keep preview visible during progress updates
                 yield (
                     gr.update(value=data if flag=='preview_video' else None, 
-                            visible=(flag=='preview_video' or (flag=='progress' and preview_video_visible))), # Use tracked state
+                            visible=(flag=='preview_video' or preview_video_visible)), # Use tracked state
                     gr.update(visible=False),                       # result_image_html (clear image)
                     gr.update(value=preview_val, visible=True),     # preview_image (show new preview)
                     f"{desc_val}{batch_progress_text}",             # progress_desc
@@ -234,20 +247,30 @@ def process(
             elif flag == 'file':
                 output_filename = data
                 last_successful_output = output_filename # Store for next iteration start
+                previous_video_path = output_filename    # Update video path state
+                last_is_video = True                     # Remember this was a video
+                last_is_image = False                    # Not an image
+                previous_image_path = None               # Clear previous image
+                
+                # Get frame thumbnails
                 first_frame_img, last_frame_img = extract_video_frames(output_filename)
                 # Handle None frames with placeholders if needed
                 first_frame_img = first_frame_img if first_frame_img is not None else np.zeros((64, 64, 3), dtype=np.uint8)
                 last_frame_img = last_frame_img if last_frame_img is not None else np.zeros((64, 64, 3), dtype=np.uint8)
                 
+                # Store frames for next batch
+                last_first_frame = first_frame_img
+                last_last_frame = last_frame_img
+                
                 # Reset preview state
                 preview_video_visible = False
             
-                # Yield updates: Show final video, hide preview & image output (but not other previous outputs)
+                # Yield updates: Show final video, hide preview/image
                 yield (
                     gr.update(value=output_filename, visible=True), # result_video
-                    gr.update(visible=False),                       # result_image_html - hide image output
+                    gr.update(visible=False),                       # result_image_html
                     gr.update(visible=False),                       # preview_image (hide)
-                    f"Generation complete! Saved to: {os.path.basename(output_filename)}", # progress_desc - show helpful message
+                    gr.update(visible=False),                       # progress_desc (hide)
                     gr.update(visible=False),                       # progress_bar (hide)
                     gr.update(), # Buttons updated at 'end' event
                     gr.update(),
@@ -263,13 +286,22 @@ def process(
                     gr.update(),
                     gr.update()
                 )
-                last_is_image = False
-                last_img_path = None
 
             elif flag == 'file_img':
                 (img_filename, html_link) = data
                 last_successful_output = img_filename # Store for next iteration start
-
+                previous_image_path = img_filename    # Update image path state 
+                last_is_image = True                  # Remember this was an image
+                last_is_video = False                 # Not a video
+                previous_video_path = None            # Clear previous video
+                
+                # Clear frame thumbnails as we don't have them for image outputs
+                last_first_frame = None
+                last_last_frame = None
+                
+                # Reset preview state
+                preview_video_visible = False
+            
                 # Yield updates: Show final image, hide video/preview
                 yield (
                     gr.update(visible=False),                       # result_video
@@ -291,8 +323,6 @@ def process(
                     gr.update(),
                     gr.update()
                 )
-                last_is_image = True
-                last_img_path = img_filename
 
             elif flag == 'end':
                 debug(f"Inner Loop: Received 'end'. data = {data}")
@@ -426,20 +456,16 @@ def process(
 
 def request_graceful_end():
     """Request a graceful end to the current generation OR the entire batch/endless run."""
-    global stream, graceful_stop_requested
-    global _graceful_stop_batch_flag # Need access to the flag controlling the outer loop
-
+    global stream, _graceful_stop_batch_flag
+  
     if stream:
         debug("Requesting graceful stop for *current* generation via stream.")
         stream.input_queue.push('graceful_end')
-        graceful_stop_requested = True # Signal generator callback
-    else:
-        debug("No active stream, assuming request is for the *batch/endless* loop.")
-
+    
     # Signal the outer batch loop to stop after this item finishes
     _graceful_stop_batch_flag = True
     debug("Signalled graceful stop for the entire batch/endless sequence.")
-
+    
     # Update button states: Disable graceful, keep force active (until current gen finishes)
     return gr.update(interactive=False), gr.update(interactive=True)
 
