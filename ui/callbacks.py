@@ -5,7 +5,9 @@ import random
 import time
 import numpy as np
 import os
-from utils.common import debug, get_cuda_free_memory_gb, gpu # Added memory utils here
+from utils.common import debug # Keep this for debug
+# Correct the import for memory functions
+from utils.memory_utils import get_cuda_free_memory_gb, gpu # IMPORT FROM memory_utils
 from ui.style import make_progress_bar_html
 from diffusers_helper.thread_utils import AsyncStream, async_run
 from utils.video_utils import extract_video_frames
