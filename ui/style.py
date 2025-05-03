@@ -31,6 +31,34 @@ def get_css():
         color: #ccc !important;
         cursor: not-allowed !important;
     }
+    
+    /* Button Layout Control */
+    .start-button-wide {
+        flex: 5 !important;
+        min-width: 80% !important;
+    }
+    
+    .batch-input-narrow {
+        flex: 1 !important;
+        max-width: 120px !important;
+        min-width: 100px !important;
+        margin-left: 10px !important;
+    }
+    
+    /* Make the batch input number field look better */
+    .batch-input-narrow input[type="number"] {
+        width: 100% !important;
+        text-align: center !important;
+        font-size: 1.2em !important;
+        height: 58px !important; /* Match button height */
+        margin: 0 !important;
+    }
+    
+    .batch-input-narrow .label {
+        text-align: center !important;
+        font-weight: bold !important;
+        margin-bottom: 5px !important;
+    }
     /* Endless Run Button (Blue) */
     .endless-run-button button {
         width: 100% !important;
