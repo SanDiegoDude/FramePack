@@ -560,11 +560,11 @@ No complete output was generated.
         debug("Unloading models as unload_on_end is set and batch finished.")
         try:
             yield (
-                gr.update(), gr.update(), gr.update(), 
-                f"{final_message} Unloading models...", 
+                gr.update(), gr.update(), gr.update(),
+                f"{final_message} Unloading models...",
                 gr.update(visible=False), gr.update(interactive=False), gr.update(interactive=False),
-                gr.update(interactive=False), gr.update(interactive=False), 
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), 
+                gr.update(interactive=False), gr.update(interactive=False),
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
                 gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
             )
             model_manager.unload_all_models()
