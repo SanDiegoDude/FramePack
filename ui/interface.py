@@ -467,11 +467,11 @@ function attachAllListeners(promptId, modeId, imgId, startId, endId, hiddenId) {
         # --- Initialization on Load ---
         # Initialize video stats
         block.load(fn=update_video_stats, inputs=[latent_window_size, segment_count, overlap_slider], outputs=[video_stats])
-        # Attach JS listeners
+        # Attach JS listeners (Try using 'js' instead of '_js')
         block.load(
             None, [], [],
             # Use the combined attachAllListeners function
-            _js="() => { attachAllListeners('prompt_textbox', 'mode_selector_radio', 'input_image_component', 'start_frame_component', 'end_frame_component', 'hidden_paste_box'); }"
+            js="() => { attachAllListeners('prompt_textbox', 'mode_selector_radio', 'input_image_component', 'start_frame_component', 'end_frame_component', 'hidden_paste_box'); }"
         )
 
     # Return the fully constructed block
