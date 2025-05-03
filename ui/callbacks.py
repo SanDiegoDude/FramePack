@@ -24,15 +24,20 @@ def process_wrapper(*args, video_generator=None, model_manager=None):
     return process(*args, endless_run=endless_run, video_generator=video_generator, model_manager=model_manager)
 
 def endless_process_wrapper(*args, video_generator=None, model_manager=None):
-    """Wrapper for endless generation"""
-    endless_run = True
-    # Set batch count to 1 when using endless mode - we don't need both
+    """Wrapper for endless generation."""
+    # Clone args to a list (mutable)
     args_list = list(args)
-    # Find batch_count in args - it should be 5 positions from the end based on function signature
-    batch_count_position = -5  # Adjust if needed based on your args list
-    args_list[batch_count_position] = 1
     
-    return process(*args_list, endless_run=endless_run, video_generator=video_generator, model_manager=model_manager)
+    # Ensure batch_count=1 (position 30)
+    if len(args_list) > 30:  # batch_count is the 31st parameter (index 30)
+        args_list[30] = 1
+    
+    # Filter out endless_run if it's already in args_list (position 31)
+    if len(args_list) > 31:  # endless_run is the 32nd parameter (index 31)
+        args_list = args_list[:31] + args_list[32:]
+    
+    # Call process with filtered args list and explicit endless_run=True
+    return process(*args_list, endless_run=True, video_generator=video_generator, model_manager=model_manager)
     
 def process(
     mode, input_image, start_frame, end_frame, aspect_selector, custom_w, custom_h,
