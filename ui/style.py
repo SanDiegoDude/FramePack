@@ -13,43 +13,74 @@ def get_css():
         font-size: 1.1em !important;
         padding: 8px 12px !important;
     }
-    /* Start/End Buttons styling */
+    /* Start Button (Green) */
     .start-button button {
         width: 100% !important;
-        background-color: #1DB954 !important; /* Spotify green */
-        border-color: #1DB954 !important;
+        background: linear-gradient(to bottom, #28a745, #218838) !important; /* Nicer green gradient */
+        border-color: #1e7e34 !important;
+        color: white !important;
         font-size: 1.2em !important;
-        padding: 16px !important; /* Taller button */
+        padding: 16px !important;
         margin-bottom: 10px !important;
+        border-radius: 5px !important;
+        text-shadow: 1px 1px 1px rgba(0,0,0,0.3);
     }
     .start-button button:disabled {
-        background-color: #107C33 !important; /* Darker Spotify green */
-        border-color: #107C33 !important;
+        background: linear-gradient(to bottom, #5a8f69, #4d7a5a) !important; /* Desaturated green */
+        border-color: #40664a !important;
+        color: #ccc !important;
+        cursor: not-allowed !important;
     }
+    .start-button button:hover:not(:disabled) {
+         background: linear-gradient(to bottom, #2ebf4f, #24973e) !important;
+         border-color: #1a702f !important;
+    }
+
+    /* End Graceful Button (Yellow) */
     .end-graceful-button button {
         width: 100% !important;
-        background-color: #FFCC00 !important; /* Windows Explorer yellow */
-        border-color: #FFCC00 !important;
+        background: linear-gradient(to bottom, #ffc107, #e0a800) !important; /* Amber yellow gradient */
+        border-color: #d39e00 !important;
+        color: #333 !important; /* Darker text for yellow */
         font-size: 1.1em !important;
         padding: 10px !important;
+        border-radius: 5px !important;
     }
     .end-graceful-button button:disabled {
-        background-color: #D4AA00 !important; /* Darker yellow */
-        border-color: #D4AA00 !important;
+        background: linear-gradient(to bottom, #a68b3a, #8c732f) !important; /* Desaturated yellow */
+        border-color: #796429 !important;
+        color: #888 !important;
+        cursor: not-allowed !important;
     }
+     .end-graceful-button button:hover:not(:disabled) {
+         background: linear-gradient(to bottom, #ffd03a, #e6b20a) !important;
+         border-color: #c79200 !important;
+     }
+
+
+    /* Force Stop Button (Crimson/Red) */
     .force-stop-button button {
         width: 100% !important;
-        background-color: #DC143C !important; /* Crimson */
-        border-color: #DC143C !important;
+        background: linear-gradient(to bottom, #dc3545, #c82333) !important; /* Red gradient */
+        border-color: #bd2130 !important;
+        color: white !important;
         font-size: 1.1em !important;
         padding: 10px !important;
+        border-radius: 5px !important;
+        text-shadow: 1px 1px 1px rgba(0,0,0,0.3);
     }
     .force-stop-button button:disabled {
-        background-color: #AA0F2D !important; /* Darker crimson */
-        border-color: #AA0F2D !important;
+        background: linear-gradient(to bottom, #9a535a, #824750) !important; /* Desaturated red */
+        border-color: #703b42 !important;
+        color: #ccc !important;
+        cursor: not-allowed !important;
+    }
+    .force-stop-button button:hover:not(:disabled) {
+        background: linear-gradient(to bottom, #e44d5a, #d12b3a) !important;
+        border-color: #b01f2c !important;
     }
     
-    /* Frame Thumbnails - maximize height 460px, side by side */
+/* Frame Thumbnails - maximize height 460px, side by side */
 .frame-thumbnail-container {
     margin-top: 5px !important;
     margin-bottom: 5px !important;
