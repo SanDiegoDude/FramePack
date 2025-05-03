@@ -1,4 +1,5 @@
-![image](https://github.com/user-attachments/assets/d24d0989-e734-45ab-b11e-464e81c5c461)
+![image](https://github.com/user-attachments/assets/5134a2b2-4b46-41bc-880b-b75c16d13756)
+
 
 
 
@@ -22,6 +23,10 @@ The goal of this fork is to provide a more stable, extensible, and feature-rich 
 *   **Video Extension Modes:** Supports both forward (extending the end) and backward (extending the beginning) video generation.
 *   **Video Compatibility:** Improved output MP4 compatibility for wider playback support.
 *   **Sequential Prompting:** Control generation segments individually by separating distinct prompts with a semicolon (`;`) in the main prompt box. Each prompt will be applied to subsequent segments of the video generation process.
+*   **Batch Count & Endless Generation:**
+    *   **Batch Count:** Process multiple videos sequentially with the same settings.
+    *   **Endless Run:** Generate videos continuously until manually stopped.
+*   **Memory Management:** Automatically unload models when idle with the `--unload-on-end` flag, ideal for server environments.
 
 ![image](https://github.com/user-attachments/assets/880a8535-a066-4f5a-8b94-9c44366dd29e)
 
@@ -106,6 +111,7 @@ python main.py [OPTIONS]
 *   `--lora <lora_list>`: Load one or more LoRA adapters **at startup** (these remain active for the session, see below).
 *   `--lora-skip-fail`: If loading multiple LoRAs, skip any that fail instead of stopping.
 *   `--lora-diagnose`: Load specified LoRAs, print info, and exit (no generation).
+*   `--unload-on-end`: Unload models from GPU and CPU memory when generation queue is empty, freeing resources when idle.
 
 **Prompt Processing Order:**
 
@@ -197,17 +203,38 @@ In addition to loading LoRAs at startup, you can dynamically load specific LoRAs
 **Example Prompt Combining Features:**
 
 ```
-A {close up|medium shot} of __character__ {dancing|fighting|meditating} [style_cinematic:0.7] in a __location__. {1$$ wearing sunglasses|wearing a hat $$and$$}.
+A {close up|medium shot} of __character__ {dancing|fighting|meditating} [style_cinematic:0.7]
+in a __location__. {2$$ wearing sunglasses| wearing a hat| wearing a sombrero}.
 ```
 
 This prompt will:
 1.  Replace `__character__` and `__location__` using files from `./wildcards/`.
 2.  Randomly select either `close up` or `medium shot`.
 3.  Randomly select `dancing`, `fighting`, or `meditating`.
-4.  Randomly select *one* option between `wearing sunglasses` and `wearing a hat` (because of `1$$`).
-5.  Join the last selection using ` and ` as the separator (due to `$$and$$`).
-6.  Attempt to load `style_cinematic` LoRA dynamically with weight 0.7.
-7.  Use the final resulting text (e.g., "A close up of Luke Skywalker fighting wearing sunglasses and in a desert temple.") for generation.
+4.  Randomly select *two* options between `wearing sunglasses` and `wearing a hat` and `wearing a sombrero` (because of `2$$`).
+5.  Attempt to load `style_cinematic` LoRA dynamically with weight 0.7.
+6.  Use the final resulting text (e.g., "A close up of Luke Skywalker fighting wearing sunglasses, wearing a sombrero in a desert temple.") for generation.
+
+**Batch & Endless Generation**
+
+The interface provides three ways to run multiple generations:
+
+* **Batch Count:** Set a number in the input field next to the Start Generation button to automatically run that many generations sequentially. Each generation uses the same prompt and settings (but with a new random seed unless "Lock Seed" is checked).
+
+* **Endless Run:** Click this button instead of Start Generation to continuously create videos until manually stopped. This is useful for exploring variations with the same prompt.
+
+* **Controlling Generations:**
+  * **End Generation:** Gracefully finishes the current generation and stops the batch/endless sequence.
+  * **Force Stop:** Immediately terminates the current generation and sequence.
+
+**Server Mode Example**
+
+To run FramePack on a server with automatic resource cleanup when idle:
+
+```
+python main.py --server 0.0.0.0 --port 7860 --unload-on-end
+```
+This configuration will free GPU and CPU memory whenever the generation queue becomes empty, making it ideal for shared computing environments.
 
 ## Modes & Workarounds
 
