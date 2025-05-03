@@ -334,10 +334,10 @@ function addLightboxListeners() {
              with gr.Column(scale=2):
                   with gr.Row():
                        with gr.Column(scale=6):
-                            start_button = gr.Button(value="Start Generation", height=2, elem_classes="start-button")
+                            start_button = gr.Button(value="Start Generation", elem_classes="start-button")
                        with gr.Column(scale=1):
                             batch_count = gr.Number(value=1, minimum=1, step=1, precision=0, 
-                                                  label="Batch", show_label=False, container=True)
+                                                  label="Batch", show_label=False, container=False)
                   
                   with gr.Row():
                        endless_run_button = gr.Button(value="Endless Run", elem_classes="endless-run-button")
