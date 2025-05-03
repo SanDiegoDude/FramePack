@@ -77,7 +77,7 @@ def create_interface(model_manager, video_generator, unload_on_end_flag=False):
 
     # --- JavaScript Definitions ---
     paste_js = """
-async function handlePaste(event, promptElementId, modeElementId, imgInputId, startFrameId, endFrameId, hiddenTextboxId) {
+const handlePaste = async function(event, promptElementId, modeElementId, imgInputId, startFrameId, endFrameId, hiddenTextboxId) { // CHANGED THIS LINE
     const items = (event.clipboardData || event.originalEvent.clipboardData).items;
     let imageBlob = null;
     for (const item of items) {
