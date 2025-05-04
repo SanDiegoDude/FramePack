@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--lora-weight", type=float, default=1.0, help="Weight for LoRA (0.0-1.0)")
     parser.add_argument("--lora-skip-fail", action='store_true', help="If set, skip lora failures instead of aborting generation")
     parser.add_argument("--lora-diagnose", action='store_true', help="Diagnose LoRA weights/loadability and exit (no generation)")
+    parser.add_argument("--unload-on-end", action='store_true', help="Unload models from GPU and CPU memory when generation queue is empty")
     args = parser.parse_args()
 
 
@@ -96,8 +97,9 @@ def main():
         video_generator = VideoGenerator(model_manager, outputs_folder=outputs_folder)
         
         # Create and launch Gradio interface
-        debug("Setting up user interface...")
-        interface = create_interface(model_manager, video_generator)
+        import gradio
+        debug(f"Using Gradio Version: {gradio.__version__}")
+        interface = create_interface(model_manager, video_generator, unload_on_end_flag=args.unload_on_end)
         
         # Launch the interface
         debug(f"Launching Gradio interface on {args.server}, port={args.port}, share={args.share}")
